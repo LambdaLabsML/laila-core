@@ -1,0 +1,1 @@
+In this folder, create a custom image example, have a for loop that creates randomly 100 image for 10 times (nested for loop), and then nicknames the images image_i_j for which i and j it is on. Memorize the {name:global_id} dictionary as my_dataset_manifest. ipynb only. 
