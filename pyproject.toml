@@ -76,6 +76,7 @@ packages = [
   "laila.pool.sqlite",
   "laila.utils",
   "laila.utils.args",
+  "laila.utils.decorators",
 ]
 
 [tool.setuptools.package-dir]
