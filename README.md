@@ -19,9 +19,9 @@ This approach makes it easier to:
 
 ## Current Release
 
-LAILA is currently in **beta 1.0**.
+LAILA is currently in **beta 1.0**. 
 
-The current release includes the **memory module** as the first public component of the broader platform. This release is intended to establish the foundation for LAILA's data and workflow abstractions while additional modules continue to mature.
+The current release includes the **command and memory module** as the first public component of the broader platform. This release is intended to establish the foundation for LAILA's data and workflow abstractions while additional modules continue to mature.
 
 As a beta release, interfaces may continue to evolve as the platform expands and real-world usage informs the next stage of development.
 
@@ -43,6 +43,32 @@ The long-term focus of LAILA is to provide a common layer for:
 - syntax that makes complex infrastructure easier to use without hiding the underlying flexibility
 
 In practice, this means building tools that help users treat datasets, stored objects, memory systems, and execution backends as parts of a single workflow rather than separate systems stitched together manually.
+
+## Getting Started
+
+Here is a super simple example of memorizing data into S3 and then remembering it back:
+
+```python
+import laila
+from laila.pool import S3Pool
+
+pool = S3Pool(
+    bucket_name="your-bucket",
+    access_key_id="YOUR_ACCESS_KEY_ID",
+    secret_access_key="YOUR_SECRET_ACCESS_KEY",
+    region_name="us-east-1",
+)
+
+entry = laila.memorize(
+    data={"message": "hello from laila"},
+    pool=pool,
+)
+
+same_entry = laila.remember(entry.global_id, pool=pool)
+print(same_entry.data)
+```
+
+For additional examples and end-to-end workflows, see the `examples` directory.
 
 ## Credits
 
