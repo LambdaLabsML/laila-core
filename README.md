@@ -47,5 +47,5 @@ In practice, this means building tools that help users treat datasets, stored ob
 ## Credits
 
 - Creator: Amir Zadeh
-- Tutorials: Jessica Nicholson
+- Tutorials and Documentation: Jessica Nicholson
 - Acknowledgements: Jason Zhang, Xuweiyi Chen, Connor Alvarez
