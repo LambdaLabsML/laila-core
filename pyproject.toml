@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "laila-core"
+version = "1.0.0b1"
+description = "Lambda's Interdisciplinary Large Atlas"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  { name = "Amir Zadeh" },
+]
+dynamic = ["dependencies"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+Homepage = "https://github.com/LambdaLabsML/laila-core"
+Repository = "https://github.com/LambdaLabsML/laila-core"
+
+[tool.setuptools]
+include-package-data = true
+packages = [
+  "laila",
+  "laila.atomic",
+  "laila.atomic.definitions",
+  "laila.atomic.types",
+  "laila.entry",
+  "laila.entry.compdata",
+  "laila.entry.compdata.taxonomy",
+  "laila.entry.compdata.transformation",
+  "laila.entry.compdata.transformation.base64",
+  "laila.entry.compdata.transformation.compression",
+  "laila.entry.compdata.transformation.encryption",
+  "laila.entry.compdata.transformation.jsonstring",
+  "laila.entry.compdata.transformation.serialization",
+  "laila.macros",
+  "laila.policy",
+  "laila.policy.central",
+  "laila.policy.central.command",
+  "laila.policy.central.command.schema",
+  "laila.policy.central.command.schema.future",
+  "laila.policy.central.command.schema.future.future",
+  "laila.policy.central.command.taskforce",
+  "laila.policy.central.command.taskforce.process_pool_executor",
+  "laila.policy.central.command.taskforce.thread_pool_executor",
+  "laila.policy.central.memory",
+  "laila.policy.central.memory.hint",
+  "laila.policy.central.memory.record",
+  "laila.policy.central.memory.router",
+  "laila.policy.central.memory.schema",
+  "laila.policy.schema",
+  "laila.pool",
+  "laila.pool.azure",
+  "laila.pool.backblaze",
+  "laila.pool.cloudflare",
+  "laila.pool.duckdb",
+  "laila.pool.filesystem",
+  "laila.pool.gcs",
+  "laila.pool.hdf5",
+  "laila.pool.huggingface",
+  "laila.pool.mongo",
+  "laila.pool.postgres",
+  "laila.pool.s3",
+  "laila.pool.schema",
+  "laila.pool.sqlite",
+  "laila.utils",
+  "laila.utils.args",
+]
+
+[tool.setuptools.package-dir]
+laila = "."
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
