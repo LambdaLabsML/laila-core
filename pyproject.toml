@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "laila-core"
-version = "1.0.0b2"
+version = "1.0.0b3"
 description = "Lambda's Interdisciplinary Large Atlas"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -71,6 +71,7 @@ packages = [
   "laila.pool.huggingface",
   "laila.pool.mongo",
   "laila.pool.postgres",
+  "laila.pool.redis",
   "laila.pool.s3",
   "laila.pool.schema",
   "laila.pool.sqlite",
