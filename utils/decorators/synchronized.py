@@ -1,5 +1,5 @@
 from contextlib import ExitStack
-from ...atomic.definitions.locall_atomic_identifiable_object import _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
+from ...atomic.definitions.locally_atomic_identifiable_object import _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
 
 
 def synchronized(method, *, scope: str = "local"):

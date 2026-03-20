@@ -3,12 +3,19 @@ from pydantic import BaseModel, Field, PrivateAttr
 from ...entry import Entry
 from contextlib import suppress, contextmanager
 import threading
-from ...atomic.definitions.locall_atomic_identifiable_object import _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
+from ...atomic.definitions.locally_atomic_identifiable_object import _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
 from ...macros.strings import _POOL_SCOPE
 from ...entry.compdata.transformation import TransformationSequence
 
 
 class _LAILA_IDENTIFIABLE_POOL(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
+    """Abstract base class for all LAILA storage pools.
+
+    A pool is a key-value store that persists serialized ``Entry`` blobs.
+    Subclasses implement ``__getitem__``, ``__setitem__``, ``__delitem__``,
+    ``keys``, ``exists``, and ``empty`` against a concrete backend (S3,
+    Redis, SQLite, etc.).
+    """
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_POOL_SCOPE]))
     resource: Dict[str, Any] = Field(default_factory=dict)
@@ -27,6 +34,7 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
 
     # -------- Mapping-like API --------
     def __getitem__(self, key: str) -> Optional[Any]:
+        """Retrieve the stored blob for *key*, or ``None`` if absent."""
         with self.atomic():
             if key not in self.resource:
                 return None
@@ -55,6 +63,7 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
 
     # -------- Utilities --------
     def exists(self, key: str) -> bool:
+        """Return ``True`` if *key* is present in the pool."""
         with self.atomic():
             return key in self.resource
 

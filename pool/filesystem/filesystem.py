@@ -45,9 +45,7 @@ class FilesystemPool(_LAILA_IDENTIFIABLE_POOL):
         return self._image_path
 
     def model_post_init(self, __context: Any) -> None:
-        filesystem_root = os.path.expanduser("~/.laila/pools/filesystem")
-        os.makedirs(filesystem_root, exist_ok=True)
-
+        super().model_post_init(__context)
         self._pool_dir = self._resolve_pool_dir()
         os.makedirs(self.pool_dir, exist_ok=True)
         self._image_path = self._resolve_image_path()
@@ -68,7 +66,8 @@ class FilesystemPool(_LAILA_IDENTIFIABLE_POOL):
         return None
 
     def _resolve_pool_dir(self) -> str:
-        return os.path.expanduser(os.path.join("~/.laila/pools/filesystem", self.pool_id))
+        from ...macros.defaults import LAILA_DEFAULT_DIRECTORIES
+        return os.path.join(LAILA_DEFAULT_DIRECTORIES["pools"], self.uuid)
 
     def _resolve_image_path(self) -> str:
         img_path = os.path.join(self.pool_dir, f"{self.pool_id}.img")

@@ -6,7 +6,7 @@ import json
 
 from .future_status import FutureStatus
 from .......atomic.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
-from .......atomic.definitions.locall_atomic_identifiable_object import _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
+from .......atomic.definitions.locally_atomic_identifiable_object import _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
 
 
 from .......macros.strings import _FUTURE_SCOPE

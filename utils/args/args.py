@@ -7,17 +7,14 @@ import sys
 import xml.etree.ElementTree as ET
 
 
-class ArgsReader:
+class ArgReader:
     """
-    Load runtime args from simple key/value sources into `laila.args`.
+    Load runtime args from simple key/value sources into the target mapping
+    (defaults to ``laila.args``). All ``load`` / ``from_*`` methods mutate
+    the target in place and return ``None``.
+    """
 
-    Supported sources:
-    - .env
-    - .json
-    - .toml
-    - .xml
-    - terminal args in `key=value` form
-    """
+    # Supported sources: .env, .json, .toml, .xml, or ``terminal`` (``key=value`` tokens).
 
     def __init__(self, target: Optional[Any] = None):
         self._target = target
@@ -78,12 +75,11 @@ class ArgsReader:
                 out[key] = cls._coerce_scalar(value)
         return out
 
-    def _apply(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _apply(self, payload: Dict[str, Any]) -> None:
         flat = self._flatten_one_level(payload)
         target = self._target_map()
         for key, value in flat.items():
             setattr(target, key, value)
-        return flat
 
     def clear(self) -> None:
         target = self._target_map()
@@ -94,14 +90,14 @@ class ArgsReader:
                 except Exception:
                     pass
 
-    def from_json(self, path: str | Path) -> Dict[str, Any]:
+    def from_json(self, path: str | Path) -> None:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, dict):
             raise ValueError("JSON args file must be a key/value object.")
-        return self._apply(data)
+        self._apply(data)
 
-    def from_toml(self, path: str | Path) -> Dict[str, Any]:
+    def from_toml(self, path: str | Path) -> None:
         try:
             import tomllib  # Python 3.11+
         except ImportError as e:
@@ -111,9 +107,9 @@ class ArgsReader:
             data = tomllib.load(f)
         if not isinstance(data, dict):
             raise ValueError("TOML args file must be a key/value table.")
-        return self._apply(data)
+        self._apply(data)
 
-    def from_env(self, path: str | Path) -> Dict[str, Any]:
+    def from_env(self, path: str | Path) -> None:
         parsed: Dict[str, Any] = {}
         with open(path, "r", encoding="utf-8") as f:
             for raw in f:
@@ -124,9 +120,9 @@ class ArgsReader:
                     continue
                 k, v = line.split("=", 1)
                 parsed[k.strip()] = self._coerce_scalar(v.strip())
-        return self._apply(parsed)
+        self._apply(parsed)
 
-    def from_xml(self, path: str | Path) -> Dict[str, Any]:
+    def from_xml(self, path: str | Path) -> None:
         tree = ET.parse(path)
         root = tree.getroot()
         parsed: Dict[str, Any] = {}
@@ -136,9 +132,9 @@ class ArgsReader:
                 parsed[child.tag] = {gc.tag: (gc.text or "") for gc in children}
             else:
                 parsed[child.tag] = child.text or ""
-        return self._apply(parsed)
+        self._apply(parsed)
 
-    def from_terminal(self, args: Optional[Iterable[str]] = None) -> Dict[str, Any]:
+    def from_terminal(self, args: Optional[Iterable[str]] = None) -> None:
         tokens = list(sys.argv[1:] if args is None else args)
         parsed: Dict[str, Any] = {}
         for token in tokens:
@@ -149,19 +145,24 @@ class ArgsReader:
             if not key:
                 continue
             parsed[key] = self._coerce_scalar(v.strip())
-        return self._apply(parsed)
+        self._apply(parsed)
 
-    def load(self, source: str | Path, *, terminal_args: Optional[Iterable[str]] = None) -> Dict[str, Any]:
+    def load(self, source: str | Path, *, terminal_args: Optional[Iterable[str]] = None) -> None:
         p = Path(source)
         suffix = p.suffix.lower()
         if suffix == ".json":
-            return self.from_json(p)
+            self.from_json(p)
+            return
         if suffix == ".toml":
-            return self.from_toml(p)
+            self.from_toml(p)
+            return
         if suffix == ".env":
-            return self.from_env(p)
+            self.from_env(p)
+            return
         if suffix == ".xml":
-            return self.from_xml(p)
+            self.from_xml(p)
+            return
         if str(source).lower() == "terminal":
-            return self.from_terminal(terminal_args)
+            self.from_terminal(terminal_args)
+            return
         raise ValueError(f"Unsupported args source: {source}")

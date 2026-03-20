@@ -56,14 +56,9 @@ class _LAILA_IDENTIFIABLE_POOL_ROUTER(_LAILA_IDENTIFIABLE_OBJECT):
         pool_nickname: Optional[str] = None,
         affinity: Optional[float] = None,
     ):
-        #immediate route
         if pool_id is not None:
             return self.pools[pool_id]
-        #nickname route
         return self._route_by_nickname(pool_nickname=pool_nickname)
-        
-        #rest is not implemented yet
-        raise NotImplementedError
 
 
     def _route_by_nickname(
@@ -75,5 +70,3 @@ class _LAILA_IDENTIFIABLE_POOL_ROUTER(_LAILA_IDENTIFIABLE_OBJECT):
             return self.pools[self.pools_nicknames[pool_nickname]]
         else:
             return self.pools[self.pools_nicknames[_DEFAULT_POOL_NICKNAME]]
-
-        raise NotImplementedError

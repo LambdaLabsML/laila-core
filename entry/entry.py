@@ -29,7 +29,7 @@ from .entry_constitution import EntryConstitution
 
 from ..macros.strings import _ENTRY_SCOPE
 from ..atomic.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
-from ..atomic.definitions.locall_atomic_identifiable_object import _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
+from ..atomic.definitions.locally_atomic_identifiable_object import _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
 from ..utils.decorators.synchronized import synchronized
 from .compdata.transformation import TransformationSequence
 
@@ -37,6 +37,16 @@ from .compdata.transformation import TransformationSequence
 class Entry( 
     _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
 ):
+    """The fundamental unit of data in LAILA.
+
+    An ``Entry`` wraps arbitrary data (tensors, images, dicts, etc.) with
+    identity (UUID + evolution counter), state tracking, and serialization
+    capabilities.  Entries can be *constants* (immutable) or *variables*
+    (evolvable).
+
+    Create entries via the class methods ``Entry.variable(...)`` or
+    ``Entry.constant(...)`` rather than calling the constructor directly.
+    """
 
     model_config = ConfigDict(
         private_attributes=True,

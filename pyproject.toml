@@ -11,7 +11,14 @@ requires-python = ">=3.11"
 authors = [
   { name = "Amir Zadeh" },
 ]
-dynamic = ["dependencies"]
+dependencies = [
+  "pydantic",
+  "dotmap",
+  "msgpack",
+  "websockets",
+  "jsonrpcserver",
+  "numpy",
+]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
@@ -22,6 +29,37 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.optional-dependencies]
+s3 = ["boto3"]
+cloudflare = ["boto3"]
+backblaze = ["boto3"]
+gcs = ["google-cloud-storage"]
+azure = ["azure-storage-blob"]
+postgres = ["psycopg[binary]"]
+mongo = ["pymongo"]
+redis = ["redis"]
+duckdb = ["duckdb"]
+hdf5 = ["h5py"]
+huggingface = ["huggingface_hub"]
+crypto = ["cryptography"]
+torch = ["torch", "pillow"]
+imaging = ["imageio", "pillow"]
+all = [
+  "boto3",
+  "google-cloud-storage",
+  "azure-storage-blob",
+  "psycopg[binary]",
+  "pymongo",
+  "redis",
+  "duckdb",
+  "h5py",
+  "huggingface_hub",
+  "cryptography",
+  "torch",
+  "pillow",
+  "imageio",
 ]
 
 [project.urls]
@@ -63,6 +101,7 @@ packages = [
   "laila.pool",
   "laila.pool.azure",
   "laila.pool.backblaze",
+  "laila.pool.boto",
   "laila.pool.cloudflare",
   "laila.pool.duckdb",
   "laila.pool.filesystem",
@@ -83,5 +122,3 @@ packages = [
 [tool.setuptools.package-dir]
 laila = "."
 
-[tool.setuptools.dynamic]
-dependencies = { file = ["requirements.txt"] }

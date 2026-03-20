@@ -20,7 +20,7 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
     Redis-backed Pool using a private redis-server over a UNIX socket.
 
     Persistence:
-      - Data directory: ~/.laila/pools/redis_data/<pool_id>/
+      - Data directory: <LAILA_DEFAULT_DIRECTORIES["pools"]>/<pool.uuid>/
       - Dump file (private): pool.rdb
       - If pool.rdb exists, Redis loads it automatically.
       - Dumps are never deleted.
@@ -66,8 +66,10 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
           2) start redis-server (unix socket only)
           3) connect client
         """
-        base_dir = os.path.expanduser("~/.laila/pools/redis_data")
-        self.redis_dir = os.path.join(base_dir, self.pool_id)
+        super().model_post_init(__context)
+        from ...macros.defaults import LAILA_DEFAULT_DIRECTORIES
+        pool_dir = os.path.join(LAILA_DEFAULT_DIRECTORIES["pools"], self.uuid)
+        self.redis_dir = pool_dir
         os.makedirs(self.redis_dir, exist_ok=True)
 
         # Remove stale socket file (do NOT handle orphan processes yet)

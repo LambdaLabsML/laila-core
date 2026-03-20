@@ -39,6 +39,7 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
         arbitrary_types_allowed = True
 
     def model_post_init(self, __context: Any) -> None:
+        super().model_post_init(__context)
         self._client = self._connect()
         self._collection().create_index([("pool_id", 1), ("key", 1)], unique=True)
         atexit.register(self.close)
@@ -61,8 +62,9 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
     def _configure_local_server(self) -> None:
         if self._mongo_dir is not None:
             return
-        base_dir = os.path.expanduser("~/.laila/pools")
-        self._mongo_dir = os.path.join(base_dir, "mongo_data", self.pool_id)
+        from ...macros.defaults import LAILA_DEFAULT_DIRECTORIES
+        pool_dir = os.path.join(LAILA_DEFAULT_DIRECTORIES["pools"], self.uuid)
+        self._mongo_dir = pool_dir
         os.makedirs(self._mongo_dir, exist_ok=True)
         self.port = 30000 + (int(hashlib.sha1(self.pool_id.encode("utf-8")).hexdigest()[:8], 16) % 20000)
         self.host = "127.0.0.1"

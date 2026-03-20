@@ -6,7 +6,7 @@ from .....atomic import AtomicDict
 from ..schema.future.future import Future
 from .status import TaskForceStatus
 from .....macros.strings import _TASK_FORCE_SCOPE
-from .....atomic.definitions.locall_atomic_identifiable_object import _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
+from .....atomic.definitions.locally_atomic_identifiable_object import _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
 from .....atomic.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 
 

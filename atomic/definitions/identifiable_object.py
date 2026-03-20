@@ -1,6 +1,7 @@
 from __future__ import annotations
 import string
 import secrets
+import threading
 
 from pydantic import BaseModel, PrivateAttr
 from typing import Optional, Any
@@ -17,6 +18,8 @@ GLOBAL_ID_REGEX_PATTERN = re.compile(
     r'(?:-(?P<evolution>\d+))?$'
 )
 
+_INIT_PENDING = threading.local()
+
 
 class _LAILA_IDENTIFIABLE_OBJECT(BaseModel):
 
@@ -30,19 +33,32 @@ class _LAILA_IDENTIFIABLE_OBJECT(BaseModel):
         evolution_input = data.pop("evolution", None)
         nickname_input = data.pop("nickname", None)
 
+        if nickname_input is not None:
+            _INIT_PENDING.uuid = _LAILA_IDENTIFIABLE_OBJECT.generate_uuid_from_nickname(nickname_input)
+        elif uuid_input is not None:
+            _INIT_PENDING.uuid = str(uuid_input)
+        else:
+            _INIT_PENDING.uuid = None
+
+        _INIT_PENDING.scopes = list(scopes_input) if scopes_input is not None else None
+        _INIT_PENDING.evolution = evolution_input
+
         super().__init__(**data)
 
-        if nickname_input is not None:
-            # Nickname has absolute precedence over uuid.
-            self._uuid = _LAILA_IDENTIFIABLE_OBJECT.generate_uuid_from_nickname(nickname_input)
-        elif uuid_input is not None:
-            self._uuid = str(uuid_input)
+        _INIT_PENDING.uuid = None
+        _INIT_PENDING.scopes = None
+        _INIT_PENDING.evolution = None
 
-        if scopes_input is not None:
-            self._scopes = list(scopes_input)
-
-        if evolution_input is not None:
-            self._evolution = evolution_input
+    def model_post_init(self, __context: Any) -> None:
+        pending_uuid = getattr(_INIT_PENDING, "uuid", None)
+        if pending_uuid is not None:
+            self._uuid = pending_uuid
+        pending_scopes = getattr(_INIT_PENDING, "scopes", None)
+        if pending_scopes is not None:
+            self._scopes = pending_scopes
+        pending_evolution = getattr(_INIT_PENDING, "evolution", None)
+        if pending_evolution is not None:
+            self._evolution = pending_evolution
 
 
     @classmethod

@@ -13,7 +13,7 @@ class _LAILA_LOCALLY_ATOMIC_OBJECT(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __init__(self, **data):
-        self.__pydantic_validator__.validate_python(data, self_instance=self)
+        super().__init__(**data)
 
     def _ensure_local_lock(self) -> threading.RLock:
         lock = getattr(self, "_local_lock", None)

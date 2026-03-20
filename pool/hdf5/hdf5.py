@@ -27,12 +27,12 @@ class HDF5Pool(_LAILA_IDENTIFIABLE_POOL):
         return active_policy.central.memory.global_id
 
     def model_post_init(self, __context: Any) -> None:
+        super().model_post_init(__context)
         if self.file_path is None:
-            memory_global_id = self._resolve_memory_global_id()
-            base_dir = os.path.expanduser("~/.laila/pools")
-            pool_dir = os.path.join(base_dir, memory_global_id)
+            from ...macros.defaults import LAILA_DEFAULT_DIRECTORIES
+            pool_dir = os.path.join(LAILA_DEFAULT_DIRECTORIES["pools"], self.uuid)
             os.makedirs(pool_dir, exist_ok=True)
-            self.file_path = os.path.join(pool_dir, f"{self.pool_id}.h5py")
+            self.file_path = os.path.join(pool_dir, "pool.h5py")
         else:
             os.makedirs(os.path.dirname(os.path.expanduser(self.file_path)), exist_ok=True)
             self.file_path = os.path.expanduser(self.file_path)

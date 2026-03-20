@@ -42,6 +42,7 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
         arbitrary_types_allowed = True
 
     def model_post_init(self, __context: Any) -> None:
+        super().model_post_init(__context)
         self._conn = self._connect()
         with self._conn.cursor() as cur:
             cur.execute(
@@ -80,10 +81,10 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
     def _configure_local_server(self) -> None:
         if self._postgres_dir is not None and self._socket_dir is not None:
             return
-        base_dir = os.path.expanduser("~/.laila/pools")
-        self._postgres_dir = os.path.join(base_dir, "postgres_data", self.pool_id)
-        digest = hashlib.sha1(self.pool_id.encode("utf-8")).hexdigest()[:12]
-        self._socket_dir = os.path.join(base_dir, "postgres_socket", digest)
+        from ...macros.defaults import LAILA_DEFAULT_DIRECTORIES
+        pool_dir = os.path.join(LAILA_DEFAULT_DIRECTORIES["pools"], self.uuid)
+        self._postgres_dir = os.path.join(pool_dir, "data")
+        self._socket_dir = os.path.join(pool_dir, "socket")
         os.makedirs(self._postgres_dir, exist_ok=True)
         os.makedirs(self._socket_dir, exist_ok=True)
         self.port = 20000 + (int(hashlib.sha1(self.pool_id.encode("utf-8")).hexdigest()[:8], 16) % 20000)

@@ -25,14 +25,15 @@ class DuckDBPool(_LAILA_IDENTIFIABLE_POOL):
         arbitrary_types_allowed = True
 
     def model_post_init(self, __context: Any) -> None:
+        super().model_post_init(__context)
         if duckdb is None:
             raise ImportError("duckdb is required for DuckDBPool")
 
-        base_dir = os.path.expanduser("~/.laila/pools/duckdb")
-        os.makedirs(base_dir, exist_ok=True)
-
         if self.file_path is None:
-            self.file_path = os.path.join(base_dir, f"{self.pool_id}.duckdb")
+            from ...macros.defaults import LAILA_DEFAULT_DIRECTORIES
+            pool_dir = os.path.join(LAILA_DEFAULT_DIRECTORIES["pools"], self.uuid)
+            os.makedirs(pool_dir, exist_ok=True)
+            self.file_path = os.path.join(pool_dir, "pool.duckdb")
         else:
             self.file_path = os.path.expanduser(self.file_path)
             parent = os.path.dirname(self.file_path)

@@ -21,11 +21,12 @@ class SQLitePool(_LAILA_IDENTIFIABLE_POOL):
         arbitrary_types_allowed = True
 
     def model_post_init(self, __context: Any) -> None:
-        base_dir = os.path.expanduser("~/.laila/pools/sqlite")
-        os.makedirs(base_dir, exist_ok=True)
-
+        super().model_post_init(__context)
         if self.file_path is None:
-            self.file_path = os.path.join(base_dir, f"{self.pool_id}.laila_sqlitedb")
+            from ...macros.defaults import LAILA_DEFAULT_DIRECTORIES
+            pool_dir = os.path.join(LAILA_DEFAULT_DIRECTORIES["pools"], self.uuid)
+            os.makedirs(pool_dir, exist_ok=True)
+            self.file_path = os.path.join(pool_dir, "pool.laila_sqlitedb")
         else:
             self.file_path = os.path.expanduser(self.file_path)
             parent = os.path.dirname(self.file_path)

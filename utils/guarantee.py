@@ -5,7 +5,7 @@ from contextlib import suppress
 import laila
 
 
-class gaurantee:
+class _Guarantee:
     """Context manager that waits for futures created inside its scope."""
 
     def __enter__(self):
@@ -31,7 +31,7 @@ class gaurantee:
         return False
 
 
-class async_gaurantee:
+class _AsyncGuarantee:
     """Async context manager that awaits futures created inside its scope."""
 
     def __init__(self) -> None:
@@ -116,5 +116,5 @@ class async_gaurantee:
         return await asyncio.to_thread(future.wait, None)
 
 
-guarantee = gaurantee()
-guarantee_async = async_gaurantee()
+guarantee = _Guarantee()
+guarantee_async = _AsyncGuarantee()
