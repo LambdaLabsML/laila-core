@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "laila-core"
-version = "1.0.0b3"
+version = "1.0.0b4"
 description = "Lambda's Interdisciplinary Large Atlas"
 readme = "README.md"
 requires-python = ">=3.11"
