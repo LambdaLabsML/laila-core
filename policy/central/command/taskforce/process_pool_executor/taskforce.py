@@ -126,17 +126,22 @@ class PythonProcessPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
 
         return fut
 
-    def imap(self, tasks: Iterable[Callable[[], Any]]) -> Iterable[ProcessPackageFuture]:
-        """Submit an iterable of zero-arg callables, yielding futures in submission order."""
+    def imap(self, tasks: Iterable[Callable[[], Any]]) -> Iterable[Any]:
+        """Submit an iterable of zero-arg callables, yielding future identities in submission order."""
         for f in tasks:
-            yield self._queue_submit(f)
+            fut = self._queue_submit(f)
+            yield fut.future_identity
 
     def submit(
         self,
         tasks: Iterable[Callable[[], Any]],
         wait: bool = False,
-    ) -> Union[GroupFuture, ProcessPackageFuture, List[Any], Any]:
-        """Batch submit zero-arg callables."""
+    ) -> Union[GroupFuture, Any]:
+        """Batch submit zero-arg callables.
+
+        Returns future identities (single) or a hollow GroupFuture (multiple)
+        when *wait* is False.  When *wait* is True, blocks and returns values.
+        """
         tasks = list(tasks)
 
         futures: List[ProcessPackageFuture] = []
@@ -149,12 +154,12 @@ class PythonProcessPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
             single = futures[0]
             if wait:
                 return single.wait(None)
-            return single
+            return single.future_identity
 
         gf = GroupFuture(
             taskforce_id=self.global_id,
             policy_id=self.policy_id,
-            futures={f.global_id: f for f in futures},
+            future_ids=[f.global_id for f in futures],
         )
 
         for f in futures:

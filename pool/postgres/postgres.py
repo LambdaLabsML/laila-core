@@ -46,12 +46,16 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
         self._conn = self._connect()
         with self._conn.cursor() as cur:
             cur.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'laila_pool_entries' AND column_name = 'pool_id'"
+            )
+            if cur.fetchone() is not None:
+                cur.execute("DROP TABLE laila_pool_entries")
+            cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS laila_pool_entries (
-                    pool_id TEXT NOT NULL,
-                    key TEXT NOT NULL,
-                    value TEXT NOT NULL,
-                    PRIMARY KEY (pool_id, key)
+                    key TEXT NOT NULL PRIMARY KEY,
+                    value TEXT NOT NULL
                 )
                 """
             )
@@ -227,8 +231,8 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
         with self.atomic():
             with self._connection().cursor() as cur:
                 cur.execute(
-                    "SELECT value FROM laila_pool_entries WHERE pool_id = %s AND key = %s",
-                    (self.pool_id, key),
+                    "SELECT value FROM laila_pool_entries WHERE key = %s",
+                    (key,),
                 )
                 row = cur.fetchone()
         return json.loads(row[0]) if row is not None else None
@@ -244,11 +248,11 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
             with self._connection().cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO laila_pool_entries(pool_id, key, value)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT(pool_id, key) DO UPDATE SET value = EXCLUDED.value
+                    INSERT INTO laila_pool_entries(key, value)
+                    VALUES (%s, %s)
+                    ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value
                     """,
-                    (self.pool_id, key, value),
+                    (key, value),
                 )
             self._connection().commit()
 
@@ -256,26 +260,23 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
         with self.atomic():
             with self._connection().cursor() as cur:
                 cur.execute(
-                    "DELETE FROM laila_pool_entries WHERE pool_id = %s AND key = %s",
-                    (self.pool_id, key),
+                    "DELETE FROM laila_pool_entries WHERE key = %s",
+                    (key,),
                 )
             self._connection().commit()
 
     def empty(self) -> None:
         with self.atomic():
             with self._connection().cursor() as cur:
-                cur.execute(
-                    "DELETE FROM laila_pool_entries WHERE pool_id = %s",
-                    (self.pool_id,),
-                )
+                cur.execute("DELETE FROM laila_pool_entries")
             self._connection().commit()
 
     def exists(self, key: str) -> bool:
         with self.atomic():
             with self._connection().cursor() as cur:
                 cur.execute(
-                    "SELECT 1 FROM laila_pool_entries WHERE pool_id = %s AND key = %s",
-                    (self.pool_id, key),
+                    "SELECT 1 FROM laila_pool_entries WHERE key = %s",
+                    (key,),
                 )
                 return cur.fetchone() is not None
 
@@ -286,19 +287,13 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
         if not as_generator:
             with self.atomic():
                 with self._connection().cursor() as cur:
-                    cur.execute(
-                        "SELECT key FROM laila_pool_entries WHERE pool_id = %s ORDER BY key",
-                        (self.pool_id,),
-                    )
+                    cur.execute("SELECT key FROM laila_pool_entries ORDER BY key")
                     return [row[0] for row in cur.fetchall()]
 
         def _gen() -> Iterator[str]:
             with self.atomic():
                 with self._connection().cursor() as cur:
-                    cur.execute(
-                        "SELECT key FROM laila_pool_entries WHERE pool_id = %s ORDER BY key",
-                        (self.pool_id,),
-                    )
+                    cur.execute("SELECT key FROM laila_pool_entries ORDER BY key")
                     for row in cur.fetchall():
                         yield row[0]
 

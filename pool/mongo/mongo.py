@@ -41,7 +41,7 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(__context)
         self._client = self._connect()
-        self._collection().create_index([("pool_id", 1), ("key", 1)], unique=True)
+        self._collection().create_index("key", unique=True)
         atexit.register(self.close)
 
     def _connect(self):
@@ -79,7 +79,18 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
         if self._local_server_available():
             self._owns_local_server = False
             return
-        self._start_local_server()
+        for attempt in range(5):
+            try:
+                self._start_local_server()
+                return
+            except RuntimeError as exc:
+                if "code=48" not in str(exc):
+                    raise
+                time.sleep(1)
+                if self._local_server_available():
+                    self._owns_local_server = False
+                    return
+                self.port += 1
 
     def _local_server_available(self) -> bool:
         if MongoClient is None:
@@ -176,7 +187,7 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
 
     def __getitem__(self, key: str) -> Optional[Any]:
         with self.atomic():
-            doc = self._collection().find_one({"pool_id": self.pool_id, "key": key}, {"_id": 0, "value": 1})
+            doc = self._collection().find_one({"key": key}, {"_id": 0, "value": 1})
         return json.loads(doc["value"]) if doc is not None else None
 
     def __setitem__(self, key: str, entry: Any) -> None:
@@ -188,22 +199,22 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
 
         with self.atomic():
             self._collection().update_one(
-                {"pool_id": self.pool_id, "key": key},
+                {"key": key},
                 {"$set": {"value": value}},
                 upsert=True,
             )
 
     def __delitem__(self, key: str) -> None:
         with self.atomic():
-            self._collection().delete_one({"pool_id": self.pool_id, "key": key})
+            self._collection().delete_one({"key": key})
 
     def empty(self) -> None:
         with self.atomic():
-            self._collection().delete_many({"pool_id": self.pool_id})
+            self._collection().delete_many({})
 
     def exists(self, key: str) -> bool:
         with self.atomic():
-            return self._collection().count_documents({"pool_id": self.pool_id, "key": key}, limit=1) > 0
+            return self._collection().count_documents({"key": key}, limit=1) > 0
 
     def __contains__(self, key: str) -> bool:
         return self.exists(key)
@@ -211,7 +222,7 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
     def keys(self, as_generator: bool = False) -> Iterable[str]:
         def _iter_keys() -> Iterator[str]:
             cursor = self._collection().find(
-                {"pool_id": self.pool_id},
+                {},
                 {"_id": 0, "key": 1},
             ).sort("key", 1)
             for doc in cursor:

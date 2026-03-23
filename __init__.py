@@ -157,6 +157,60 @@ def forget(*args, **kwargs):
             del kwargs["evolution"]
     return get_active_policy().central.memory.forget(*args, **kwargs)
 
+def _resolve_future(future_ref):
+    """Look up the actual future object from a reference.
+
+    Accepts a future identity, a GroupFuture, a full Future, or a
+    ``global_id`` string.
+    """
+    from .policy.central.command.schema.future.future.future_identity import _LAILA_IDENTIFIABLE_FUTURE
+    from .policy.central.command.schema.future.future.group_future import GroupFuture
+    from .policy.central.command.schema.future.future.future import Future
+
+    bank = get_active_policy().future_bank
+
+    if isinstance(future_ref, str):
+        return bank[future_ref]
+    if isinstance(future_ref, GroupFuture):
+        return future_ref
+    if isinstance(future_ref, Future):
+        return future_ref
+    if isinstance(future_ref, _LAILA_IDENTIFIABLE_FUTURE):
+        return bank[future_ref.global_id]
+    raise TypeError(f"Cannot resolve future for {type(future_ref)}")
+
+
+def status(future_ref):
+    """Return the status of a future.
+
+    Accepts a future identity, a GroupFuture, or a full Future object.
+    For identities the actual future is looked up in the active policy's
+    ``future_bank``.
+
+    Parameters
+    ----------
+    future_ref : _LAILA_IDENTIFIABLE_FUTURE | GroupFuture | Future | str
+        The future reference to query.  Strings are treated as ``global_id``
+        keys into the bank.
+    """
+    return _resolve_future(future_ref).status
+
+
+def wait(future_ref, timeout=None):
+    """Block until the future completes and return its result.
+
+    Accepts a future identity, a GroupFuture, or a full Future object.
+
+    Parameters
+    ----------
+    future_ref : _LAILA_IDENTIFIABLE_FUTURE | GroupFuture | Future | str
+        The future reference to wait on.
+    timeout : float, optional
+        Maximum seconds to wait.  ``None`` waits indefinitely.
+    """
+    return _resolve_future(future_ref).wait(timeout)
+
+
 def set_default_directory(directory):
     directory = os.path.expanduser(directory)
     LAILA_DEFAULT_DIRECTORIES.update({

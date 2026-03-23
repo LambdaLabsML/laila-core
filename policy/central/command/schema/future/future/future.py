@@ -32,7 +32,9 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
     def model_post_init(self, __context: Any) -> None:
         self._setup_default_callbacks()
         from ....... import get_active_policy
-        get_active_policy().central.command._register_future_with_active_guarantees(self)
+        policy = get_active_policy()
+        policy.central.command._register_future_with_active_guarantees(self)
+        policy.future_bank[self.global_id] = self
 
 
     def _setup_default_callbacks(self) -> None:
@@ -139,6 +141,18 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
             fn(self.result)
 
 
+
+    @property
+    def future_identity(self) -> "_LAILA_IDENTIFIABLE_FUTURE":
+        """Return a lightweight identity handle for this future."""
+        return _LAILA_IDENTIFIABLE_FUTURE(
+            taskforce_id=self.taskforce_id,
+            policy_id=self.policy_id,
+            future_group_id=self.future_group_id,
+            precedence=self.precedence,
+            purpose=self.purpose,
+            uuid=self._uuid,
+        )
 
     def finished(self) -> bool:
         """

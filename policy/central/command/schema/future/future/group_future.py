@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Dict, Optional, Callable, Any
+from typing import Dict, List, Optional, Callable, Any
 import asyncio
 import threading
 from pydantic import Field, ConfigDict, PrivateAttr
@@ -12,6 +12,12 @@ from .future_status import FutureStatus
 from .......atomic.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from .......macros.strings import _GROUP_FUTURE_SCOPE
 
+
+def _get_future_bank():
+    from ....... import get_active_policy
+    return get_active_policy().future_bank
+
+
 class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_GROUP_FUTURE_SCOPE]))
@@ -20,21 +26,23 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
     policy_id: _LAILA_IDENTIFIABLE_OBJECT|str
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    future_ids: List[str] = Field(default_factory=list)
+
     def model_post_init(self, __context: Any) -> None:
         from ....... import get_active_policy
-        get_active_policy().central.command._register_future_with_active_guarantees(self)
+        policy = get_active_policy()
+        policy.central.command._register_future_with_active_guarantees(self)
+        policy.future_bank[self.global_id] = self
 
-
-    # Map of {child_id: Future}
-    futures: Dict[str, Future] = Field(default_factory=dict)
+    def _resolve_children(self) -> List[Future]:
+        bank = _get_future_bank()
+        return [bank[fid] for fid in self.future_ids]
 
     # ---------- computed status ----------
     @property
     def status(self) -> Dict[str, Any]:
-        """
-        Return percentage breakdown of child statuses.
-        """
-        if not self.futures:
+        """Return percentage breakdown of child statuses."""
+        if not self.future_ids:
             return {
                 "total": 0.0,
                 "percentages": {
@@ -46,8 +54,9 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
                 },
             }
 
-        total = float(len(self.futures))
-        statuses = [f.status for f in self.futures.values()]
+        children = self._resolve_children()
+        total = float(len(children))
+        statuses = [f.status for f in children]
         running = sum(1 for s in statuses if s == FutureStatus.RUNNING)
         not_started = sum(1 for s in statuses if s == FutureStatus.NOT_STARTED)
         cancelled = sum(1 for s in statuses if s == FutureStatus.CANCELLED)
@@ -68,42 +77,25 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
 
     # ---------- read-only interface (except cancel passthrough) ----------
 
-    def append(self, futures: Dict[str, Future]) -> None:
-        """
-        Merge a mapping of child futures into this group.
-
-        Parameters
-        ----------
-        futures
-            Mapping of task IDs to Future instances.
-        """
-        self.futures |= futures
+    def append(self, future_ids: List[str]) -> None:
+        """Merge additional child future IDs into this group."""
+        self.future_ids.extend(future_ids)
     
 
     def __add__(self, other: Any) -> "GroupFuture":
-        """
-        Return a new GroupFuture with merged child futures.
-
-        Parameters
-        ----------
-        other
-            Another GroupFuture to merge.
-        """
+        """Return self with merged child future IDs from another GroupFuture."""
         if not isinstance(other, GroupFuture):
             return NotImplemented
-
-        self.futures |= other.futures
+        self.future_ids.extend(other.future_ids)
         return self
 
 
-
     def wait(self, timeout: Optional[float] = None) -> Any:
-        """
-        Wait for all children to complete.
-        """
+        """Wait for all children to complete."""
+        children = self._resolve_children()
         return_values = []
         timeout_ms = None if timeout is None else int(timeout * 1000)
-        for f in self.futures.values():
+        for f in children:
             if hasattr(f, "wait"):
                 return_values.append(f.wait(timeout_ms))
             else:
@@ -112,39 +104,30 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
 
     def __await__(self):
         async def _await_all():
-            return await asyncio.gather(
-                *(future for future in self.futures.values())
-            )
-
+            children = self._resolve_children()
+            return await asyncio.gather(*children)
         return _await_all().__await__()
 
     # ---------- introspection ----------
     @property
     def what(self) -> Dict[str, Dict[str, Any]]:
-        """
-        Nested summary keyed by task_group_id.
-
-        Returns
-        -------
-        dict
-            A mapping containing group status, taskforce ID, child details,
-            and summary statistics.
-        """
+        """Nested summary keyed by task_group_id."""
         group_key = self.global_id
         child_details: Dict[str, Any] = {}
         cancelled_ids = []
         not_cancelled_ids = []
         errors: Dict[str, str] = {}
 
-        for fid, f in self.futures.items():
-            # Merge child details
+        children = self._resolve_children()
+        for f in children:
+            fid = f.global_id
             if hasattr(f, "what"):
                 det = f.what
             elif hasattr(f, "details"):
                 det = f.details
             else:
                 det = {
-                    f.global_id: {
+                    fid: {
                         "status": getattr(f, "status", FutureStatus.UNKNOWN).value,
                         "error": repr(f.outcome) if getattr(f, "status", None) == FutureStatus.ERROR else None,
                     }
@@ -152,7 +135,6 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
             for child_id, payload in det.items():
                 child_details[child_id] = payload
 
-            # Track cancellation & errors
             try:
                 if getattr(f, "cancelled", lambda: False)():
                     cancelled_ids.append(fid)
@@ -185,8 +167,8 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
     def __repr__(self) -> str:
         return json.dumps(self.what)
 
-    def __iter__(self) -> Iterator[Future]:
-        return iter(self.futures.values())
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.future_ids)
 
     def __len__(self) -> int:
-        return len(self.futures)
+        return len(self.future_ids)

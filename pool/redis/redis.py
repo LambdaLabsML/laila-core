@@ -198,19 +198,17 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
     # ---------------- private helpers ----------------
     @property
     def _redis_socket_path(self) -> str:
-        # UNIX domain socket paths must be shorter than ~108 chars on Linux.
-        # Derive a short, deterministic path from pool_id.
-        digest = hashlib.sha1(self.pool_id.encode("utf-8")).hexdigest()[:16]
+        digest = hashlib.sha1(self.uuid.encode("utf-8")).hexdigest()[:16]
         return f"/tmp/laila_redis_{digest}.sock"
 
     # ---------------- key helpers ----------------
     @property
     def redis_hash_key(self) -> str:
-        return f"{self.key_prefix}:{self.pool_id}"
+        return self.key_prefix
 
     @property
     def redis_lock_key(self) -> str:
-        return f"{self.lock_prefix}:{self.pool_id}"
+        return self.lock_prefix
 
 
     def __getitem__(self, key: str) -> Optional[Any]:

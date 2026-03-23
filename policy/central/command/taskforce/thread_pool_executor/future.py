@@ -26,7 +26,9 @@ class ConcurrentPackageFuture(Future):
     def model_post_init(self, __context: Any) -> None:
         self._setup_default_callbacks()
         from ...... import get_active_policy
-        get_active_policy().central.command._register_future_with_active_guarantees(self)
+        policy = get_active_policy()
+        policy.central.command._register_future_with_active_guarantees(self)
+        policy.future_bank[self.global_id] = self
         if self._native_future is not None:
             self._add_default_concurrent_future_done_callback()
 

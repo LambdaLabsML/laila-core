@@ -24,6 +24,7 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_IDENTIFIABLE_OBJECT):
 
     # Core components
     central: Central = Field(default_factory=Central)
+    future_bank: Dict[str, Any] = Field(default_factory=dict)
 
 
     def model_post_init(self, __context: Any) -> None:

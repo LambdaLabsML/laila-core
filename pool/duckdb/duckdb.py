@@ -41,13 +41,17 @@ class DuckDBPool(_LAILA_IDENTIFIABLE_POOL):
                 os.makedirs(parent, exist_ok=True)
 
         self._conn = duckdb.connect(self.file_path)
+        row = self._conn.execute(
+            "SELECT COUNT(*) FROM information_schema.columns "
+            "WHERE table_name = 'laila_pool_entries' AND column_name = 'pool_id'"
+        ).fetchone()
+        if row and row[0] > 0:
+            self._conn.execute("DROP TABLE laila_pool_entries")
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS laila_pool_entries (
-                pool_id VARCHAR NOT NULL,
-                key VARCHAR NOT NULL,
-                value TEXT NOT NULL,
-                PRIMARY KEY (pool_id, key)
+                key VARCHAR NOT NULL PRIMARY KEY,
+                value TEXT NOT NULL
             )
             """
         )
@@ -65,8 +69,8 @@ class DuckDBPool(_LAILA_IDENTIFIABLE_POOL):
     def __getitem__(self, key: str) -> Optional[Any]:
         with self.atomic():
             row = self._connection().execute(
-                "SELECT value FROM laila_pool_entries WHERE pool_id = ? AND key = ?",
-                [self.pool_id, key],
+                "SELECT value FROM laila_pool_entries WHERE key = ?",
+                [key],
             ).fetchone()
         return json.loads(row[0]) if row is not None else None
 
@@ -80,32 +84,29 @@ class DuckDBPool(_LAILA_IDENTIFIABLE_POOL):
         with self.atomic():
             self._connection().execute(
                 """
-                INSERT INTO laila_pool_entries(pool_id, key, value)
-                VALUES (?, ?, ?)
-                ON CONFLICT(pool_id, key) DO UPDATE SET value = excluded.value
+                INSERT INTO laila_pool_entries(key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
                 """,
-                [self.pool_id, key, value],
+                [key, value],
             )
 
     def __delitem__(self, key: str) -> None:
         with self.atomic():
             self._connection().execute(
-                "DELETE FROM laila_pool_entries WHERE pool_id = ? AND key = ?",
-                [self.pool_id, key],
+                "DELETE FROM laila_pool_entries WHERE key = ?",
+                [key],
             )
 
     def empty(self) -> None:
         with self.atomic():
-            self._connection().execute(
-                "DELETE FROM laila_pool_entries WHERE pool_id = ?",
-                [self.pool_id],
-            )
+            self._connection().execute("DELETE FROM laila_pool_entries")
 
     def exists(self, key: str) -> bool:
         with self.atomic():
             row = self._connection().execute(
-                "SELECT 1 FROM laila_pool_entries WHERE pool_id = ? AND key = ?",
-                [self.pool_id, key],
+                "SELECT 1 FROM laila_pool_entries WHERE key = ?",
+                [key],
             ).fetchone()
             return row is not None
 
@@ -116,16 +117,14 @@ class DuckDBPool(_LAILA_IDENTIFIABLE_POOL):
         if not as_generator:
             with self.atomic():
                 rows = self._connection().execute(
-                    "SELECT key FROM laila_pool_entries WHERE pool_id = ? ORDER BY key",
-                    [self.pool_id],
+                    "SELECT key FROM laila_pool_entries ORDER BY key",
                 ).fetchall()
                 return [row[0] for row in rows]
 
         def _gen() -> Iterator[str]:
             with self.atomic():
                 rows = self._connection().execute(
-                    "SELECT key FROM laila_pool_entries WHERE pool_id = ? ORDER BY key",
-                    [self.pool_id],
+                    "SELECT key FROM laila_pool_entries ORDER BY key",
                 ).fetchall()
                 for row in rows:
                     yield row[0]

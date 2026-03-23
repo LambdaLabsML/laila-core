@@ -84,7 +84,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_IDENTIFIABLE_OBJECT):
         group_future = GroupFuture(
             taskforce_id=active_policy.central.command.alpha_taskforce,
             policy_id=active_policy.global_id,
-            futures=duplicate_futures,
+            future_ids=[f.global_id for f in duplicate_futures.values()],
         )
 
         for child_future in duplicate_futures.values():
@@ -97,24 +97,24 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_IDENTIFIABLE_OBJECT):
                 async with semaphore:
                     child_future.status = FutureStatus.RUNNING
 
-                    remember_future = self.remember(
+                    remember_ref = self.remember(
                         entry_ids=entry_id,
                         pool_id=src_pool.global_id,
                     )
-                    if remember_future is None:
+                    if remember_ref is None:
                         raise RuntimeError("duplicate_pool requires a non-default source pool.")
 
-                    entry = await remember_future
+                    remember_fut = active_policy.future_bank[remember_ref.global_id]
+                    entry = await remember_fut
 
-                    memorize_future = self.memorize(
+                    memorize_ref = self.memorize(
                         entries=entry,
                         pool_id=dest_pool.global_id,
                     )
-                    if memorize_future is not None:
-                        await memorize_future
+                    if memorize_ref is not None:
+                        memorize_fut = active_policy.future_bank[memorize_ref.global_id]
+                        await memorize_fut
 
-                    # Store only a lightweight completion token so completed futures
-                    # do not retain full Entry payloads in memory.
                     child_future.exception = None
                     child_future.result = entry_id
                     child_future.status = FutureStatus.FINISHED
