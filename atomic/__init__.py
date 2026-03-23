@@ -1,3 +1,4 @@
+"""Thread-safe atomic data types and base definitions."""
 from .types.atomic_dict import AtomicDict
 from .types.atomic_flag import AtomicFlag
 from .types.atomic_str import AtomicStr

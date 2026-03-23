@@ -1,3 +1,5 @@
+"""Abstract ``Future`` base class with identity, callbacks, and status lifecycle."""
+
 from __future__ import annotations
 from typing import Optional, Callable, Any, Dict, List
 from pydantic import ConfigDict, Field, PrivateAttr
@@ -30,6 +32,7 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
     callbacks: Dict[FutureStatus, Callable[..., Any]] = Field(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
+        """Wire default callbacks and register this future with the active policy."""
         self._setup_default_callbacks()
         from ....... import get_active_policy
         policy = get_active_policy()
@@ -38,6 +41,7 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
 
 
     def _setup_default_callbacks(self) -> None:
+        """Populate default status-transition callbacks."""
         self._default_callbacks[FutureStatus.ERROR] = lambda f: setattr(f, "status", FutureStatus.ERROR)
         self._default_callbacks[FutureStatus.CANCELLED] = lambda f: setattr(f, "status", FutureStatus.CANCELLED)
         self._default_callbacks[FutureStatus.NOT_STARTED] = lambda f: setattr(f, "status", FutureStatus.NOT_STARTED)

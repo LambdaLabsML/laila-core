@@ -1,3 +1,5 @@
+"""Pool router — selects a target pool based on affinity and nicknames."""
+
 from __future__ import annotations
 from typing import Optional, Any, Dict, Iterable, Iterator, Mapping, List
 from pydantic import BaseModel, Field, PrivateAttr
@@ -10,6 +12,8 @@ from .....entry import Entry
 
 
 class _LAILA_IDENTIFIABLE_POOL_ROUTER(_LAILA_IDENTIFIABLE_OBJECT):
+    """Routes memory operations to the appropriate pool based on affinity or nickname."""
+
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_POOL_ROUTER_SCOPE]))
     pools: Optional[Dict[str,_LAILA_IDENTIFIABLE_POOL]] = Field(default_factory = dict)
     pools_pq: Optional[PriorityQueue] = Field(default_factory = PriorityQueue)
@@ -21,6 +25,7 @@ class _LAILA_IDENTIFIABLE_POOL_ROUTER(_LAILA_IDENTIFIABLE_OBJECT):
 
 
     def model_post_init(self, __context: Any) -> None:
+        """Register a default pool when none are provided."""
         if len(self.pools) == 0:
             from .....macros.defaults import DefaultPool
             self.add_pool(
@@ -39,6 +44,17 @@ class _LAILA_IDENTIFIABLE_POOL_ROUTER(_LAILA_IDENTIFIABLE_OBJECT):
         affinity: Optional[float] = None,
         pool_nickname: Optional[str] = None,
     ):
+        """Register a pool with optional affinity priority and nickname.
+
+        Parameters
+        ----------
+        pool : _LAILA_IDENTIFIABLE_POOL
+            The pool instance to register.
+        affinity : float, optional
+            Routing priority (higher = preferred). Defaults to ``0``.
+        pool_nickname : str, optional
+            Human-readable alias for this pool.
+        """
         if affinity is None:
             affinity = 0 #farthest away
 
@@ -56,6 +72,24 @@ class _LAILA_IDENTIFIABLE_POOL_ROUTER(_LAILA_IDENTIFIABLE_OBJECT):
         pool_nickname: Optional[str] = None,
         affinity: Optional[float] = None,
     ):
+        """Resolve the target pool for the given entries.
+
+        Parameters
+        ----------
+        entries : list[Entry] or list[str]
+            Entries (or entry IDs) being routed.
+        pool_id : str, optional
+            Explicit pool ``global_id`` to use.
+        pool_nickname : str, optional
+            Nickname to resolve via ``_route_by_nickname``.
+        affinity : float, optional
+            Reserved for future affinity-based routing.
+
+        Returns
+        -------
+        _LAILA_IDENTIFIABLE_POOL
+            The selected pool.
+        """
         if pool_id is not None:
             return self.pools[pool_id]
         return self._route_by_nickname(pool_nickname=pool_nickname)
@@ -66,6 +100,7 @@ class _LAILA_IDENTIFIABLE_POOL_ROUTER(_LAILA_IDENTIFIABLE_OBJECT):
         *,
         pool_nickname: Optional[str] = None,
     ) -> _LAILA_IDENTIFIABLE_POOL:
+        """Resolve a pool by nickname, falling back to the default pool."""
         if pool_nickname is not None:
             return self.pools[self.pools_nicknames[pool_nickname]]
         else:

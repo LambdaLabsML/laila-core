@@ -1,3 +1,5 @@
+"""``ComputationalData`` subclass for PyTorch ``Tensor`` payloads."""
+
 from .compdata import ComputationalData, register_cdtype, _scalar_len
 from ..transformation.serialization import TorchSerializer
 from pydantic import PrivateAttr
@@ -33,21 +35,25 @@ if _HAVE_TORCH:
                 )
             self._serializer = value
 
-        # --- Core tensor behaviors ---
         def __len__(self):
+            """Return the size of the first dimension."""
             return self.data.size(0) if self.data.dim() else _scalar_len()
 
         @property
         def shape(self):
+            """Return the tensor shape as a tuple."""
             return tuple(self.data.size())
 
         def __copy__(self):
+            """Return a cloned tensor wrapper."""
             return type(self)(self.data.clone())
 
         def __deepcopy__(self, _):
+            """Return a deep-cloned tensor wrapper."""
             return type(self)(self.data.clone())
 
         def __repr__(self):
+            """Return a developer-friendly representation."""
             return (
                 f"CD_torchtensor(shape={tuple(self.data.size())}, "
                 f"dtype={self.data.dtype}, device={self.data.device})"

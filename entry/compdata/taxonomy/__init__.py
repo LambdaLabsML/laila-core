@@ -1,3 +1,5 @@
+"""Register all concrete ``ComputationalData`` subclasses for type dispatch."""
+
 from .cd_dict import CD_dict
 from .cd_list import CD_list
 from .cd_numpy import CD_numpyarray

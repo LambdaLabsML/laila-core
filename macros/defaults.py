@@ -1,3 +1,5 @@
+"""Default implementations and compile-time constants for Laila."""
+
 from ..policy.central.memory.schema.base import _LAILA_IDENTIFIABLE_CENTRAL_MEMORY
 from ..policy.central.command.taskforce.thread_pool_executor import PythonThreadPoolTaskForce
 from ..policy.central.command.schema.base import _LAILA_IDENTIFIABLE_CENTRAL_COMMAND

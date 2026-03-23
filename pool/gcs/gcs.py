@@ -1,3 +1,4 @@
+"""Google Cloud Storage pool implementation."""
 from __future__ import annotations
 
 from typing import Optional, Any, Iterable, Iterator
@@ -20,6 +21,12 @@ except ImportError:
 
 
 class GCSPool(_LAILA_IDENTIFIABLE_POOL):
+    """Google Cloud Storage-backed pool.
+
+    Entries are stored as JSON objects in a GCS bucket.  Authentication
+    can use explicit service-account info or Application Default Credentials.
+    """
+
     service_account_info: Optional[dict[str, Any]] = Field(default=None)
     project_id: Optional[str] = Field(default=None)
     bucket_name: str = Field(...)
@@ -32,6 +39,7 @@ class GCSPool(_LAILA_IDENTIFIABLE_POOL):
         arbitrary_types_allowed = True
 
     def _get_client(self):
+        """Return the GCS ``storage.Client``, creating it on first call."""
         if self._client is not None:
             return self._client
         if storage is None or service_account is None:
@@ -53,21 +61,26 @@ class GCSPool(_LAILA_IDENTIFIABLE_POOL):
         return self._client
 
     def _get_bucket(self):
+        """Return the GCS bucket handle."""
         if self._bucket is None:
             self._bucket = self._get_client().bucket(self.bucket_name)
         return self._bucket
 
     def _object_key(self, key: str) -> str:
+        """URL-encode a logical key for GCS."""
         return quote(key, safe="")
 
     def _logical_key(self, object_key: str) -> str:
+        """Decode a GCS object name back to the logical key."""
         return unquote(object_key)
 
     def close(self) -> None:
+        """Release client references."""
         self._client = None
         self._bucket = None
 
     def __getitem__(self, key: str) -> Optional[Any]:
+        """Retrieve the JSON value for *key*, or ``None`` if absent."""
         with self.atomic():
             blob = self._get_bucket().blob(self._object_key(key))
             try:
@@ -77,6 +90,7 @@ class GCSPool(_LAILA_IDENTIFIABLE_POOL):
         return json.loads(raw)
 
     def __setitem__(self, key: str, entry: Any) -> None:
+        """Store *entry* as a JSON blob under *key*."""
         value = entry
         if isinstance(value, dict):
             value = json.dumps(value)
@@ -88,6 +102,7 @@ class GCSPool(_LAILA_IDENTIFIABLE_POOL):
             blob.upload_from_string(value, content_type="application/json")
 
     def __delitem__(self, key: str) -> None:
+        """Delete the blob for *key*; no-op if absent."""
         with self.atomic():
             blob = self._get_bucket().blob(self._object_key(key))
             try:
@@ -96,20 +111,35 @@ class GCSPool(_LAILA_IDENTIFIABLE_POOL):
                 return
 
     def empty(self) -> None:
+        """Remove all blobs from the bucket."""
         with self.atomic():
             blobs = list(self._get_client().list_blobs(self.bucket_name))
             for blob in blobs:
                 blob.delete()
 
     def exists(self, key: str) -> bool:
+        """Return ``True`` if a blob for *key* exists."""
         with self.atomic():
             blob = self._get_bucket().blob(self._object_key(key))
             return bool(blob.exists(self._get_client()))
 
     def __contains__(self, key: str) -> bool:
+        """Check membership, delegates to :meth:`exists`."""
         return self.exists(key)
 
     def keys(self, as_generator: bool = False) -> Iterable[str]:
+        """Return all keys in the bucket.
+
+        Parameters
+        ----------
+        as_generator : bool, optional
+            If ``True``, return a lazy iterator instead of a list.
+
+        Returns
+        -------
+        Iterable[str]
+            Pool keys.
+        """
         def _iter_keys() -> Iterator[str]:
             for blob in self._get_client().list_blobs(self.bucket_name):
                 yield self._logical_key(blob.name)

@@ -1,3 +1,5 @@
+"""Base schema for a Laila policy and its central sub-components."""
+
 from __future__ import annotations
 from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict, PrivateAttr
@@ -10,9 +12,12 @@ from ..central.memory.schema.base import _LAILA_IDENTIFIABLE_CENTRAL_MEMORY
 from ...macros.strings import _POLICY_SCOPE
 
 class _LAILA_IDENTIFIABLE_POLICY(_LAILA_IDENTIFIABLE_OBJECT):
-    
+    """Top-level policy object that owns central command, memory, and logic."""
+
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_POLICY_SCOPE]))
     class Central(BaseModel):
+        """Container for the four central sub-systems of a policy."""
+
         logic: Optional[Any] = Field(default=None)
         command: Optional[_LAILA_IDENTIFIABLE_CENTRAL_COMMAND] = Field(default=None)
         communication: Optional[Any] = Field(default=None)
@@ -28,6 +33,7 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_IDENTIFIABLE_OBJECT):
 
 
     def model_post_init(self, __context: Any) -> None:
+        """Lazily wire default central command and memory if not provided."""
         from ...macros.defaults import (
             DefaultCentralCommand, 
             DefaultCentralMemory
@@ -54,7 +60,24 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_IDENTIFIABLE_OBJECT):
         hint: Optional[str] = None,
         _remote_called: bool = False,
     ) -> Optional[Entry]:
-        
+        """Fetch an entry from central memory by its *global_id*.
+
+        Parameters
+        ----------
+        global_id : str
+            The unique identifier of the entry to recall.
+        global_fetch : bool, optional
+            If ``True``, search across all known policies (not implemented).
+        pool_subset : dict, optional
+            Restrict the search to a subset of pools.
+        hint : str, optional
+            Routing hint forwarded to central memory.
+
+        Returns
+        -------
+        Entry or None
+            The recovered entry, or ``None`` if not found.
+        """
         if global_fetch:
             raise NotImplementedError
         

@@ -1,3 +1,5 @@
+"""``ComputationalData`` subclass for Python ``dict`` payloads."""
+
 from dataclasses import dataclass, field
 from typing import Dict, Any
 from pydantic import PrivateAttr
@@ -9,6 +11,11 @@ from ..transformation.serialization import MsgpackSerializer
 
 @register_cdtype(dict)
 class CD_dict(ComputationalData):
+    """Computational data wrapper for ``dict`` objects.
+
+    Uses ``MsgpackSerializer`` by default.
+    """
+
     data: Dict[Any, Any]
     _serializer: MsgpackSerializer = PrivateAttr(default_factory=MsgpackSerializer)
 
@@ -25,19 +32,29 @@ class CD_dict(ComputationalData):
             raise TypeError(f"serializer must be a MsgpackSerializer, got {type(value).__name__}")
         self._serializer = value
 
-    # --- Other ComputationalData behaviors ---
-    def __len__(self):                
+    def __len__(self):
+        """Return the number of keys in the dict."""
         return len(self.data)
 
     @property
     def shape(self):
+        """Not applicable for dicts.
+
+        Raises
+        ------
+        AttributeError
+            Always.
+        """
         raise AttributeError("dict has no 'shape' attribute")
 
     def __copy__(self):
+        """Return a shallow copy."""
         return type(self)(self.data.copy())
 
     def __deepcopy__(self, memo=None):
+        """Return a deep copy."""
         return type(self)(copy.deepcopy(self.data, memo))
     
     def __repr__(self):
+        """Return a developer-friendly representation."""
         return f"CD_dict({self.data!r})"

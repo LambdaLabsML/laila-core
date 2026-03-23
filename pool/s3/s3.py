@@ -1,3 +1,4 @@
+"""AWS S3 pool implementation."""
 from __future__ import annotations
 
 from typing import Optional
@@ -26,6 +27,7 @@ class S3Pool(BotoPool):
     region_name: Optional[str] = Field(default=None)
 
     def _get_client(self):
+        """Return a boto3 S3 client configured for AWS S3."""
         if self._client is not None:
             return self._client
         if boto3 is None or BotocoreConfig is None:

@@ -1,13 +1,21 @@
-# base64_op.py
+"""Base64 encode / decode data transformation."""
+
 import base64
 from typing import Any, Union
 from ..base import _data_transformation
 
 
 class Base64(_data_transformation):
+    """Reversible Base64 encoding transformation.
+
+    Forward encodes binary data to a Base64 UTF-8 string;
+    backward decodes it back to raw bytes.
+    """
+
     name: str = "base64"
 
     def model_post_init(self, __context: Any) -> None:
+        """Build standalone backward recovery code."""
         # Standalone recovery code with embedded kwargs (e.g., altchars, validate)
         self.backward_code = (
             "def backward(inp):\n"

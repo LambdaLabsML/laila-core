@@ -1,3 +1,4 @@
+"""DuckDB pool implementation."""
 from __future__ import annotations
 
 from typing import Optional, Any, Iterable, Iterator
@@ -16,6 +17,8 @@ except ImportError:
 
 
 class DuckDBPool(_LAILA_IDENTIFIABLE_POOL):
+    """DuckDB-backed pool storing entries in a local DuckDB database file."""
+
     file_path: Optional[str] = Field(default=None)
     transformations: Optional[TransformationSequence] = Field(default=transformation_base64)
 
@@ -25,6 +28,7 @@ class DuckDBPool(_LAILA_IDENTIFIABLE_POOL):
         arbitrary_types_allowed = True
 
     def model_post_init(self, __context: Any) -> None:
+        """Initialise the DuckDB connection and create the entries table."""
         super().model_post_init(__context)
         if duckdb is None:
             raise ImportError("duckdb is required for DuckDBPool")
@@ -57,16 +61,19 @@ class DuckDBPool(_LAILA_IDENTIFIABLE_POOL):
         )
 
     def _connection(self):
+        """Return the active DuckDB connection."""
         if self._conn is None:
             raise RuntimeError("DuckDBPool is closed.")
         return self._conn
 
     def close(self) -> None:
+        """Close the DuckDB connection."""
         if self._conn is not None:
             self._conn.close()
             self._conn = None
 
     def __getitem__(self, key: str) -> Optional[Any]:
+        """Retrieve the JSON value for *key*, or ``None`` if absent."""
         with self.atomic():
             row = self._connection().execute(
                 "SELECT value FROM laila_pool_entries WHERE key = ?",
@@ -75,6 +82,7 @@ class DuckDBPool(_LAILA_IDENTIFIABLE_POOL):
         return json.loads(row[0]) if row is not None else None
 
     def __setitem__(self, key: str, entry: Any) -> None:
+        """Insert or update *entry* under *key*."""
         value = entry
         if isinstance(value, dict):
             value = json.dumps(value)
@@ -92,6 +100,7 @@ class DuckDBPool(_LAILA_IDENTIFIABLE_POOL):
             )
 
     def __delitem__(self, key: str) -> None:
+        """Delete the row for *key*."""
         with self.atomic():
             self._connection().execute(
                 "DELETE FROM laila_pool_entries WHERE key = ?",
@@ -99,10 +108,12 @@ class DuckDBPool(_LAILA_IDENTIFIABLE_POOL):
             )
 
     def empty(self) -> None:
+        """Remove all entries from the pool."""
         with self.atomic():
             self._connection().execute("DELETE FROM laila_pool_entries")
 
     def exists(self, key: str) -> bool:
+        """Return ``True`` if *key* is present."""
         with self.atomic():
             row = self._connection().execute(
                 "SELECT 1 FROM laila_pool_entries WHERE key = ?",
@@ -111,9 +122,22 @@ class DuckDBPool(_LAILA_IDENTIFIABLE_POOL):
             return row is not None
 
     def __contains__(self, key: str) -> bool:
+        """Check membership, delegates to :meth:`exists`."""
         return self.exists(key)
 
     def keys(self, as_generator: bool = False) -> Iterable[str]:
+        """Return all keys in the pool.
+
+        Parameters
+        ----------
+        as_generator : bool, optional
+            If ``True``, return a lazy iterator instead of a list.
+
+        Returns
+        -------
+        Iterable[str]
+            Pool keys.
+        """
         if not as_generator:
             with self.atomic():
                 rows = self._connection().execute(

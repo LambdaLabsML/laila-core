@@ -1,3 +1,4 @@
+"""Abstract boto3-based S3-compatible pool implementation."""
 from __future__ import annotations
 
 from typing import Optional, Any, Iterable, Iterator
@@ -38,18 +39,29 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
         arbitrary_types_allowed = True
 
     def _get_client(self):
+        """Return a configured boto3 S3 client.
+
+        Raises
+        ------
+        NotImplementedError
+            Must be overridden by subclasses.
+        """
         raise NotImplementedError("Subclasses must implement _get_client")
 
     def _object_key(self, key: str) -> str:
+        """URL-encode a logical key for S3."""
         return quote(key, safe="")
 
     def _logical_key(self, object_key: str) -> str:
+        """Decode an S3 object key back to the logical key."""
         return unquote(object_key)
 
     def close(self) -> None:
+        """Release the boto3 client."""
         self._client = None
 
     def __getitem__(self, key: str) -> Optional[Any]:
+        """Retrieve the JSON value for *key*, or ``None`` if absent."""
         with self.atomic():
             try:
                 resp = self._get_client().get_object(
@@ -64,6 +76,7 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
                 raise
 
     def __setitem__(self, key: str, entry: Any) -> None:
+        """Store *entry* as a JSON object under *key*."""
         value = entry
         if isinstance(value, dict):
             value = json.dumps(value)
@@ -79,6 +92,7 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
             )
 
     def __delitem__(self, key: str) -> None:
+        """Delete the object for *key*."""
         with self.atomic():
             self._get_client().delete_object(
                 Bucket=self.bucket_name,
@@ -97,6 +111,7 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
                     )
 
     def exists(self, key: str) -> bool:
+        """Return ``True`` if *key* exists in the bucket."""
         with self.atomic():
             try:
                 self._get_client().head_object(
@@ -108,9 +123,22 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
                 return False
 
     def __contains__(self, key: str) -> bool:
+        """Check membership, delegates to :meth:`exists`."""
         return self.exists(key)
 
     def keys(self, as_generator: bool = False) -> Iterable[str]:
+        """Return all keys in the bucket.
+
+        Parameters
+        ----------
+        as_generator : bool, optional
+            If ``True``, return a lazy iterator instead of a list.
+
+        Returns
+        -------
+        Iterable[str]
+            Pool keys.
+        """
         paginator = self._get_client().get_paginator("list_objects_v2")
 
         def _iter_keys() -> Iterator[str]:

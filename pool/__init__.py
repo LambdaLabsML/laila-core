@@ -1,3 +1,4 @@
+"""Pool implementations for all supported storage backends."""
 from .redis.redis import RedisPool
 from .hdf5.hdf5 import HDF5Pool
 from .cloudflare.cloudflare import CloudflarePool

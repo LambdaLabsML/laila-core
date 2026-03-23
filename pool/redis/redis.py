@@ -1,3 +1,4 @@
+"""Redis pool implementation with a managed private redis-server."""
 from __future__ import annotations
 
 from typing import Optional, Any, Iterable, Iterator
@@ -56,6 +57,8 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
 
 
     class Config:
+        """Pydantic model configuration."""
+
         arbitrary_types_allowed = True
 
     # ---------------- lifecycle ----------------
@@ -87,6 +90,7 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
         atexit.register(self.close)
 
     def __del__(self) -> None:
+        """Best-effort cleanup on garbage collection."""
         with suppress(Exception):
             self.close()
 
@@ -121,6 +125,7 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
 
     # ---------------- redis-server ----------------
     def _start_redis_server(self) -> None:
+        """Launch a ``redis-server`` subprocess on a UNIX socket."""
         if not self.redis_dir:
             raise RuntimeError("Redis server not fully configured (missing redis_dir)")
 
@@ -198,20 +203,24 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
     # ---------------- private helpers ----------------
     @property
     def _redis_socket_path(self) -> str:
+        """Deterministic UNIX socket path derived from pool UUID."""
         digest = hashlib.sha1(self.uuid.encode("utf-8")).hexdigest()[:16]
         return f"/tmp/laila_redis_{digest}.sock"
 
     # ---------------- key helpers ----------------
     @property
     def redis_hash_key(self) -> str:
+        """Redis hash key used to store all pool entries."""
         return self.key_prefix
 
     @property
     def redis_lock_key(self) -> str:
+        """Redis key used for distributed locking."""
         return self.lock_prefix
 
 
     def __getitem__(self, key: str) -> Optional[Any]:
+        """Retrieve the JSON value for *key*, or ``None`` if absent."""
         if self.client is None:
             raise RuntimeError("Redis client not initialized.")
         value = self.client.hget(self.redis_hash_key, key)
@@ -219,6 +228,7 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
         return json.loads(value) if value is not None else None
 
     def __setitem__(self, key: str, entry: Any) -> None:
+        """Store *entry* as a JSON string in the Redis hash."""
         value = entry
         if isinstance(value, dict):
             value = json.dumps(value)
@@ -229,6 +239,7 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
         self.client.hset(self.redis_hash_key, key, value)
 
     def __delitem__(self, key: str) -> None:
+        """Delete *key* from the Redis hash."""
         if self.client is None:
             raise RuntimeError("Redis client not initialized.")
         self.client.hdel(self.redis_hash_key, key)
@@ -240,14 +251,28 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
         self.client.delete(self.redis_hash_key)
 
     def exists(self, key: str) -> bool:
+        """Return ``True`` if *key* exists in the Redis hash."""
         if self.client is None:
             raise RuntimeError("Redis client not initialized.")
         return bool(self.client.hexists(self.redis_hash_key, key))
 
     def __contains__(self, key: str) -> bool:
+        """Check membership, delegates to :meth:`exists`."""
         return self.exists(key)
 
     def keys(self, as_generator: bool = False) -> Iterable[str]:
+        """Return all keys in the Redis hash.
+
+        Parameters
+        ----------
+        as_generator : bool, optional
+            If ``True``, return a lazy iterator using ``HSCAN``.
+
+        Returns
+        -------
+        Iterable[str]
+            Pool keys.
+        """
         if self.client is None:
             raise RuntimeError("Redis client not initialized.")
 

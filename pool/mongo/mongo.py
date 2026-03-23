@@ -1,3 +1,4 @@
+"""MongoDB-backed pool implementation with optional managed local server."""
 from __future__ import annotations
 
 from typing import Optional, Any, Iterable, Iterator
@@ -23,6 +24,12 @@ except ImportError:
 
 
 class MongoPool(_LAILA_IDENTIFIABLE_POOL):
+    """MongoDB-backed pool.
+
+    Can connect to an existing MongoDB via ``uri`` or ``host``/``port``,
+    or automatically start and manage a local ``mongod`` process.
+    """
+
     uri: Optional[str] = Field(default=None)
     host: Optional[str] = Field(default=None)
     port: int = Field(default=27017)
@@ -36,15 +43,19 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
     _mongo_dir: Optional[str] = PrivateAttr(default=None)
 
     class Config:
+        """Pydantic model configuration."""
+
         arbitrary_types_allowed = True
 
     def model_post_init(self, __context: Any) -> None:
+        """Connect to MongoDB and ensure the entries collection is indexed."""
         super().model_post_init(__context)
         self._client = self._connect()
         self._collection().create_index("key", unique=True)
         atexit.register(self.close)
 
     def _connect(self):
+        """Establish a ``MongoClient`` connection."""
         if MongoClient is None:
             raise ImportError("pymongo is required for MongoPool")
         if self.uri is not None:
@@ -60,6 +71,7 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
         )
 
     def _configure_local_server(self) -> None:
+        """Set up directory and port for a managed local mongod."""
         if self._mongo_dir is not None:
             return
         from ...macros.defaults import LAILA_DEFAULT_DIRECTORIES
@@ -71,11 +83,13 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
 
     @property
     def _local_uri(self) -> str:
+        """MongoDB connection URI for the managed local server."""
         if self.host is None:
             raise RuntimeError("Local Mongo host is not configured.")
         return f"mongodb://{self.host}:{self.port}/"
 
     def _ensure_local_server(self) -> None:
+        """Start a local mongod if one is not already reachable."""
         if self._local_server_available():
             self._owns_local_server = False
             return
@@ -93,6 +107,7 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
                 self.port += 1
 
     def _local_server_available(self) -> bool:
+        """Return ``True`` if the local mongod responds to a ping."""
         if MongoClient is None:
             return False
         try:
@@ -104,6 +119,7 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
             return False
 
     def _start_local_server(self) -> None:
+        """Launch a ``mongod`` subprocess and wait for readiness."""
         if self._mongo_dir is None or self.host is None:
             raise RuntimeError("Local Mongo server is not fully configured.")
         cmd = [
@@ -160,14 +176,17 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
         )
 
     def _db(self):
+        """Return the active MongoDB database handle."""
         if self._client is None:
             raise RuntimeError("MongoPool is closed.")
         return self._client[self.dbname]
 
     def _collection(self):
+        """Return the ``laila_pool_entries`` collection."""
         return self._db()["laila_pool_entries"]
 
     def close(self) -> None:
+        """Close the client and terminate any managed mongod process."""
         if self._client is not None:
             self._client.close()
             self._client = None
@@ -186,11 +205,13 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
         self._owns_local_server = False
 
     def __getitem__(self, key: str) -> Optional[Any]:
+        """Retrieve the JSON value for *key*, or ``None`` if absent."""
         with self.atomic():
             doc = self._collection().find_one({"key": key}, {"_id": 0, "value": 1})
         return json.loads(doc["value"]) if doc is not None else None
 
     def __setitem__(self, key: str, entry: Any) -> None:
+        """Upsert *entry* under *key*."""
         value = entry
         if isinstance(value, dict):
             value = json.dumps(value)
@@ -205,21 +226,37 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
             )
 
     def __delitem__(self, key: str) -> None:
+        """Delete the document for *key*."""
         with self.atomic():
             self._collection().delete_one({"key": key})
 
     def empty(self) -> None:
+        """Remove all documents from the entries collection."""
         with self.atomic():
             self._collection().delete_many({})
 
     def exists(self, key: str) -> bool:
+        """Return ``True`` if a document for *key* exists."""
         with self.atomic():
             return self._collection().count_documents({"key": key}, limit=1) > 0
 
     def __contains__(self, key: str) -> bool:
+        """Check membership, delegates to :meth:`exists`."""
         return self.exists(key)
 
     def keys(self, as_generator: bool = False) -> Iterable[str]:
+        """Return all keys in the collection.
+
+        Parameters
+        ----------
+        as_generator : bool, optional
+            If ``True``, return a lazy iterator instead of a list.
+
+        Returns
+        -------
+        Iterable[str]
+            Pool keys.
+        """
         def _iter_keys() -> Iterator[str]:
             cursor = self._collection().find(
                 {},

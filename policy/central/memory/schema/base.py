@@ -1,3 +1,5 @@
+"""Central memory system — memorize, remember, forget, and pool duplication."""
+
 from typing import Dict, Optional, Any, List
 import asyncio
 import threading
@@ -19,6 +21,7 @@ from .....entry import Entry
 
 
 class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_IDENTIFIABLE_OBJECT):
+    """Central memory controller for storing, retrieving, and deleting entries across pools."""
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_CENTRAL_MEMORY_SCOPE]))
     pool_router: Optional[_LAILA_IDENTIFIABLE_POOL_ROUTER] = Field(default=None)
 
@@ -26,15 +29,18 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_IDENTIFIABLE_OBJECT):
         arbitrary_types_allowed = True
 
     def model_post_init(self, __context: Any) -> None:
+        """Create a default pool router when none is provided."""
         if self.pool_router is None:
             from .....macros.defaults import DefaultPoolRouter
             self.pool_router = DefaultPoolRouter()
 
     
     def add_pool(self, pool: _LAILA_IDENTIFIABLE_POOL, *, affinity: Optional[float] = None, pool_nickname: Optional[str] = None):
+        """Delegate pool registration to the pool router."""
         self.pool_router.add_pool(pool, affinity=affinity, pool_nickname=pool_nickname)
 
     def _resolve_pool_ref(self, pool_ref: _LAILA_IDENTIFIABLE_POOL | str) -> _LAILA_IDENTIFIABLE_POOL:
+        """Resolve a pool object, ID string, or nickname to a pool instance."""
         if isinstance(pool_ref, _LAILA_IDENTIFIABLE_POOL):
             return pool_ref
 
@@ -54,6 +60,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_IDENTIFIABLE_OBJECT):
         keys = [],
         global_borrow = False,
     ):
+        """Context manager for borrowing entries (not yet implemented)."""
         raise NotImplementedError
 
     def _duplicate_pool(
@@ -63,6 +70,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_IDENTIFIABLE_OBJECT):
         *,
         inflight_max_entries: int = 4,
     ) -> GroupFuture:
+        """Copy all entries from *pool_src* to *pool_dest* asynchronously."""
         from ..... import active_policy
 
         if inflight_max_entries < 1:
@@ -163,7 +171,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_IDENTIFIABLE_OBJECT):
         pool_nickname: Optional[str] = None,
         affinity: Optional[float] = None,
     ):
-
+        """Persist entries to the routed pool, returning futures for non-default pools."""
         from ..... import active_policy
 
         pool = self.pool_router.route(
@@ -188,6 +196,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_IDENTIFIABLE_OBJECT):
         entries: Entry,
         pool: _LAILA_IDENTIFIABLE_POOL,
     ):
+        """Dispatch recording to batch or non-batch path based on pool capability."""
         if pool.batch_accelerated:
             return self._batch_record(entries, pool)
         else:
@@ -198,7 +207,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_IDENTIFIABLE_OBJECT):
         entries: Entry,
         pool: _LAILA_IDENTIFIABLE_POOL,
     ):
- 
+        """Serialize and write each entry individually via the command taskforce."""
         from ..... import active_policy
 
         def _individual_record_subprocedure(entry: Entry, pool: _LAILA_IDENTIFIABLE_POOL):
@@ -224,6 +233,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_IDENTIFIABLE_OBJECT):
         entries: List[Entry],
         pool: _LAILA_IDENTIFIABLE_POOL,
     ):
+        """Batch-record entries (not yet implemented)."""
         raise NotImplementedError
 
 
@@ -236,7 +246,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_IDENTIFIABLE_OBJECT):
         pool_nickname: Optional[str] = None,
         affinity: Optional[float] = None,
     ):
-        
+        """Fetch entries from the routed pool, returning futures for non-default pools."""
         from ..... import active_policy
         from .....entry import Entry
 
@@ -264,6 +274,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_IDENTIFIABLE_OBJECT):
         pool: Optional[Dict[str, _LAILA_IDENTIFIABLE_POOL]] = None,
         borrow: bool = False,
     ):
+        """Dispatch fetching to batch or non-batch path based on pool capability."""
         if borrow:
             raise NotImplementedError
         if pool.batch_accelerated:
@@ -278,6 +289,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_IDENTIFIABLE_OBJECT):
         *,
         pool: Optional[Dict[str, _LAILA_IDENTIFIABLE_POOL]] = None,
     ):
+        """Fetch each entry individually via the command taskforce."""
         def _individual_fetch_subprocedure(entry_id: str, pool: _LAILA_IDENTIFIABLE_POOL):
             from_pool = pool[entry_id]
             if from_pool is None:
@@ -296,6 +308,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_IDENTIFIABLE_OBJECT):
         *,
         pool: Optional[Dict[str, _LAILA_IDENTIFIABLE_POOL]] = None,
     ):
+        """Batch-accelerated fetch path (not yet implemented)."""
         raise NotImplementedError
             
 
@@ -308,6 +321,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_IDENTIFIABLE_OBJECT):
         pool_nickname: Optional[str] = None,
         affinity: Optional[float] = None,
     ):
+        """Delete entries from the routed pool, returning futures for non-default pools."""
         pool = self.pool_router.route(
             entries = entry_ids,
             pool_id = pool_id,
@@ -328,6 +342,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_IDENTIFIABLE_OBJECT):
         entry_ids: List[str],
         pool: _LAILA_IDENTIFIABLE_POOL,
     ):
+        """Dispatch deletion to batch or non-batch path based on pool capability."""
         if pool.batch_accelerated:
             return self._batch_delete(entry_ids, pool=pool)
         else:
@@ -338,6 +353,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_IDENTIFIABLE_OBJECT):
         entry_ids: List[str],
         pool: _LAILA_IDENTIFIABLE_POOL,
     ):
+        """Batch-delete entries (not yet implemented)."""
         raise NotImplementedError
 
 
@@ -346,6 +362,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_IDENTIFIABLE_OBJECT):
         entry_ids: List[str],
         pool: _LAILA_IDENTIFIABLE_POOL,
     ):
+        """Delete each entry individually via the command taskforce."""
         def _individual_delete_subprocedure(entry_id: str, pool: _LAILA_IDENTIFIABLE_POOL):
             del pool[entry_id]
         
@@ -354,4 +371,3 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_IDENTIFIABLE_OBJECT):
             tasks=[lambda entry_id=entry_id, pool=pool: _individual_delete_subprocedure(entry_id, pool) for entry_id in entry_ids]
         )
         return futures
-

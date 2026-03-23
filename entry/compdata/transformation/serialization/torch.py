@@ -1,3 +1,5 @@
+"""PyTorch tensor serialisation / deserialisation transformation."""
+
 import io
 import torch
 import textwrap
@@ -6,6 +8,8 @@ from ..base import _data_transformation
 
 
 class TorchSerializer(_data_transformation):
+    """Reversible PyTorch serialiser using ``torch.save`` / ``torch.load``."""
+
     name: str = "torch"
 
     def model_post_init(self, __context: Any) -> None:
@@ -20,14 +24,36 @@ class TorchSerializer(_data_transformation):
         """)
 
     def forward(self, inp: torch.Tensor) -> bytes:
-        """Serialize a PyTorch tensor into bytes."""
+        """Serialize a PyTorch tensor into bytes.
+
+        Parameters
+        ----------
+        inp : torch.Tensor
+            Tensor to serialize.
+
+        Returns
+        -------
+        bytes
+            ``torch.save``-encoded bytes.
+        """
         buf = io.BytesIO()
         kwargs = {**self.forward_kwargs}
         torch.save(inp, buf, **kwargs)
         return buf.getvalue()
 
     def backward(self, inp: bytes) -> Any:
-        """Deserialize bytes back into a PyTorch tensor."""
+        """Deserialize bytes back into a PyTorch tensor.
+
+        Parameters
+        ----------
+        inp : bytes
+            Bytes produced by :meth:`forward`.
+
+        Returns
+        -------
+        Any
+            Reconstructed tensor.
+        """
         buf = io.BytesIO(inp)
         kwargs = {**self.backward_kwargs}
         return torch.load(buf, **kwargs)

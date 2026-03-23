@@ -1,4 +1,5 @@
-# json_string_op.py
+"""JSON string serialisation / deserialisation data transformation."""
+
 import json
 import textwrap
 from typing import Any
@@ -6,10 +7,16 @@ from ..base import _data_transformation
 
 
 class JsonString(_data_transformation):
+    """Reversible JSON string transformation.
+
+    Forward serialises a Python object to a compact JSON string;
+    backward parses it back.
+    """
+
     name: str = "json_string"
 
-    
     def model_post_init(self, __context: Any) -> None:
+        """Build standalone backward recovery code."""
         # Standalone recovery code mirroring `backward()` with embedded kwargs
         self.backward_code = textwrap.dedent(f"""
             def backward(data):
@@ -21,8 +28,22 @@ class JsonString(_data_transformation):
 
     
     def forward(self, data: Any) -> str:
-        """
-        Serialize `data` to a JSON string.
+        """Serialize *data* to a compact JSON string.
+
+        Parameters
+        ----------
+        data : Any
+            JSON-serialisable Python object.
+
+        Returns
+        -------
+        str
+            Compact JSON string.
+
+        Raises
+        ------
+        TypeError
+            If *data* is not JSON-serialisable.
         """
         try:
             return json.dumps(
@@ -36,8 +57,22 @@ class JsonString(_data_transformation):
 
     
     def backward(self, data: str) -> Any:
-        """
-        Deserialize the JSON string back to the original Python object.
+        """Deserialize a JSON string back to a Python object.
+
+        Parameters
+        ----------
+        data : str
+            JSON string.
+
+        Returns
+        -------
+        Any
+            Parsed Python object.
+
+        Raises
+        ------
+        TypeError
+            If *data* is not a string or contains invalid JSON.
         """
         if not isinstance(data, str):
             raise TypeError("JsonString.backward expects a JSON string (str)")

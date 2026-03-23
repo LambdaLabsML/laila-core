@@ -1,10 +1,6 @@
-from __future__ import annotations
+"""Process-pool backed taskforce using ``concurrent.futures.ProcessPoolExecutor``."""
 
-# NOTE:
-# This process-pool backend currently targets top-level picklable callables
-# with picklable args/kwargs/results only. It still needs more development
-# before live LAILA Entry objects can be handled safely and predictably across
-# process boundaries.
+from __future__ import annotations
 
 import multiprocessing
 import pickle
@@ -22,6 +18,7 @@ from ..base import _LAILA_IDENTIFIABLE_TASK_FORCE
 
 
 def _process_runner(task: Callable[..., Any], args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Any:
+    """Top-level picklable function that executes a task in a worker process."""
     return task(*args, **kwargs)
 
 
@@ -98,6 +95,7 @@ class PythonProcessPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
         args: Tuple[Any, ...],
         kwargs: Dict[str, Any],
     ) -> None:
+        """Verify that task, args, and kwargs are picklable."""
         try:
             pickle.dumps((task, args, kwargs))
         except Exception as exc:

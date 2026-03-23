@@ -1,3 +1,4 @@
+"""Hugging Face Hub pool implementation."""
 from __future__ import annotations
 
 from typing import Optional, Any, Iterable, Iterator
@@ -36,9 +37,12 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
     _api: Any = PrivateAttr(default=None)
 
     class Config:
+        """Pydantic model configuration."""
+
         arbitrary_types_allowed = True
 
     def _get_api(self):
+        """Return the ``HfApi`` instance, creating it on first call."""
         if self._api is not None:
             return self._api
         if HfApi is None or hf_hub_download is None:
@@ -47,9 +51,11 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
         return self._api
 
     def _prefix(self) -> str:
+        """Return the normalised path prefix (no leading/trailing slashes)."""
         return self.path_prefix.strip("/")
 
     def _object_key(self, key: str) -> str:
+        """Build the in-repo file path for *key*."""
         encoded = quote(key, safe="")
         prefix = self._prefix()
         if prefix:
@@ -57,6 +63,7 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
         return f"{encoded}.json"
 
     def _logical_key(self, object_key: str) -> str:
+        """Extract the logical key from an in-repo file path."""
         prefix = self._prefix()
         cleaned = object_key
         if prefix and cleaned.startswith(prefix + "/"):
@@ -66,9 +73,11 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
         return unquote(cleaned)
 
     def close(self) -> None:
+        """Release the API handle."""
         self._api = None
 
     def __getitem__(self, key: str) -> Optional[Any]:
+        """Download and parse the JSON file for *key*, or return ``None``."""
         with self.atomic():
             try:
                 path = hf_hub_download(
@@ -85,6 +94,7 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
                 return None
 
     def __setitem__(self, key: str, entry: Any) -> None:
+        """Upload *entry* as a JSON file to the Hub repo."""
         value = entry
         if isinstance(value, dict):
             value = json.dumps(value)
@@ -102,6 +112,7 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
             )
 
     def __delitem__(self, key: str) -> None:
+        """Delete the file for *key* from the Hub repo; no-op if absent."""
         with self.atomic():
             try:
                 self._get_api().delete_file(
@@ -121,6 +132,7 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
                 del self[key]
 
     def exists(self, key: str) -> bool:
+        """Return ``True`` if *key* exists in the Hub repo."""
         with self.atomic():
             try:
                 hf_hub_download(
@@ -135,9 +147,22 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
                 return False
 
     def __contains__(self, key: str) -> bool:
+        """Check membership, delegates to :meth:`exists`."""
         return self.exists(key)
 
     def keys(self, as_generator: bool = False) -> Iterable[str]:
+        """Return all keys in the Hub repo under the configured prefix.
+
+        Parameters
+        ----------
+        as_generator : bool, optional
+            If ``True``, return a lazy iterator instead of a list.
+
+        Returns
+        -------
+        Iterable[str]
+            Pool keys.
+        """
         prefix = self._prefix()
         all_files = self._get_api().list_repo_files(
             repo_id=self.repo_id,

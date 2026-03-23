@@ -1,3 +1,5 @@
+"""Abstract base task-force with lifecycle management and a submission queue."""
+
 from __future__ import annotations
 from typing import Callable, Any, Iterable, List, Union, Tuple, Optional
 from pydantic import Field, PrivateAttr, ConfigDict
@@ -11,6 +13,8 @@ from .....atomic.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJE
 
 
 class _LAILA_IDENTIFIABLE_TASK_FORCE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
+    """Abstract base class for taskforces that manage worker pools and task queues."""
+
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_TASK_FORCE_SCOPE]))
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -30,7 +34,7 @@ class _LAILA_IDENTIFIABLE_TASK_FORCE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
 
 
     def model_post_init(self, __context: Any) -> None:
-
+        """Auto-start the taskforce if status is NOT_STARTED."""
         if self.status == TaskForceStatus.NOT_STARTED:
             self.start()
 
@@ -77,10 +81,12 @@ class _LAILA_IDENTIFIABLE_TASK_FORCE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
 
     # Context manager sugar
     def __enter__(self):
+        """Start the taskforce on context-manager entry."""
         self.start()
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        """Shutdown the taskforce on context-manager exit."""
         self.shutdown(wait=True)
 
     # ---------- Subclass hooks (must implement) ----------

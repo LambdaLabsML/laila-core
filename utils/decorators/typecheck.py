@@ -1,7 +1,21 @@
+"""Decorators for lightweight runtime type coercion."""
 from functools import wraps
 from inspect import signature
 
+
 def ensure_list(arg_name: str):
+    """Decorator that wraps a single value in a list if it is not already one.
+
+    Parameters
+    ----------
+    arg_name : str
+        Name of the parameter to coerce.
+
+    Returns
+    -------
+    callable
+        Decorator that wraps the target function.
+    """
     def decorator(fn):
         sig = signature(fn)
 

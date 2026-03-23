@@ -1,3 +1,4 @@
+"""Guarantee context managers that block until tracked futures complete."""
 from __future__ import annotations
 
 import asyncio
@@ -6,13 +7,19 @@ import laila
 
 
 class _Guarantee:
-    """Context manager that waits for futures created inside its scope."""
+    """Synchronous context manager that waits for futures created inside its scope.
+
+    On exit, every future registered while the context was active is waited
+    on.  If any future raised, the first exception is re-raised.
+    """
 
     def __enter__(self):
+        """Enter the guarantee scope, pushing a new frame onto the stack."""
         laila.get_active_policy().central.command._guarantee_enter()
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        """Exit the guarantee scope and wait for all enclosed futures."""
         created_inside = laila.get_active_policy().central.command._guarantee_exit()
 
         wait_errors = []
@@ -32,9 +39,14 @@ class _Guarantee:
 
 
 class _AsyncGuarantee:
-    """Async context manager that awaits futures created inside its scope."""
+    """Asynchronous context manager that awaits futures created inside its scope.
+
+    A background watcher task monitors child futures and propagates the first
+    exception by cancelling the parent task.
+    """
 
     def __init__(self) -> None:
+        """Initialise internal tracking state."""
         self._command = None
         self._scope = None
         self._parent_task = None
@@ -42,6 +54,7 @@ class _AsyncGuarantee:
         self._background_exception = None
 
     async def __aenter__(self):
+        """Enter the async guarantee scope and start the background watcher."""
         self._command = laila.get_active_policy().central.command
         self._command._guarantee_enter()
         self._scope = self._command._guarantee_stack()[-1]
@@ -51,6 +64,7 @@ class _AsyncGuarantee:
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
+        """Exit the scope, cancel the watcher, and await all enclosed futures."""
         created_inside = self._command._guarantee_exit()
 
         if self._watcher_task is not None and not self._watcher_task.done():
@@ -80,6 +94,7 @@ class _AsyncGuarantee:
         return False
 
     async def _watch_for_future_errors(self) -> None:
+        """Poll for newly registered futures and cancel the parent on error."""
         watched: dict[str, asyncio.Task] = {}
 
         while True:
@@ -111,6 +126,7 @@ class _AsyncGuarantee:
                     return
 
     async def _await_future(self, future):
+        """Await a single future, adapting sync futures via ``asyncio.to_thread``."""
         if hasattr(future, "__await__"):
             return await future
         return await asyncio.to_thread(future.wait, None)

@@ -1,3 +1,5 @@
+"""Lifecycle status enumeration for task-forces."""
+
 from enum import Enum
 
 

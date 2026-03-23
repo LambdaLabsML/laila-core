@@ -1,3 +1,5 @@
+"""Convenience aliases re-exported at the ``laila`` package level."""
+
 from ..entry import Entry
 from ..policy.central.command.schema.future.future import Future
 

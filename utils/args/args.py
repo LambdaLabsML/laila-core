@@ -1,3 +1,4 @@
+"""Runtime argument loading from multiple file formats and the terminal."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -17,9 +18,17 @@ class ArgReader:
     # Supported sources: .env, .json, .toml, .xml, or ``terminal`` (``key=value`` tokens).
 
     def __init__(self, target: Optional[Any] = None):
+        """Initialise the reader.
+
+        Parameters
+        ----------
+        target : Any, optional
+            Object to set attributes on.  Defaults to ``laila.args``.
+        """
         self._target = target
 
     def _target_map(self) -> Any:
+        """Return the target mapping, falling back to ``laila.args``."""
         if self._target is not None:
             return self._target
         import laila  # lazy import to avoid circular import at module load
@@ -28,6 +37,7 @@ class ArgReader:
 
     @staticmethod
     def _coerce_scalar(value: Any) -> Any:
+        """Coerce a string value to its most specific Python scalar type."""
         if not isinstance(value, str):
             return value
 
@@ -66,6 +76,7 @@ class ArgReader:
 
     @classmethod
     def _flatten_one_level(cls, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Flatten nested dicts one level, joining keys with ``_``."""
         out: Dict[str, Any] = {}
         for key, value in payload.items():
             if isinstance(value, dict):
@@ -76,12 +87,14 @@ class ArgReader:
         return out
 
     def _apply(self, payload: Dict[str, Any]) -> None:
+        """Flatten and set each key/value pair on the target."""
         flat = self._flatten_one_level(payload)
         target = self._target_map()
         for key, value in flat.items():
             setattr(target, key, value)
 
     def clear(self) -> None:
+        """Remove all keys from the target mapping."""
         target = self._target_map()
         if hasattr(target, "keys"):
             for key in list(target.keys()):
@@ -91,6 +104,13 @@ class ArgReader:
                     pass
 
     def from_json(self, path: str | Path) -> None:
+        """Load arguments from a JSON file.
+
+        Parameters
+        ----------
+        path : str or Path
+            Path to the ``.json`` file.
+        """
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, dict):
@@ -98,6 +118,13 @@ class ArgReader:
         self._apply(data)
 
     def from_toml(self, path: str | Path) -> None:
+        """Load arguments from a TOML file.
+
+        Parameters
+        ----------
+        path : str or Path
+            Path to the ``.toml`` file.
+        """
         try:
             import tomllib  # Python 3.11+
         except ImportError as e:
@@ -110,6 +137,13 @@ class ArgReader:
         self._apply(data)
 
     def from_env(self, path: str | Path) -> None:
+        """Load arguments from a ``.env``-style file.
+
+        Parameters
+        ----------
+        path : str or Path
+            Path to the ``.env`` file.
+        """
         parsed: Dict[str, Any] = {}
         with open(path, "r", encoding="utf-8") as f:
             for raw in f:
@@ -123,6 +157,13 @@ class ArgReader:
         self._apply(parsed)
 
     def from_xml(self, path: str | Path) -> None:
+        """Load arguments from an XML file.
+
+        Parameters
+        ----------
+        path : str or Path
+            Path to the ``.xml`` file.
+        """
         tree = ET.parse(path)
         root = tree.getroot()
         parsed: Dict[str, Any] = {}
@@ -135,6 +176,13 @@ class ArgReader:
         self._apply(parsed)
 
     def from_terminal(self, args: Optional[Iterable[str]] = None) -> None:
+        """Load arguments from ``key=value`` command-line tokens.
+
+        Parameters
+        ----------
+        args : Iterable[str], optional
+            Tokens to parse.  Defaults to ``sys.argv[1:]``.
+        """
         tokens = list(sys.argv[1:] if args is None else args)
         parsed: Dict[str, Any] = {}
         for token in tokens:
@@ -148,6 +196,20 @@ class ArgReader:
         self._apply(parsed)
 
     def load(self, source: str | Path, *, terminal_args: Optional[Iterable[str]] = None) -> None:
+        """Auto-detect format and load arguments.
+
+        Parameters
+        ----------
+        source : str or Path
+            File path (suffix selects format) or the literal ``"terminal"``.
+        terminal_args : Iterable[str], optional
+            Passed to :meth:`from_terminal` when *source* is ``"terminal"``.
+
+        Raises
+        ------
+        ValueError
+            If the file suffix is not supported.
+        """
         p = Path(source)
         suffix = p.suffix.lower()
         if suffix == ".json":

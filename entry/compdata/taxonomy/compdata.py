@@ -1,3 +1,5 @@
+"""Base ``ComputationalData`` class with factory dispatch and serialisation."""
+
 from __future__ import annotations
 
 import copy
@@ -24,6 +26,7 @@ def register_cdtype(*payload_types: type):
 
 
 def _scalar_len():
+    """Raise ``TypeError`` for objects that have no meaningful length."""
     raise TypeError("Length undefined for scalars / objects without __len__")
 
 
@@ -61,8 +64,8 @@ class ComputationalData(BaseModel):
         """Serialize data with current serializer."""
         return self.serializer.forward(self.data), self.serializer.backward_code
 
-    # --- Allow single positional argument -------------------------------
     def __init__(self, *args, **kwargs):
+        """Allow a single positional argument as the payload."""
         if args:
             if len(args) > 1:
                 raise TypeError("At most one positional argument (the payload)")
@@ -71,8 +74,8 @@ class ComputationalData(BaseModel):
             kwargs["data"] = args[0]
         super().__init__(**kwargs)
 
-    # --- Factory dispatch -----------------------------------------------
     def __new__(cls, *args, **kwargs):
+        """Dispatch to the registered subclass matching the payload type."""
         if cls is not ComputationalData:  # direct subclass call
             return super().__new__(cls)
 
@@ -103,27 +106,31 @@ class ComputationalData(BaseModel):
         """Instance → payload, Class → wrapper."""
         return self if obj is None else self.data
 
-    # --- Convenience helpers -------------------------------------------
     def __getitem__(self, index):
+        """Index into the underlying payload."""
         return self.data[index]
 
     def __repr__(self) -> str:
+        """Return a developer-friendly representation."""
         return f"{self.__class__.__name__}(data={self.data!r})"
 
     __str__ = __repr__
 
-    # --- Abstract stubs each wrapper overrides -------------------------
     def __len__(self):
+        """Return the length of the payload (subclasses must override)."""
         raise NotImplementedError
 
     @property
     def shape(self):
+        """Shape of the payload (subclasses must override)."""
         raise NotImplementedError
 
     def __copy__(self):
+        """Shallow copy (subclasses must override)."""
         raise NotImplementedError
 
     def __deepcopy__(self, memo=None):
+        """Deep copy (subclasses must override)."""
         raise NotImplementedError
 
     # --- Recovery logic -------------------------------------------------

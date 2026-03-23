@@ -1,3 +1,5 @@
+"""Internal scope-name constants used for deterministic ID generation."""
+
 _ENTRY_SCOPE = "ENTRY"
 _TASK_FORCE_SCOPE = "TASK_FORCE"
 _POLICY_SCOPE = "POLICY"

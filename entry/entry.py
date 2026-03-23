@@ -1,3 +1,5 @@
+"""Core ``Entry`` class — the fundamental unit of data in LAILA."""
+
 from __future__ import annotations
 
 import copy
@@ -60,8 +62,15 @@ class Entry(
 
     #TODO: don't allow constitution and state to be set at the same time. 
     def __init__(self, **data: dict):
+        """Initialise an Entry from keyword arguments.
 
-        
+        Parameters
+        ----------
+        **data : dict
+            Accepted keys include ``data`` / ``payload``, ``uuid``,
+            ``evolution``, ``global_id``, ``nickname``, ``constitution``,
+            and ``state``.
+        """
         self._initialize_identity(data)
         self._initialize_payload(data)
         self._initialize_constitution(data)
@@ -69,6 +78,7 @@ class Entry(
         
 
     def _initialize_identity(self, data: dict) -> None:
+        """Parse identity fields from *data* and initialise the parent identity."""
         identity_data = {}
 
         global_id = data.get("global_id", None)
@@ -93,6 +103,7 @@ class Entry(
         _LAILA_IDENTIFIABLE_OBJECT.__init__(self, **identity_data)
 
     def _initialize_payload(self, data: dict) -> None:
+        """Wrap raw payload data in a ``ComputationalData`` instance."""
         payload = data.get("payload", data.get("data", None))
         if payload is not None and not isinstance(payload,ComputationalData):
             payload = ComputationalData(payload)
@@ -100,12 +111,14 @@ class Entry(
         self._payload = payload
 
     def _initialize_constitution(self, data: dict) -> None:
+        """Set up the ``EntryConstitution`` if one was provided."""
         constitution = data.get("constitution", None)
         if constitution is not None:
             self._constitution = EntryConstitution(constitution=constitution)
 
 
     def _initialize_state(self, data: dict) -> None:
+        """Determine the initial ``EntryState`` from *data*."""
         constitution = data.get("constitution", None)
         if constitution is not None:
             self._state = EntryState.STAGED
@@ -119,6 +132,7 @@ class Entry(
     ###################################################
 
     def notify_policy(self):
+        """Notify the active policy, if any, that this Entry has changed."""
         from .. import active_policy
         if active_policy is not None:
             active_policy.update(self)
@@ -132,6 +146,7 @@ class Entry(
     @property
     @synchronized
     def data(self) -> Optional[Any]:
+        """Unwrapped payload data, or ``None`` if no payload is set."""
         if self._payload == None:
             return None
         return self._payload.data
@@ -141,12 +156,20 @@ class Entry(
     @property
     @synchronized
     def state(self) -> EntryState:
+        """Current lifecycle state of this Entry."""
         return self._state
 
 
     @state.setter
     @synchronized
     def state(self, new_state: EntryState):
+        """Set a new lifecycle state.
+
+        Raises
+        ------
+        ValueError
+            If *new_state* is not an ``EntryState``.
+        """
         if not isinstance(new_state, EntryState):
             raise ValueError("state must be an EntryState")
         self._state = new_state
@@ -156,6 +179,13 @@ class Entry(
     @property
     @synchronized
     def metadata(self):
+        """Entry metadata (not yet implemented).
+
+        Raises
+        ------
+        NotImplementedError
+            Always.
+        """
         raise NotImplementedError("Metadata is not implemented for Entry")
 
     ###################################################
@@ -183,7 +213,38 @@ class Entry(
         global_id = None,
         nickname = None
     ):
+        """Create a mutable (evolvable) Entry.
 
+        Parameters
+        ----------
+        data : Any
+            The raw payload.
+        uuid : str, optional
+            Explicit UUID.  Mutually exclusive with *global_id*.
+        evolution : int, optional
+            Starting evolution counter (defaults to ``0``).
+        state : EntryState, optional
+            Initial state; auto-set to ``READY`` when no constitution is given.
+        constitution : callable, optional
+            Not yet implemented.
+        global_id : str, optional
+            Composite ``uuid:evolution`` identifier.
+        nickname : str, optional
+            Human-readable name used to derive a deterministic UUID.
+
+        Returns
+        -------
+        Entry
+            A new variable Entry.
+
+        Raises
+        ------
+        RuntimeError
+            If conflicting identity arguments are provided or both
+            *constitution* and *data* are set.
+        NotImplementedError
+            If a constitution is supplied.
+        """
         if global_id is not None and (uuid is not None or evolution is not None):
             raise RuntimeError("Cannot set both global_id and <uuid, evolution> at the same time.")
 
@@ -222,6 +283,25 @@ class Entry(
         constitution = None,
         data = None
     ):
+        """Advance the evolution counter and replace the payload.
+
+        Parameters
+        ----------
+        precedence : list of str, optional
+            Reserved for constitution-based evolution.
+        constitution : callable, optional
+            Not yet implemented.
+        data : Any, optional
+            New payload data.
+
+        Raises
+        ------
+        RuntimeError
+            If the Entry is a constant or both *constitution* and *data* are
+            provided.
+        NotImplementedError
+            If a constitution is supplied.
+        """
         if self._evolution is None:
             raise RuntimeError("Can't evolve a constant.")
         
@@ -254,6 +334,30 @@ class Entry(
         uuid = None,
         nickname = None
     ):
+        """Create an immutable Entry (evolution is ``None``).
+
+        Parameters
+        ----------
+        data : Any
+            The raw payload.
+        global_id : str, optional
+            Composite identifier (must not contain an evolution component).
+        uuid : str, optional
+            Explicit UUID.  Mutually exclusive with *global_id*.
+        nickname : str, optional
+            Human-readable name used to derive a deterministic UUID.
+
+        Returns
+        -------
+        Entry
+            A new constant Entry.
+
+        Raises
+        ------
+        RuntimeError
+            If conflicting identity arguments are provided or the
+            *global_id* includes an evolution component.
+        """
         if global_id is not None and (uuid is not None):
             raise RuntimeError("Cannot set both global_id and uuid at the same time.")
 
@@ -282,6 +386,17 @@ class Entry(
     ###################################################
     @classmethod
     def contingent(cls, **kwargs):
+        """Create an Entry from raw keyword arguments without validation guards.
+
+        Parameters
+        ----------
+        **kwargs
+            Forwarded directly to the ``Entry`` constructor.
+
+        Returns
+        -------
+        Entry
+        """
         return Entry(**kwargs)
 
 
@@ -295,7 +410,22 @@ class Entry(
         *,
         exclude_private: set = {"_local_lock","_payload","_state"}
     ) -> dict:
+        """Serialise the Entry into a plain dict suitable for storage.
 
+        Parameters
+        ----------
+        transformations : TransformationSequence, optional
+            Pipeline applied to the serialised payload bytes.  If ``None``
+            the raw Entry is returned.
+        exclude_private : set, optional
+            Private attribute names to omit from the output dict.
+
+        Returns
+        -------
+        dict
+            Serialised representation including ``transformed_payload`` and
+            ``recovery_sequence`` keys.
+        """
         if transformations is None:
             return self
         
@@ -333,7 +463,28 @@ class Entry(
             
     @classmethod
     def recover(cls, in_dict: dict, notify_on_creation=False):
+        """Reconstruct an Entry from a serialised dict or JSON string.
 
+        Parameters
+        ----------
+        in_dict : dict or str or Entry
+            Serialised representation produced by ``serialize()``, a JSON
+            string thereof, or an existing Entry (returned as-is).
+        notify_on_creation : bool, optional
+            If ``True``, notify the active policy after construction.
+
+        Returns
+        -------
+        Entry
+            The recovered Entry instance.
+
+        Raises
+        ------
+        ValueError
+            If *in_dict* is an invalid JSON string.
+        RuntimeError
+            If the input type is unsupported.
+        """
         if isinstance(in_dict, Entry):
             return in_dict
 
@@ -370,7 +521,9 @@ class Entry(
     ###################################################
 
     def __str__(self):
+        """Return the global identifier string."""
         return self.global_id
     
     def __repr__(self):
+        """Return the global identifier string."""
         return self.global_id

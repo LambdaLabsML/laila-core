@@ -1,3 +1,4 @@
+"""Base schema for all LAILA storage pool implementations."""
 from typing import Optional, Any, Dict, Iterable, Iterator, Mapping
 from pydantic import BaseModel, Field, PrivateAttr
 from ...entry import Entry
@@ -28,6 +29,7 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
 
     @property
     def pool_id(self) -> str:
+        """Unique identifier for this pool, aliased from ``global_id``."""
         return self.global_id
 
 
@@ -46,12 +48,14 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         return blob
 
     def __setitem__(self, key: str, entry: Any) -> None:
+        """Store *entry* under *key*."""
         value = entry
 
         with self.atomic():
             self.resource[key] = value
             
     def __delitem__(self, key: str) -> None:
+        """Delete the entry for *key* if present."""
         with self.atomic():
             if key in self.resource:
                 del self.resource[key]
@@ -68,14 +72,22 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
             return key in self.resource
 
     def __contains__(self, key: str) -> bool:
+        """Check membership, delegates to :meth:`exists`."""
         return self.exists(key)
     
     def keys(self, as_generator: bool = False) -> Iterable[str]:
-        """
-        If as_generator is False: returns a snapshot list of keys.
-        If as_generator is True: returns an iterator that holds the lock
-        for the duration of the iteration. Be sure to fully consume or
-        close the iterator to release the lock promptly.
+        """Return the keys stored in this pool.
+
+        Parameters
+        ----------
+        as_generator : bool, optional
+            If ``False`` (default), return a snapshot list.  If ``True``,
+            return an iterator that holds the lock for its lifetime.
+
+        Returns
+        -------
+        Iterable[str]
+            Pool keys as a list or generator.
         """
         if not as_generator:
             with self.atomic():
@@ -88,9 +100,17 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
             return _gen()
 
     def sync(self) -> None:
+        """Flush any in-memory cache to the backing store.
+
+        Raises
+        ------
+        NotImplementedError
+            If the pool is cacheless and operates directly on storage.
+        """
         raise NotImplementedError("Sync is not implemented for this pool, the pool is cacheless, i.e. operations are immediately executed on the underlying storage.")
 
     def __le__(self, other: Any):
+        """Duplicate *other* pool's contents into this pool via the active policy."""
         from ... import active_policy
 
         if not isinstance(other, (_LAILA_IDENTIFIABLE_POOL, str)):

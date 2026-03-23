@@ -1,3 +1,5 @@
+"""Thread-pool backed taskforce using ``concurrent.futures.ThreadPoolExecutor``."""
+
 from __future__ import annotations
 import threading
 from concurrent.futures import ThreadPoolExecutor, CancelledError
@@ -202,6 +204,7 @@ class PythonThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
 
     @staticmethod
     def _runner(args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Any:
+        """Execute a queued task inside a worker thread."""
         task = kwargs.pop("task")
         fut = kwargs.pop("fut")
         fut.status = FutureStatus.RUNNING

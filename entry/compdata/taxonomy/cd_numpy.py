@@ -1,3 +1,5 @@
+"""``ComputationalData`` subclass for NumPy ``ndarray`` payloads."""
+
 from .compdata import ComputationalData, register_cdtype, _scalar_len
 import numpy as np
 from ..transformation.serialization import NumpySerializer
@@ -7,6 +9,11 @@ import copy
 
 @register_cdtype(np.ndarray)
 class CD_numpyarray(ComputationalData):
+    """Computational data wrapper for ``numpy.ndarray`` objects.
+
+    Uses ``NumpySerializer`` by default.
+    """
+
     data: np.ndarray
     _serializer: NumpySerializer = PrivateAttr(default_factory=NumpySerializer)
 
@@ -25,19 +32,23 @@ class CD_numpyarray(ComputationalData):
             )
         self._serializer = value
 
-    # --- ComputationalData behavior ---
     def __len__(self):
+        """Return the size of the first dimension."""
         return self.data.shape[0] if self.data.ndim else _scalar_len()
 
     @property
     def shape(self):
+        """Return the array shape tuple."""
         return self.data.shape
 
     def __copy__(self):
+        """Return a shallow (contiguous) copy of the array."""
         return type(self)(self.data.copy())
 
     def __deepcopy__(self, _):
+        """Return a deep copy of the array."""
         return type(self)(self.data.copy())
 
     def __repr__(self):
+        """Return a developer-friendly representation."""
         return f"CD_numpyarray(shape={self.data.shape}, dtype={self.data.dtype})"

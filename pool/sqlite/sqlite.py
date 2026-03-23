@@ -1,3 +1,4 @@
+"""SQLite pool implementation."""
 from __future__ import annotations
 
 from typing import Optional, Any, Iterable, Iterator
@@ -12,15 +13,20 @@ from ...entry import transformation_base64
 
 
 class SQLitePool(_LAILA_IDENTIFIABLE_POOL):
+    """SQLite-backed pool storing entries in a local database file."""
+
     file_path: Optional[str] = Field(default=None)
     transformations: Optional[TransformationSequence] = Field(default=transformation_base64)
 
     _conn: Optional[sqlite3.Connection] = PrivateAttr(default=None)
 
     class Config:
+        """Pydantic model configuration."""
+
         arbitrary_types_allowed = True
 
     def model_post_init(self, __context: Any) -> None:
+        """Open the SQLite database and create the entries table."""
         super().model_post_init(__context)
         if self.file_path is None:
             from ...macros.defaults import LAILA_DEFAULT_DIRECTORIES
@@ -50,16 +56,19 @@ class SQLitePool(_LAILA_IDENTIFIABLE_POOL):
         self._conn.commit()
 
     def _connection(self) -> sqlite3.Connection:
+        """Return the active SQLite connection."""
         if self._conn is None:
             raise RuntimeError("SQLitePool is closed.")
         return self._conn
 
     def close(self) -> None:
+        """Close the SQLite connection."""
         if self._conn is not None:
             self._conn.close()
             self._conn = None
 
     def __getitem__(self, key: str) -> Optional[Any]:
+        """Retrieve the JSON value for *key*, or ``None`` if absent."""
         with self.atomic():
             row = self._connection().execute(
                 "SELECT value FROM laila_pool_entries WHERE key = ?",
@@ -68,6 +77,7 @@ class SQLitePool(_LAILA_IDENTIFIABLE_POOL):
         return json.loads(row[0]) if row is not None else None
 
     def __setitem__(self, key: str, entry: Any) -> None:
+        """Insert or update *entry* under *key*."""
         value = entry
         if isinstance(value, dict):
             value = json.dumps(value)
@@ -86,6 +96,7 @@ class SQLitePool(_LAILA_IDENTIFIABLE_POOL):
             self._connection().commit()
 
     def __delitem__(self, key: str) -> None:
+        """Delete the row for *key*."""
         with self.atomic():
             self._connection().execute(
                 "DELETE FROM laila_pool_entries WHERE key = ?",
@@ -94,11 +105,13 @@ class SQLitePool(_LAILA_IDENTIFIABLE_POOL):
             self._connection().commit()
 
     def empty(self) -> None:
+        """Remove all entries from the pool."""
         with self.atomic():
             self._connection().execute("DELETE FROM laila_pool_entries")
             self._connection().commit()
 
     def exists(self, key: str) -> bool:
+        """Return ``True`` if *key* is present in the table."""
         with self.atomic():
             row = self._connection().execute(
                 "SELECT 1 FROM laila_pool_entries WHERE key = ?",
@@ -107,9 +120,22 @@ class SQLitePool(_LAILA_IDENTIFIABLE_POOL):
             return row is not None
 
     def __contains__(self, key: str) -> bool:
+        """Check membership, delegates to :meth:`exists`."""
         return self.exists(key)
 
     def keys(self, as_generator: bool = False) -> Iterable[str]:
+        """Return all keys in the table.
+
+        Parameters
+        ----------
+        as_generator : bool, optional
+            If ``True``, return a lazy iterator instead of a list.
+
+        Returns
+        -------
+        Iterable[str]
+            Pool keys.
+        """
         if not as_generator:
             with self.atomic():
                 rows = self._connection().execute(

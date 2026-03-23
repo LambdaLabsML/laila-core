@@ -1,2 +1,3 @@
-from .encryption import FernetEncryption
+"""Encryption transformations."""
 
+from .encryption import FernetEncryption

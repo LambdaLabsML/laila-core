@@ -1,3 +1,4 @@
+"""HDF5 file pool implementation."""
 from __future__ import annotations
 
 from typing import Optional, Any, Iterable, Iterator
@@ -13,7 +14,12 @@ from ...entry import transformation_base64
 
 
 class HDF5Pool(_LAILA_IDENTIFIABLE_POOL):
-    # Config / metadata
+    """HDF5 file-backed pool.
+
+    Each entry is stored as a UTF-8 string dataset inside a single HDF5
+    file that remains open for the lifetime of the pool.
+    """
+
     file_path: Optional[str] = Field(default=None)
     transformations: Optional[TransformationSequence] = Field(default=transformation_base64)
 
@@ -23,10 +29,12 @@ class HDF5Pool(_LAILA_IDENTIFIABLE_POOL):
         arbitrary_types_allowed = True
 
     def _resolve_memory_global_id(self) -> str:
+        """Return the active policy's memory global ID."""
         from ... import active_policy
         return active_policy.central.memory.global_id
 
     def model_post_init(self, __context: Any) -> None:
+        """Open (or create) the HDF5 file."""
         super().model_post_init(__context)
         if self.file_path is None:
             from ...macros.defaults import LAILA_DEFAULT_DIRECTORIES
@@ -41,19 +49,22 @@ class HDF5Pool(_LAILA_IDENTIFIABLE_POOL):
         self._file = h5py.File(self.file_path, "a")
 
     def _root(self):
+        """Return the root HDF5 group."""
         if self._file is None:
             raise RuntimeError("HDF5Pool is closed.")
         return self._file
 
     # ---------------- internal helpers ----------------
     def _storage_key(self, key: str) -> str:
-        # Avoid "/" collisions in HDF5 path semantics.
+        """URL-encode *key* to avoid ``/`` collisions in HDF5 paths."""
         return quote(key, safe="")
 
     def _logical_key(self, key: str) -> str:
+        """Decode a storage key back to the logical key."""
         return unquote(key)
 
     def _read_raw(self, key: str) -> Optional[str]:
+        """Read the raw UTF-8 string for *key*, or ``None``."""
         skey = self._storage_key(key)
         root = self._root()
         if skey not in root:
@@ -64,17 +75,20 @@ class HDF5Pool(_LAILA_IDENTIFIABLE_POOL):
         return str(raw)
 
     def close(self) -> None:
+        """Close the HDF5 file handle."""
         if self._file is not None:
             self._file.close()
             self._file = None
 
     # ---------------- mapping API ----------------
     def __getitem__(self, key: str) -> Optional[Any]:
+        """Retrieve the JSON value for *key*, or ``None`` if absent."""
         with self.atomic():
             raw = self._read_raw(key)
         return json.loads(raw) if raw is not None else None
 
     def __setitem__(self, key: str, entry: Any) -> None:
+        """Store *entry* as a UTF-8 HDF5 dataset under *key*."""
         value = entry
         if isinstance(value, dict):
             value = json.dumps(value)
@@ -90,6 +104,7 @@ class HDF5Pool(_LAILA_IDENTIFIABLE_POOL):
             root.create_dataset(skey, data=value, dtype=dt)
 
     def __delitem__(self, key: str) -> None:
+        """Delete the dataset for *key* if it exists."""
         skey = self._storage_key(key)
         with self.atomic():
             root = self._root()
@@ -105,14 +120,28 @@ class HDF5Pool(_LAILA_IDENTIFIABLE_POOL):
                 del self._file[name]
 
     def exists(self, key: str) -> bool:
+        """Return ``True`` if a dataset for *key* exists."""
         skey = self._storage_key(key)
         with self.atomic():
             return skey in self._root()
 
     def __contains__(self, key: str) -> bool:
+        """Check membership, delegates to :meth:`exists`."""
         return self.exists(key)
 
     def keys(self, as_generator: bool = False) -> Iterable[str]:
+        """Return all keys in the HDF5 file.
+
+        Parameters
+        ----------
+        as_generator : bool, optional
+            If ``True``, return a lazy iterator instead of a list.
+
+        Returns
+        -------
+        Iterable[str]
+            Pool keys.
+        """
         if not as_generator:
             with self.atomic():
                 skeys = list(self._root().keys())

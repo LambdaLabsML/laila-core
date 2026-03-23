@@ -1,3 +1,5 @@
+"""``ComputationalData`` catch-all subclass for arbitrary Python objects."""
+
 import copy
 from .compdata import ComputationalData, register_cdtype, _scalar_len
 from ..transformation.serialization import PickleSerializer
@@ -25,21 +27,31 @@ class CD_generic(ComputationalData):
             )
         self._serializer = value
 
-    # --- ComputationalData behavior ---
     def __len__(self):
+        """Return the length if the payload supports ``__len__``."""
         if hasattr(self.data, "__len__"):
             return len(self.data)  # type: ignore[arg-type]
         return _scalar_len()
 
     @property
     def shape(self):
+        """Not applicable for generic objects.
+
+        Raises
+        ------
+        AttributeError
+            Always.
+        """
         raise AttributeError(f"{type(self.data).__name__} has no 'shape' attribute")
 
     def __copy__(self):
+        """Return a shallow copy."""
         return type(self)(self.data)
 
     def __deepcopy__(self, memo=None):
+        """Return a deep copy."""
         return type(self)(copy.deepcopy(self.data, memo))
 
     def __repr__(self):
+        """Return a developer-friendly representation."""
         return f"CD_generic({self.data!r})"

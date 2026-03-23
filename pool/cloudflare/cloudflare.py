@@ -1,3 +1,4 @@
+"""Cloudflare R2 pool implementation."""
 from __future__ import annotations
 
 from pydantic import Field
@@ -25,6 +26,7 @@ class CloudflarePool(BotoPool):
     secret_access_key: str = Field(...)
 
     def _get_client(self):
+        """Return a boto3 S3 client configured for Cloudflare R2."""
         if self._client is not None:
             return self._client
         if boto3 is None or BotocoreConfig is None:

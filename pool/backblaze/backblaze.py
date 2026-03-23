@@ -1,3 +1,4 @@
+"""Backblaze B2 pool implementation using the S3-compatible API."""
 from __future__ import annotations
 
 from pydantic import Field
@@ -24,6 +25,7 @@ class BackblazePool(BotoPool):
     _no_such_key_codes: set[str] = {"NoSuchKey", "404"}
 
     def _get_client(self):
+        """Return a boto3 S3 client configured for Backblaze B2."""
         if self._client is not None:
             return self._client
         if boto3 is None or BotocoreConfig is None:

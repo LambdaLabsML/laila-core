@@ -1,3 +1,5 @@
+"""Enumeration of future lifecycle status codes."""
+
 from enum import Enum
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 import uuid

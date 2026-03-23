@@ -1,3 +1,5 @@
+"""Pydantic-wrapped ``concurrent.futures.Future`` with Laila status lifecycle."""
+
 from __future__ import annotations
 from typing import Optional, Any, Callable
 from concurrent.futures import Future as _ConcurrentFuture, TimeoutError as FutureTimeoutError
@@ -24,6 +26,7 @@ class ConcurrentPackageFuture(Future):
 
 
     def model_post_init(self, __context: Any) -> None:
+        """Register with the active policy and attach done-callback if native future exists."""
         self._setup_default_callbacks()
         from ...... import get_active_policy
         policy = get_active_policy()
@@ -35,11 +38,13 @@ class ConcurrentPackageFuture(Future):
 
     @property
     def native_future(self) -> _ConcurrentFuture:
+        """Return the underlying ``concurrent.futures.Future``."""
         return self._native_future
 
 
     @native_future.setter
     def native_future(self, native_future: _ConcurrentFuture) -> None:
+        """Set the underlying native future (one-shot; raises on reassignment)."""
         if self._native_future is not None:
             raise RuntimeError("Native future already set.")
         self._native_future = native_future
@@ -47,7 +52,7 @@ class ConcurrentPackageFuture(Future):
 
 
     def _add_default_concurrent_future_done_callback(self) -> None:
-
+        """Attach a done-callback that syncs native future outcome to Laila status."""
         def _default_done_callback(n_fut: _ConcurrentFuture) -> None:
             if n_fut.cancelled():
                 self.result = None
@@ -67,6 +72,7 @@ class ConcurrentPackageFuture(Future):
 
 
     def wait(self, timeout: Optional[float] = None) -> Any:
+        """Block until the future completes or *timeout* seconds elapse."""
         deadline = None if timeout is None else time.monotonic() + timeout
         poll_interval_s = 0.01
 
@@ -96,6 +102,7 @@ class ConcurrentPackageFuture(Future):
 
 
     def __await__(self):
+        """Await the native future or poll until a terminal status is reached."""
         async def _await_native_or_terminal():
             poll_interval_s = 0.01
 

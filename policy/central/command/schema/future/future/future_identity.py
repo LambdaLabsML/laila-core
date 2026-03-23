@@ -1,3 +1,5 @@
+"""Identity model for a Laila future — lightweight metadata without result state."""
+
 from ast import Str
 from pydantic import BaseModel, Field, PrivateAttr
 import uuid

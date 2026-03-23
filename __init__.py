@@ -1,3 +1,9 @@
+"""Laila top-level package.
+
+Provides the public API for policy management, memory operations (memorize,
+remember, forget), future lifecycle helpers, and argument loading.
+"""
+
 import uuid
 import os
 from dotmap import DotMap
@@ -32,6 +38,7 @@ _active_policy = None
 _active_namespace = None
 
 def get_active_namespace():
+    """Return the active UUID namespace, initializing it on first access."""
     global _active_namespace
     if _active_namespace is None:
         from .macros.defaults import LAILA_UNIVERSAL_NAMESPACE
@@ -39,10 +46,18 @@ def get_active_namespace():
     return _active_namespace
 
 def set_active_namespace(namespace_key: str):
+    """Set the active UUID namespace derived from *namespace_key*.
+
+    Parameters
+    ----------
+    namespace_key : str
+        DNS-style key used with ``uuid.uuid5`` to generate the namespace.
+    """
     global _active_namespace
     _active_namespace = uuid.uuid5(uuid.NAMESPACE_DNS, namespace_key)
 
 def get_active_policy():
+    """Return the active policy, lazily creating a ``DefaultPolicy`` on first access."""
     global _active_policy
     if _active_policy is None:
         from .macros.defaults import DefaultPolicy
@@ -50,11 +65,19 @@ def get_active_policy():
     return _active_policy
     
 def __getattr__(name):
+    """Module-level attribute hook exposing ``active_policy`` lazily."""
     if name == "active_policy":
         return get_active_policy()
     raise AttributeError(name)
 
 def activate_policy(policy: _LAILA_IDENTIFIABLE_POLICY):
+    """Replace the active policy singleton.
+
+    Parameters
+    ----------
+    policy : _LAILA_IDENTIFIABLE_POLICY
+        The policy instance to activate globally.
+    """
     global _active_policy
     _active_policy = policy
 
@@ -94,6 +117,7 @@ def memorize(*args, **kwargs):
     return get_active_policy().central.memory.memorize(*args, **kwargs)
 
 def __resolve_nickname(kwargs):
+    """Convert a nickname in *kwargs* to a deterministic ``global_id`` list."""
     if isinstance(kwargs["nickname"], str):
         args = [
             Entry.to_global_id(
@@ -212,6 +236,13 @@ def wait(future_ref, timeout=None):
 
 
 def set_default_directory(directory):
+    """Override the default root directory and derived sub-directories.
+
+    Parameters
+    ----------
+    directory : str
+        Filesystem path (may contain ``~``) to use as the new root.
+    """
     directory = os.path.expanduser(directory)
     LAILA_DEFAULT_DIRECTORIES.update({
         "root": directory,

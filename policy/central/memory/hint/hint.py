@@ -1,8 +1,12 @@
+"""Hint model used to guide memory routing decisions."""
+
 from pydantic import BaseModel, Field
 from typing import Set, Optional, Any
 
 
 class MemoryHint(BaseModel):
+    """Routing hints that influence which pools are searched or written to."""
+
     pools: Optional[Set[str]] = Field(
         default=None,
         description="Which pools to search first."

@@ -1,3 +1,5 @@
+"""Record model — wraps an Entry with provenance metadata for storage."""
+
 from typing import Any, Optional, Mapping
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
@@ -7,6 +9,8 @@ from .....entry.compdata.transformation import TransformationSequence
 
 
 class Record(BaseModel):
+    """Immutable wrapper that pairs an Entry with recorder/borrower metadata."""
+
     entry: Any
     recorder: Optional[str] = None
     borrower: Optional[str] = None
@@ -15,7 +19,7 @@ class Record(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def model_post_init(self, __context: Any) -> None:
-
+        """Set recorder to the active policy ID when not explicitly provided."""
         from ..... import active_policy
 
         if self.recorder is None:
@@ -27,7 +31,7 @@ class Record(BaseModel):
         self,
         transformations: TransformationSequence
     ) -> str:
-        
+        """Serialize the record by applying *transformations* to the entry."""
         record_as_dict = self.as_dict
         record_as_dict["entry"] = self.entry.serialize(transformations = transformations)
 
@@ -36,6 +40,7 @@ class Record(BaseModel):
     
     @property
     def entry_id(self) -> str:
+        """Return the global ID of the wrapped entry."""
         if hasattr(self.entry, "global_id"):
             return self.entry.global_id
 
@@ -48,6 +53,7 @@ class Record(BaseModel):
     def as_dict(
         self,
     ) -> dict:
+        """Return a plain dict representation, preserving the raw entry object."""
         data = self.model_dump()
         
         #Since it model_dumps entry in a weird way
@@ -59,6 +65,7 @@ class Record(BaseModel):
         cls,
         in_dict: dict
     ):
+        """Construct a Record from a dict (not yet implemented)."""
         raise
 
     
@@ -67,6 +74,7 @@ class Record(BaseModel):
         cls,
         record: Any
     ):
+        """Reconstruct a record dict from a JSON string or raw dict."""
         if isinstance (record, str):
             record=json.loads(record)
 

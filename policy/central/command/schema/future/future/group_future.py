@@ -1,3 +1,5 @@
+"""GroupFuture — an aggregate future that tracks a set of child futures."""
+
 from __future__ import annotations
 from typing import Dict, List, Optional, Callable, Any
 import asyncio
@@ -14,11 +16,13 @@ from .......macros.strings import _GROUP_FUTURE_SCOPE
 
 
 def _get_future_bank():
+    """Return the active policy's future bank mapping."""
     from ....... import get_active_policy
     return get_active_policy().future_bank
 
 
 class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
+    """Aggregate future that groups multiple child futures under one handle."""
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_GROUP_FUTURE_SCOPE]))
 
@@ -29,12 +33,14 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
     future_ids: List[str] = Field(default_factory=list)
 
     def model_post_init(self, __context: Any) -> None:
+        """Register this group future with the active policy's future bank."""
         from ....... import get_active_policy
         policy = get_active_policy()
         policy.central.command._register_future_with_active_guarantees(self)
         policy.future_bank[self.global_id] = self
 
     def _resolve_children(self) -> List[Future]:
+        """Look up child Future objects from the future bank."""
         bank = _get_future_bank()
         return [bank[fid] for fid in self.future_ids]
 
@@ -103,6 +109,7 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
         return return_values
 
     def __await__(self):
+        """Await all children concurrently via ``asyncio.gather``."""
         async def _await_all():
             children = self._resolve_children()
             return await asyncio.gather(*children)
@@ -162,13 +169,17 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
 
 
     def __str__(self) -> str:
+        """Return JSON representation of the group."""
         return json.dumps(self.what)
 
     def __repr__(self) -> str:
+        """Return JSON representation of the group."""
         return json.dumps(self.what)
 
     def __iter__(self) -> Iterator[str]:
+        """Iterate over child future IDs."""
         return iter(self.future_ids)
 
     def __len__(self) -> int:
+        """Return the number of child futures."""
         return len(self.future_ids)

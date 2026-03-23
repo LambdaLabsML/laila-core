@@ -1,3 +1,5 @@
+"""Entry sub-package providing the core ``Entry`` class and pre-built transformation sequences."""
+
 from .entry import Entry as Entry
 from .entry import EntryIdentityView as EntryIdentityView
 from .entry_state import EntryState

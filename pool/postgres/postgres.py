@@ -1,3 +1,4 @@
+"""PostgreSQL pool implementation with optional managed local server."""
 from __future__ import annotations
 
 from typing import Optional, Any, Iterable, Iterator
@@ -21,6 +22,13 @@ except ImportError:
 
 
 class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
+    """PostgreSQL-backed pool.
+
+    Can connect to an existing PostgreSQL via ``dsn`` or explicit
+    ``host``/``port``/``dbname``/``user`` parameters, or automatically
+    start and manage a local ``postgres`` process.
+    """
+
     dsn: Optional[str] = Field(default=None)
     host: Optional[str] = Field(default=None)
     port: int = Field(default=5432)
@@ -39,9 +47,12 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
     _local_user: str = PrivateAttr(default="laila")
 
     class Config:
+        """Pydantic model configuration."""
+
         arbitrary_types_allowed = True
 
     def model_post_init(self, __context: Any) -> None:
+        """Connect to PostgreSQL and create the entries table."""
         super().model_post_init(__context)
         self._conn = self._connect()
         with self._conn.cursor() as cur:
@@ -63,6 +74,7 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
         atexit.register(self.close)
 
     def _connect(self):
+        """Establish a ``psycopg`` connection."""
         if psycopg is None:
             raise ImportError("psycopg is required for PostgresPool")
         if self.dsn is not None:
@@ -83,6 +95,7 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
         )
 
     def _configure_local_server(self) -> None:
+        """Set up data and socket directories for a managed local postgres."""
         if self._postgres_dir is not None and self._socket_dir is not None:
             return
         from ...macros.defaults import LAILA_DEFAULT_DIRECTORIES
@@ -94,6 +107,7 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
         self.port = 20000 + (int(hashlib.sha1(self.pool_id.encode("utf-8")).hexdigest()[:8], 16) % 20000)
 
     def _connect_local(self, *, connect_timeout: int = 1):
+        """Connect to the managed local postgres via UNIX socket."""
         if self._socket_dir is None:
             raise RuntimeError("Local Postgres socket directory is not configured.")
         return psycopg.connect(
@@ -106,6 +120,7 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
         )
 
     def _ensure_local_server(self) -> None:
+        """Start a local postgres if one is not already reachable."""
         if self._local_server_available():
             self._owns_local_server = False
             return
@@ -113,6 +128,7 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
         self._start_local_server()
 
     def _local_server_available(self) -> bool:
+        """Return ``True`` if the local postgres accepts connections."""
         try:
             conn = self._connect_local(connect_timeout=1)
             conn.close()
@@ -121,6 +137,7 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
             return False
 
     def _initdb_if_needed(self) -> None:
+        """Run ``initdb`` if the data directory is uninitialised."""
         if self._postgres_dir is None:
             raise RuntimeError("Local Postgres data directory is not configured.")
         if os.path.exists(os.path.join(self._postgres_dir, "PG_VERSION")):
@@ -139,6 +156,7 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
         )
 
     def _run_command(self, command: list[str], *, action: str) -> None:
+        """Execute a subprocess command, raising on failure."""
         try:
             subprocess.run(command, check=True, capture_output=True, text=True)
         except FileNotFoundError as exc:
@@ -149,6 +167,7 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
             ) from exc
 
     def _start_local_server(self) -> None:
+        """Launch a ``postgres`` subprocess and wait for readiness."""
         if self._postgres_dir is None or self._socket_dir is None:
             raise RuntimeError("Local Postgres server is not fully configured.")
         cmd = [
@@ -205,11 +224,13 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
         )
 
     def _connection(self):
+        """Return the active psycopg connection."""
         if self._conn is None:
             raise RuntimeError("PostgresPool is closed.")
         return self._conn
 
     def close(self) -> None:
+        """Close the connection and terminate any managed postgres process."""
         if self._conn is not None:
             self._conn.close()
             self._conn = None
@@ -228,6 +249,7 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
         self._owns_local_server = False
 
     def __getitem__(self, key: str) -> Optional[Any]:
+        """Retrieve the JSON value for *key*, or ``None`` if absent."""
         with self.atomic():
             with self._connection().cursor() as cur:
                 cur.execute(
@@ -238,6 +260,7 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
         return json.loads(row[0]) if row is not None else None
 
     def __setitem__(self, key: str, entry: Any) -> None:
+        """Insert or update *entry* under *key*."""
         value = entry
         if isinstance(value, dict):
             value = json.dumps(value)
@@ -257,6 +280,7 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
             self._connection().commit()
 
     def __delitem__(self, key: str) -> None:
+        """Delete the row for *key*."""
         with self.atomic():
             with self._connection().cursor() as cur:
                 cur.execute(
@@ -266,12 +290,14 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
             self._connection().commit()
 
     def empty(self) -> None:
+        """Remove all entries from the pool."""
         with self.atomic():
             with self._connection().cursor() as cur:
                 cur.execute("DELETE FROM laila_pool_entries")
             self._connection().commit()
 
     def exists(self, key: str) -> bool:
+        """Return ``True`` if *key* is present in the table."""
         with self.atomic():
             with self._connection().cursor() as cur:
                 cur.execute(
@@ -281,9 +307,22 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
                 return cur.fetchone() is not None
 
     def __contains__(self, key: str) -> bool:
+        """Check membership, delegates to :meth:`exists`."""
         return self.exists(key)
 
     def keys(self, as_generator: bool = False) -> Iterable[str]:
+        """Return all keys in the table.
+
+        Parameters
+        ----------
+        as_generator : bool, optional
+            If ``True``, return a lazy iterator instead of a list.
+
+        Returns
+        -------
+        Iterable[str]
+            Pool keys.
+        """
         if not as_generator:
             with self.atomic():
                 with self._connection().cursor() as cur:
