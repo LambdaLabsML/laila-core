@@ -1,0 +1,1 @@
+"""Communication schema package."""

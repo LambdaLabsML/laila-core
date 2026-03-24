@@ -92,6 +92,8 @@ packages = [
   "laila.policy.central.command.taskforce",
   "laila.policy.central.command.taskforce.process_pool_executor",
   "laila.policy.central.command.taskforce.thread_pool_executor",
+  "laila.policy.central.communication",
+  "laila.policy.central.communication.schema",
   "laila.policy.central.memory",
   "laila.policy.central.memory.hint",
   "laila.policy.central.memory.record",

@@ -33,17 +33,24 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_IDENTIFIABLE_OBJECT):
 
 
     def model_post_init(self, __context: Any) -> None:
-        """Lazily wire default central command and memory if not provided."""
+        """Lazily wire default central command, memory, and communication if not provided."""
         from ...macros.defaults import (
-            DefaultCentralCommand, 
-            DefaultCentralMemory
+            DefaultCentralCommand,
+            DefaultCentralMemory,
+            DefaultCentralCommunication,
         )
 
         if self.central.memory is None:
             self.central.memory = DefaultCentralMemory()
-            
+
         if self.central.command is None:
             self.central.command = DefaultCentralCommand(policy_id=self.global_id)
+
+        if self.central.communication is None:
+            self.central.communication = DefaultCentralCommunication(
+                policy_id=self.global_id,
+            )
+            self.central.communication._local_policy = self
 
 
     def add_pool(self, new_pool: _LAILA_IDENTIFIABLE_POOL) -> None:

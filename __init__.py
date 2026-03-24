@@ -65,18 +65,23 @@ def get_active_policy():
     return _active_policy
     
 def __getattr__(name):
-    """Module-level attribute hook exposing ``active_policy`` lazily."""
+    """Module-level attribute hook exposing ``active_policy`` and ``peers`` lazily."""
     if name == "active_policy":
         return get_active_policy()
+    if name == "peers":
+        return get_active_policy().central.communication.peers
     raise AttributeError(name)
 
-def activate_policy(policy: _LAILA_IDENTIFIABLE_POLICY):
+def activate_policy(policy):
     """Replace the active policy singleton.
+
+    Accepts a local ``_LAILA_IDENTIFIABLE_POLICY`` or a
+    ``RemotePolicyProxy`` obtained from ``laila.peers``.
 
     Parameters
     ----------
-    policy : _LAILA_IDENTIFIABLE_POLICY
-        The policy instance to activate globally.
+    policy : _LAILA_IDENTIFIABLE_POLICY | RemotePolicyProxy
+        The policy instance (local or remote proxy) to activate globally.
     """
     global _active_policy
     _active_policy = policy
@@ -233,6 +238,24 @@ def wait(future_ref, timeout=None):
         Maximum seconds to wait.  ``None`` waits indefinitely.
     """
     return _resolve_future(future_ref).wait(timeout)
+
+
+def add_peer(uri: str, secret: str) -> str:
+    """Connect to a remote policy and register it as a peer.
+
+    Parameters
+    ----------
+    uri : str
+        WebSocket URI of the remote policy (e.g. ``"ws://host:port"``).
+    secret : str
+        The remote policy's ``peer_secret_key``.
+
+    Returns
+    -------
+    str
+        The ``global_id`` of the newly peered remote policy.
+    """
+    return get_active_policy().central.communication.add_peer(uri, secret)
 
 
 def set_default_directory(directory):
