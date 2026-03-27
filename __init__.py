@@ -262,15 +262,26 @@ def wait(future_ref, timeout=None):
     return _resolve_future(future_ref).wait(timeout)
 
 
+def add_comm(protocol) -> None:
+    """Register a communication protocol on the active policy.
+
+    Parameters
+    ----------
+    protocol : _LAILA_IDENTIFIABLE_COMM_PROTOCOL
+        A protocol instance (e.g. ``DefaultTCPIPProtocol()``).
+    """
+    get_active_policy().central.communication.add_connection(protocol)
+
+
 def add_peer(uri: str, secret: str) -> str:
     """Connect to a remote policy and register it as a peer.
 
     Parameters
     ----------
     uri : str
-        WebSocket URI of the remote policy (e.g. ``"ws://host:port"``).
+        URI of the remote policy (e.g. ``"ws://host:port"``).
     secret : str
-        The remote policy's ``peer_secret_key``.
+        The remote policy's ``peer_secret_key`` (on its protocol).
 
     Returns
     -------

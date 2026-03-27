@@ -1,7 +1,7 @@
-"""WebSocket connection management — server listener, outbound connector, and bidirectional receive loop.
+"""WebSocket connection management -- server listener, outbound connector, and bidirectional receive loop.
 
 All functions in this module are async and are expected to run inside the
-Communication instance's dedicated event loop.
+TCP/IP protocol instance's dedicated event loop.
 """
 
 from __future__ import annotations
@@ -17,31 +17,31 @@ from websockets.asyncio.client import connect
 from . import protocol
 
 if TYPE_CHECKING:
-    from .schema.base import _LAILA_IDENTIFIABLE_COMMUNICATION
+    from .protocols.tcpip import _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL
 
 log = logging.getLogger(__name__)
 
 
-async def start_server(comm: _LAILA_IDENTIFIABLE_COMMUNICATION) -> None:
-    """Start the WebSocket listener and store the server handle on *comm*.
+async def start_server(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL) -> None:
+    """Start the WebSocket listener and store the server handle on *proto*.
 
     Parameters
     ----------
-    comm : _LAILA_IDENTIFIABLE_COMMUNICATION
-        The communication instance whose ``host`` / ``port`` to bind.
+    proto : _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL
+        The TCP/IP protocol instance whose ``host`` / ``port`` to bind.
     """
     server = await serve(
-        lambda ws: _handle_inbound(comm, ws),
-        comm.host,
-        comm.port,
+        lambda ws: _handle_inbound(proto, ws),
+        proto.host,
+        proto.port,
     )
     bound_port = server.sockets[0].getsockname()[1]
-    comm.port = bound_port
-    comm._server = server
-    log.info("Communication server listening on %s:%s", comm.host, comm.port)
+    proto.port = bound_port
+    proto._server = server
+    log.info("Communication server listening on %s:%s", proto.host, proto.port)
 
 
-async def _handle_inbound(comm: _LAILA_IDENTIFIABLE_COMMUNICATION, ws: ServerConnection) -> None:
+async def _handle_inbound(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, ws: ServerConnection) -> None:
     """Handle a freshly accepted inbound WebSocket connection.
 
     Expects the first message to be a ``peer.connect`` JSON-RPC request.
@@ -50,8 +50,8 @@ async def _handle_inbound(comm: _LAILA_IDENTIFIABLE_COMMUNICATION, ws: ServerCon
 
     Parameters
     ----------
-    comm : _LAILA_IDENTIFIABLE_COMMUNICATION
-        Local communication instance.
+    proto : _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL
+        Local TCP/IP protocol instance.
     ws : ServerConnection
         The new WebSocket connection.
     """
@@ -75,7 +75,7 @@ async def _handle_inbound(comm: _LAILA_IDENTIFIABLE_COMMUNICATION, ws: ServerCon
     peer_id = params.get("from_id")
     secret = params.get("secret")
 
-    if secret != comm.peer_secret_key:
+    if secret != proto.peer_secret_key:
         resp = protocol.make_error(
             msg["id"], protocol.ERR_AUTH_FAILED, "Invalid peer secret key.",
         )
@@ -83,16 +83,17 @@ async def _handle_inbound(comm: _LAILA_IDENTIFIABLE_COMMUNICATION, ws: ServerCon
         await ws.close()
         return
 
-    resp = protocol.make_result(msg["id"], {"peer_id": comm.policy_id})
+    policy_id = proto._communication.policy_id if proto._communication else None
+    resp = protocol.make_result(msg["id"], {"peer_id": policy_id})
     await ws.send(protocol.encode(resp))
 
-    comm._register_peer(peer_id, ws)
+    proto._register_peer(peer_id, ws)
     log.info("Accepted inbound peer %s", peer_id)
 
-    await _receive_loop(comm, ws, peer_id)
+    await _receive_loop(proto, ws, peer_id)
 
 
-async def connect_outbound(comm: _LAILA_IDENTIFIABLE_COMMUNICATION, uri: str, secret: str) -> str:
+async def connect_outbound(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, uri: str, secret: str) -> str:
     """Initiate an outbound peering connection.
 
     Connects to *uri*, performs the ``peer.connect`` handshake, registers
@@ -100,8 +101,8 @@ async def connect_outbound(comm: _LAILA_IDENTIFIABLE_COMMUNICATION, uri: str, se
 
     Parameters
     ----------
-    comm : _LAILA_IDENTIFIABLE_COMMUNICATION
-        Local communication instance.
+    proto : _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL
+        Local TCP/IP protocol instance.
     uri : str
         WebSocket URI of the remote policy (e.g. ``ws://host:port``).
     secret : str
@@ -119,8 +120,9 @@ async def connect_outbound(comm: _LAILA_IDENTIFIABLE_COMMUNICATION, uri: str, se
     """
     ws = await connect(uri)
 
+    policy_id = proto._communication.policy_id if proto._communication else None
     req = protocol.make_request("peer.connect", {
-        "from_id": comm.policy_id,
+        "from_id": policy_id,
         "secret": secret,
     })
     await ws.send(protocol.encode(req))
@@ -143,15 +145,15 @@ async def connect_outbound(comm: _LAILA_IDENTIFIABLE_COMMUNICATION, uri: str, se
         await ws.close()
         raise ConnectionError("Peer response missing peer_id.")
 
-    comm._register_peer(peer_id, ws)
+    proto._register_peer(peer_id, ws)
     log.info("Connected to outbound peer %s at %s", peer_id, uri)
 
-    asyncio.ensure_future(_receive_loop(comm, ws, peer_id))
+    asyncio.ensure_future(_receive_loop(proto, ws, peer_id))
 
     return peer_id
 
 
-async def _receive_loop(comm: _LAILA_IDENTIFIABLE_COMMUNICATION, ws: Any, peer_id: str) -> None:
+async def _receive_loop(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, ws: Any, peer_id: str) -> None:
     """Read messages from *ws* and dispatch requests / responses.
 
     This loop runs identically on both the initiator and acceptor side of
@@ -159,8 +161,8 @@ async def _receive_loop(comm: _LAILA_IDENTIFIABLE_COMMUNICATION, ws: Any, peer_i
 
     Parameters
     ----------
-    comm : _LAILA_IDENTIFIABLE_COMMUNICATION
-        Local communication instance.
+    proto : _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL
+        Local TCP/IP protocol instance.
     ws : WebSocket
         The shared full-duplex WebSocket.
     peer_id : str
@@ -171,24 +173,24 @@ async def _receive_loop(comm: _LAILA_IDENTIFIABLE_COMMUNICATION, ws: Any, peer_i
             msg = protocol.decode(raw)
 
             if protocol.is_request(msg):
-                await _handle_rpc_request(comm, ws, msg)
+                await _handle_rpc_request(proto, ws, msg)
             elif protocol.is_response(msg):
-                _handle_rpc_response(comm, msg)
+                _handle_rpc_response(proto, msg)
             else:
                 log.warning("Unrecognised message from %s: %s", peer_id, raw[:200])
     except websockets.ConnectionClosed:
         log.info("Connection to peer %s closed.", peer_id)
     finally:
-        comm._unregister_peer(peer_id)
+        proto._unregister_peer(peer_id)
 
 
-async def _handle_rpc_request(comm: _LAILA_IDENTIFIABLE_COMMUNICATION, ws: Any, msg: dict) -> None:
+async def _handle_rpc_request(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, ws: Any, msg: dict) -> None:
     """Execute an inbound ``rpc.call`` and send the result back.
 
     Parameters
     ----------
-    comm : _LAILA_IDENTIFIABLE_COMMUNICATION
-        Local communication instance.
+    proto : _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL
+        Local TCP/IP protocol instance.
     ws : WebSocket
         Socket to reply on.
     msg : dict
@@ -211,7 +213,7 @@ async def _handle_rpc_request(comm: _LAILA_IDENTIFIABLE_COMMUNICATION, ws: Any, 
     kwargs = params.get("kwargs", {})
 
     try:
-        result = comm._execute_rpc(path, args, kwargs)
+        result = proto._communication._execute_rpc(path, args, kwargs)
         resp = protocol.make_result(request_id, result)
     except Exception as exc:
         resp = protocol.make_error(
@@ -222,13 +224,13 @@ async def _handle_rpc_request(comm: _LAILA_IDENTIFIABLE_COMMUNICATION, ws: Any, 
     await ws.send(protocol.encode(resp))
 
 
-def _handle_rpc_response(comm: _LAILA_IDENTIFIABLE_COMMUNICATION, msg: dict) -> None:
+def _handle_rpc_response(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, msg: dict) -> None:
     """Resolve a pending outbound RPC call with the received response.
 
     Parameters
     ----------
-    comm : _LAILA_IDENTIFIABLE_COMMUNICATION
-        Local communication instance.
+    proto : _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL
+        Local TCP/IP protocol instance.
     msg : dict
         Parsed JSON-RPC response.
     """
@@ -236,7 +238,7 @@ def _handle_rpc_response(comm: _LAILA_IDENTIFIABLE_COMMUNICATION, msg: dict) -> 
     if request_id is None:
         return
 
-    pending = comm._pending_rpcs.get(request_id)
+    pending = proto._pending_rpcs.get(request_id)
     if pending is None:
         log.warning("Received response for unknown request %s", request_id)
         return

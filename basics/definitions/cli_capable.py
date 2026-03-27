@@ -43,6 +43,7 @@ _SCOPE_TO_ARGS_PATH: dict[str, str] = {
     "POOL":                  "policy.central.memory.pools.{global_id}",
     "POOL_ROUTER":           "policy.central.memory.pool_router",
     "TASK_FORCE":            "policy.central.command.taskforces.{global_id}",
+    "COMM_PROTOCOL":         "policy.central.communication.connections.{global_id}",
 }
 
 
@@ -249,11 +250,17 @@ def build_environment(policy: Any) -> dict:
                     comm_data[prop_name] = getattr(comm, prop_name, None)
                 except Exception:
                     pass
-            if "peers" in comm_data and isinstance(comm_data.get("peers"), dict):
-                peer_dump: dict[str, Any] = {}
-                for pid, proxy in comm.peers.items():
-                    peer_dump[pid] = {"global_id": proxy.global_id}
-                comm_data["peers"] = peer_dump
+            if hasattr(comm, "connections"):
+                conn_data: dict[str, Any] = {}
+                for proto_id, proto in comm.connections.items():
+                    proto_dump = _dump_obj(proto)
+                    for prop_name in _eligible_property_setters(type(proto)):
+                        try:
+                            proto_dump[prop_name] = getattr(proto, prop_name, None)
+                        except Exception:
+                            pass
+                    conn_data[proto_id] = proto_dump
+                comm_data["connections"] = conn_data
             central_env["communication"] = comm_data
 
     return env
