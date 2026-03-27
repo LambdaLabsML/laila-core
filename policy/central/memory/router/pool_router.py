@@ -3,20 +3,21 @@
 from __future__ import annotations
 from typing import Optional, Any, Dict, Iterable, Iterator, Mapping, List
 from pydantic import BaseModel, Field, PrivateAttr
+from .....basics.definitions.cli_capable import CLIExempt, _LAILA_CLI_CAPABLE_CLASS
 from queue import PriorityQueue
 
-from .....atomic.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from .....macros.strings import _POOL_ROUTER_SCOPE, _DEFAULT_POOL_NICKNAME
 from .....pool.schema.base import _LAILA_IDENTIFIABLE_POOL
 from .....entry import Entry
 
 
-class _LAILA_IDENTIFIABLE_POOL_ROUTER(_LAILA_IDENTIFIABLE_OBJECT):
+class _LAILA_IDENTIFIABLE_POOL_ROUTER(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
     """Routes memory operations to the appropriate pool based on affinity or nickname."""
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_POOL_ROUTER_SCOPE]))
-    pools: Optional[Dict[str,_LAILA_IDENTIFIABLE_POOL]] = Field(default_factory = dict)
-    pools_pq: Optional[PriorityQueue] = Field(default_factory = PriorityQueue)
+    pools: Optional[Dict[str,_LAILA_IDENTIFIABLE_POOL]] = CLIExempt(default_factory = dict)
+    pools_pq: Optional[PriorityQueue] = CLIExempt(default_factory = PriorityQueue)
     pools_nicknames: Optional[Dict[str,str]] = Field(default_factory = dict)
 
 

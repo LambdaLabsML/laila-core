@@ -73,6 +73,8 @@ packages = [
   "laila.atomic",
   "laila.atomic.definitions",
   "laila.atomic.types",
+  "laila.basics",
+  "laila.basics.definitions",
   "laila.entry",
   "laila.entry.compdata",
   "laila.entry.compdata.taxonomy",

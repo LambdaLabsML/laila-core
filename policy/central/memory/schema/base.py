@@ -8,7 +8,8 @@ from contextlib import contextmanager
 from collections.abc import Sequence
 
 from .....pool.schema.base import _LAILA_IDENTIFIABLE_POOL
-from .....atomic.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+from .....basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS
 from ...command.schema.future.future.group_future import GroupFuture
 from ...command.schema.future.future.future_status import FutureStatus
 from ...command.taskforce.thread_pool_executor.future import ConcurrentPackageFuture
@@ -20,7 +21,7 @@ from ..router.pool_router import _LAILA_IDENTIFIABLE_POOL_ROUTER
 from .....entry import Entry
 
 
-class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_IDENTIFIABLE_OBJECT):
+class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
     """Central memory controller for storing, retrieving, and deleting entries across pools."""
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_CENTRAL_MEMORY_SCOPE]))
     pool_router: Optional[_LAILA_IDENTIFIABLE_POOL_ROUTER] = Field(default=None)

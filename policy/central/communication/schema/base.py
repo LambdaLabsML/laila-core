@@ -13,8 +13,9 @@ import uuid as _uuid
 from typing import Any, Dict, Optional
 
 from pydantic import Field, PrivateAttr, ConfigDict
+from .....basics.definitions.cli_capable import CLIExempt, _LAILA_CLI_CAPABLE_CLASS
 
-from .....atomic.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from .....macros.strings import _CENTRAL_COMMUNICATION_SCOPE
 from ..proxy import RemotePolicyProxy
 from .. import protocol
@@ -22,7 +23,7 @@ from .. import protocol
 log = logging.getLogger(__name__)
 
 
-class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_IDENTIFIABLE_OBJECT):
+class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
     """Central communication that owns WebSocket transport and peer registry.
 
     Parameters
@@ -48,9 +49,9 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_IDENTIFIABLE_OBJECT):
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=0)
     peer_secret_key: str = Field(default_factory=lambda: _uuid.uuid4().hex)
-    policy_id: Optional[str] = Field(default=None)
+    policy_id: Optional[str] = CLIExempt(default=None)
 
-    peers: Dict[str, RemotePolicyProxy] = Field(default_factory=dict)
+    peers: Dict[str, RemotePolicyProxy] = CLIExempt(default_factory=dict)
 
     _server: Any = PrivateAttr(default=None)
     _connections: Dict[str, Any] = PrivateAttr(default_factory=dict)

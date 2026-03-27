@@ -43,12 +43,9 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
     server_start_timeout_s: float = Field(default=3.0)
     lock_timeout: int = Field(default=30)
 
-    # Runtime state (public / inspectable)
     redis_dir: Optional[str] = Field(default=None)
-    client: Optional[redis.Redis] = Field(default=None)
 
-    
-    # Internal-only state (proper Pydantic defaults)
+    _client: Optional[redis.Redis] = PrivateAttr(default=None)
     _redis_proc: Optional[subprocess.Popen] = PrivateAttr(default=None)
     _db_dump_name: str = PrivateAttr(default="laila_pool.rdb")
     _redis_socket_name: str = PrivateAttr(default="laila_redis.sock")
@@ -81,7 +78,7 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
 
         self._start_redis_server()
 
-        self.client = redis.Redis(
+        self._client = redis.Redis(
             unix_socket_path=self._redis_socket_path,
             password=self.redis_password,
             decode_responses=True,
@@ -105,9 +102,9 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
         if proc is None:
             return
 
-        if self.client is not None:
+        if self._client is not None:
             with suppress(Exception):
-                self.client.shutdown(save=True)
+                self._client.shutdown(save=True)
 
         with suppress(Exception):
             proc.terminate()
@@ -221,9 +218,9 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
 
     def __getitem__(self, key: str) -> Optional[Any]:
         """Retrieve the JSON value for *key*, or ``None`` if absent."""
-        if self.client is None:
+        if self._client is None:
             raise RuntimeError("Redis client not initialized.")
-        value = self.client.hget(self.redis_hash_key, key)
+        value = self._client.hget(self.redis_hash_key, key)
 
         return json.loads(value) if value is not None else None
 
@@ -232,29 +229,29 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
         value = entry
         if isinstance(value, dict):
             value = json.dumps(value)
-        if self.client is None:
+        if self._client is None:
             raise RuntimeError("Redis client not initialized.")
         if not isinstance(value, str):
             raise TypeError("RedisPool expects a serialized JSON string.")
-        self.client.hset(self.redis_hash_key, key, value)
+        self._client.hset(self.redis_hash_key, key, value)
 
     def __delitem__(self, key: str) -> None:
         """Delete *key* from the Redis hash."""
-        if self.client is None:
+        if self._client is None:
             raise RuntimeError("Redis client not initialized.")
-        self.client.hdel(self.redis_hash_key, key)
+        self._client.hdel(self.redis_hash_key, key)
 
     def empty(self) -> None:
         """Remove all entries from the pool (deletes the Redis hash)."""
-        if self.client is None:
+        if self._client is None:
             raise RuntimeError("Redis client not initialized.")
-        self.client.delete(self.redis_hash_key)
+        self._client.delete(self.redis_hash_key)
 
     def exists(self, key: str) -> bool:
         """Return ``True`` if *key* exists in the Redis hash."""
-        if self.client is None:
+        if self._client is None:
             raise RuntimeError("Redis client not initialized.")
-        return bool(self.client.hexists(self.redis_hash_key, key))
+        return bool(self._client.hexists(self.redis_hash_key, key))
 
     def __contains__(self, key: str) -> bool:
         """Check membership, delegates to :meth:`exists`."""
@@ -273,16 +270,16 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
         Iterable[str]
             Pool keys.
         """
-        if self.client is None:
+        if self._client is None:
             raise RuntimeError("Redis client not initialized.")
 
         if not as_generator:
-            return list(self.client.hkeys(self.redis_hash_key))
+            return list(self._client.hkeys(self.redis_hash_key))
 
         def _gen() -> Iterator[str]:
             cursor = 0
             while True:
-                cursor, batch = self.client.hscan(self.redis_hash_key, cursor=cursor)
+                cursor, batch = self._client.hscan(self.redis_hash_key, cursor=cursor)
                 for k in batch.keys():
                     yield k
                 if cursor == 0:

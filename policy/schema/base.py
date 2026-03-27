@@ -3,33 +3,34 @@
 from __future__ import annotations
 from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict, PrivateAttr
+from ...basics.definitions.cli_capable import CLIExempt, _LAILA_CLI_CAPABLE_CLASS
 
 from ...pool.schema.base import _LAILA_IDENTIFIABLE_POOL
 from ...entry import Entry
 from ..central.command.schema.base import _LAILA_IDENTIFIABLE_CENTRAL_COMMAND
-from ...atomic.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+from ...basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from ..central.memory.schema.base import _LAILA_IDENTIFIABLE_CENTRAL_MEMORY
 from ...macros.strings import _POLICY_SCOPE
 
-class _LAILA_IDENTIFIABLE_POLICY(_LAILA_IDENTIFIABLE_OBJECT):
+class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
     """Top-level policy object that owns central command, memory, and logic."""
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_POLICY_SCOPE]))
     class Central(BaseModel):
         """Container for the four central sub-systems of a policy."""
 
-        logic: Optional[Any] = Field(default=None)
-        command: Optional[_LAILA_IDENTIFIABLE_CENTRAL_COMMAND] = Field(default=None)
-        communication: Optional[Any] = Field(default=None)
-        memory: Optional[Any] = Field(default=None)
+        logic: Optional[Any] = CLIExempt(default=None)
+        command: Optional[_LAILA_IDENTIFIABLE_CENTRAL_COMMAND] = CLIExempt(default=None)
+        communication: Optional[Any] = CLIExempt(default=None)
+        memory: Optional[Any] = CLIExempt(default=None)
 
         model_config = ConfigDict(arbitrary_types_allowed=True)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     # Core components
-    central: Central = Field(default_factory=Central)
-    future_bank: Dict[str, Any] = Field(default_factory=dict)
+    central: Central = CLIExempt(default_factory=Central)
+    future_bank: Dict[str, Any] = CLIExempt(default_factory=dict)
 
 
     def model_post_init(self, __context: Any) -> None:
@@ -50,7 +51,8 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_IDENTIFIABLE_OBJECT):
             self.central.communication = DefaultCentralCommunication(
                 policy_id=self.global_id,
             )
-            self.central.communication._local_policy = self
+
+        self.central.communication._local_policy = self
 
 
     def add_pool(self, new_pool: _LAILA_IDENTIFIABLE_POOL) -> None:

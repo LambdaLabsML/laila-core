@@ -3,26 +3,26 @@
 from __future__ import annotations
 from typing import Callable, Any, Iterable, List, Union, Tuple, Optional
 from pydantic import Field, PrivateAttr, ConfigDict
+from .....basics.definitions.cli_capable import CLIExempt, _LAILA_CLI_CAPABLE_CLASS
 
 from .....atomic import AtomicDict
 from ..schema.future.future import Future
 from .status import TaskForceStatus
 from .....macros.strings import _TASK_FORCE_SCOPE
 from .....atomic.definitions.locally_atomic_identifiable_object import _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
-from .....atomic.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 
 
-class _LAILA_IDENTIFIABLE_TASK_FORCE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
+class _LAILA_IDENTIFIABLE_TASK_FORCE(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
     """Abstract base class for taskforces that manage worker pools and task queues."""
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_TASK_FORCE_SCOPE]))
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    policy_id: Optional[_LAILA_IDENTIFIABLE_OBJECT | str] = None
+    policy_id: Optional[_LAILA_IDENTIFIABLE_OBJECT | str] = CLIExempt(default=None)
 
-    # Lifecycle status (remains NOT_STARTED until start() succeeds)
-    status: TaskForceStatus = Field(
+    status: TaskForceStatus = CLIExempt(
         default=TaskForceStatus.NOT_STARTED,
         description="Current lifecycle status of this TaskForce.",
     )

@@ -4,6 +4,8 @@ Provides the public API for policy management, memory operations (memorize,
 remember, forget), future lifecycle helpers, and argument loading.
 """
 
+import sys
+import types
 import uuid
 import os
 from dotmap import DotMap
@@ -64,19 +66,13 @@ def get_active_policy():
         _active_policy = DefaultPolicy()
     return _active_policy
     
-def __getattr__(name):
-    """Module-level attribute hook exposing ``active_policy`` and ``peers`` lazily."""
-    if name == "active_policy":
-        return get_active_policy()
-    if name == "peers":
-        return get_active_policy().central.communication.peers
-    raise AttributeError(name)
-
 def activate_policy(policy):
     """Replace the active policy singleton.
 
     Accepts a local ``_LAILA_IDENTIFIABLE_POLICY`` or a
     ``RemotePolicyProxy`` obtained from ``laila.peers``.
+
+    Equivalent to ``laila.active_policy = policy``.
 
     Parameters
     ----------
@@ -85,6 +81,32 @@ def activate_policy(policy):
     """
     global _active_policy
     _active_policy = policy
+
+
+class _LailaModule(types.ModuleType):
+    """Module subclass that exposes ``active_policy``, ``peers``, and
+    ``environment`` as proper descriptors so that both read and
+    assignment work naturally (``laila.active_policy = my_policy``)."""
+
+    @property
+    def active_policy(self):
+        return get_active_policy()
+
+    @active_policy.setter
+    def active_policy(self, value):
+        activate_policy(value)
+
+    @property
+    def peers(self):
+        return get_active_policy().central.communication.peers
+
+    @property
+    def environment(self):
+        from .basics.definitions.cli_capable import build_environment
+        return build_environment(get_active_policy())
+
+
+sys.modules[__name__].__class__ = _LailaModule
 
 
 def add_pool(*args, **kwargs):

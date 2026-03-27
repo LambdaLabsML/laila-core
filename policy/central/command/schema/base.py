@@ -2,22 +2,23 @@
 
 from typing import Callable, Any, Iterable, List, Union, Tuple, Optional
 from pydantic import Field, PrivateAttr, ConfigDict
+from .....basics.definitions.cli_capable import CLIExempt, _LAILA_CLI_CAPABLE_CLASS
 from typing import Dict
 import threading
 
 from .future.future import Future
-from .....atomic.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from .....macros.strings import _CENTRAL_COMMAND_SCOPE
 
-class _LAILA_IDENTIFIABLE_CENTRAL_COMMAND(_LAILA_IDENTIFIABLE_OBJECT):
+class _LAILA_IDENTIFIABLE_CENTRAL_COMMAND(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
     """Central command that manages task-forces, future submission, and guarantees."""
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_CENTRAL_COMMAND_SCOPE]))
 
 
-    taskforces: Dict[str, Any] = Field(default_factory=dict)
+    taskforces: Dict[str, Any] = CLIExempt(default_factory=dict)
     alpha_taskforce: Optional[str] = None
-    policy_id: Optional[_LAILA_IDENTIFIABLE_OBJECT | str] = None
+    policy_id: Optional[_LAILA_IDENTIFIABLE_OBJECT | str] = CLIExempt(default=None)
     _guarantee_local: threading.local = PrivateAttr(default_factory=threading.local)
 
 

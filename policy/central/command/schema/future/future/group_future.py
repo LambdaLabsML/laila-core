@@ -11,7 +11,7 @@ from typing import Iterator
 from .future import Future
 from .future_status import FutureStatus
 
-from .......atomic.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+from .......basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from .......macros.strings import _GROUP_FUTURE_SCOPE
 
 

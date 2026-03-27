@@ -7,7 +7,7 @@ from typing import Optional, List, Dict, Any
 import json
 
 from .future_status import FutureStatus
-from .......atomic.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+from .......basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from .......atomic.definitions.locally_atomic_identifiable_object import _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
 
 

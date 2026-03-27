@@ -1,7 +1,7 @@
 """Combination of identifiable and locally-atomic base classes."""
 from __future__ import annotations
 
-from .identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+from ...basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from .locally_atomic_object import _LAILA_LOCALLY_ATOMIC_OBJECT
 
 

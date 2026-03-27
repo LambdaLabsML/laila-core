@@ -1,6 +1,7 @@
 """Base schema for all LAILA storage pool implementations."""
 from typing import Optional, Any, Dict, Iterable, Iterator, Mapping
 from pydantic import BaseModel, Field, PrivateAttr
+from ...basics.definitions.cli_capable import CLIExempt, _LAILA_CLI_CAPABLE_CLASS
 from ...entry import Entry
 from contextlib import suppress, contextmanager
 import threading
@@ -9,7 +10,7 @@ from ...macros.strings import _POOL_SCOPE
 from ...entry.compdata.transformation import TransformationSequence
 
 
-class _LAILA_IDENTIFIABLE_POOL(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
+class _LAILA_IDENTIFIABLE_POOL(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
     """Abstract base class for all LAILA storage pools.
 
     A pool is a key-value store that persists serialized ``Entry`` blobs.
@@ -19,9 +20,9 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
     """
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_POOL_SCOPE]))
-    resource: Dict[str, Any] = Field(default_factory=dict)
+    resource: Dict[str, Any] = CLIExempt(default_factory=dict)
     batch_accelerated: bool = Field(default=False)
-    transformations: Optional[TransformationSequence] = Field(default=None)
+    transformations: Optional[TransformationSequence] = CLIExempt(default=None)
 
 
     class Config:

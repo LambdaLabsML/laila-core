@@ -30,7 +30,7 @@ from .entry_metadata import EntryIdentityView, EntryHolisticView
 from .entry_constitution import EntryConstitution
 
 from ..macros.strings import _ENTRY_SCOPE
-from ..atomic.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+from ..basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from ..atomic.definitions.locally_atomic_identifiable_object import _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
 from ..utils.decorators.synchronized import synchronized
 from .compdata.transformation import TransformationSequence
