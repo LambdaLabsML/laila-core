@@ -46,6 +46,10 @@ huggingface = ["huggingface_hub"]
 crypto = ["cryptography"]
 torch = ["torch", "pillow"]
 imaging = ["imageio", "pillow"]
+dev = [
+  "pytest",
+  "nbstripout",
+]
 all = [
   "boto3",
   "google-cloud-storage",
