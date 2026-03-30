@@ -118,6 +118,27 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         proto = self._resolve_protocol_for_uri(uri)
         return proto.add_peer(uri, secret)
 
+    def add_tcpip_peer(self, host: str, port: int, secret: str) -> str:
+        """Peer with a remote policy over TCP/IP (WebSocket).
+
+        Convenience wrapper that builds the ``ws://`` URI internally.
+
+        Parameters
+        ----------
+        host : str
+            Hostname or IP address of the remote node.
+        port : int
+            WebSocket port on the remote node.
+        secret : str
+            The remote node's ``peer_secret_key``.
+
+        Returns
+        -------
+        str
+            The ``global_id`` of the newly peered remote policy.
+        """
+        return self.add_peer(f"ws://{host}:{port}", secret)
+
     def _register_peer(self, peer_id: str) -> None:
         """Create a proxy for a newly connected peer.
 

@@ -1,7 +1,8 @@
 """Laila top-level package.
 
-Provides the public API for policy management, memory operations (memorize,
-remember, forget), future lifecycle helpers, and argument loading.
+Provides the public API for policy management, subsystem access
+(``laila.memory``, ``laila.command``, ``laila.communication``),
+future lifecycle helpers, and argument loading.
 """
 
 import sys
@@ -84,9 +85,9 @@ def activate_policy(policy):
 
 
 class _LailaModule(types.ModuleType):
-    """Module subclass that exposes ``active_policy``, ``peers``, and
-    ``environment`` as proper descriptors so that both read and
-    assignment work naturally (``laila.active_policy = my_policy``)."""
+    """Module subclass that exposes subsystem shortcuts and property-based
+    access so that ``laila.active_policy = my_policy`` and
+    ``laila.memory.add_pool(...)`` work naturally."""
 
     @property
     def active_policy(self):
@@ -95,6 +96,18 @@ class _LailaModule(types.ModuleType):
     @active_policy.setter
     def active_policy(self, value):
         activate_policy(value)
+
+    @property
+    def communication(self):
+        return get_active_policy().central.communication
+
+    @property
+    def memory(self):
+        return get_active_policy().central.memory
+
+    @property
+    def command(self):
+        return get_active_policy().central.command
 
     @property
     def peers(self):
@@ -108,20 +121,6 @@ class _LailaModule(types.ModuleType):
 
 sys.modules[__name__].__class__ = _LailaModule
 
-
-def add_pool(*args, **kwargs):
-    """Register a storage pool with the active policy's memory system.
-
-    Parameters
-    ----------
-    pool : _LAILA_IDENTIFIABLE_POOL
-        The pool instance to register (e.g. ``S3Pool``, ``HDF5Pool``).
-    affinity : float, optional
-        Routing priority. Higher values mean the pool is preferred.
-    pool_nickname : str, optional
-        A human-readable alias used to reference this pool later.
-    """
-    return get_active_policy().central.memory.add_pool(*args, **kwargs)
 
 def memorize(*args, **kwargs):
     """Persist one or more entries into the active policy's memory.
@@ -138,8 +137,6 @@ def memorize(*args, **kwargs):
         Explicit pool ``global_id`` to route to.
     pool_nickname : str, optional
         Pool alias registered via ``add_pool``.
-    nickname : str, optional
-        Convenience alias – converted to a deterministic ``global_id``.
     """
     return get_active_policy().central.memory.memorize(*args, **kwargs)
 
@@ -208,6 +205,25 @@ def forget(*args, **kwargs):
             del kwargs["evolution"]
     return get_active_policy().central.memory.forget(*args, **kwargs)
 
+
+def add_peer(uri: str, secret: str) -> str:
+    """Connect to a remote policy and register it as a peer.
+
+    Parameters
+    ----------
+    uri : str
+        URI of the remote policy (e.g. ``"ws://host:port"``).
+    secret : str
+        The remote policy's ``peer_secret_key`` (on its protocol).
+
+    Returns
+    -------
+    str
+        The ``global_id`` of the newly peered remote policy.
+    """
+    return get_active_policy().central.communication.add_peer(uri, secret)
+
+
 def _resolve_future(future_ref):
     """Look up the actual future object from a reference.
 
@@ -260,35 +276,6 @@ def wait(future_ref, timeout=None):
         Maximum seconds to wait.  ``None`` waits indefinitely.
     """
     return _resolve_future(future_ref).wait(timeout)
-
-
-def add_comm(protocol) -> None:
-    """Register a communication protocol on the active policy.
-
-    Parameters
-    ----------
-    protocol : _LAILA_IDENTIFIABLE_COMM_PROTOCOL
-        A protocol instance (e.g. ``DefaultTCPIPProtocol()``).
-    """
-    get_active_policy().central.communication.add_connection(protocol)
-
-
-def add_peer(uri: str, secret: str) -> str:
-    """Connect to a remote policy and register it as a peer.
-
-    Parameters
-    ----------
-    uri : str
-        URI of the remote policy (e.g. ``"ws://host:port"``).
-    secret : str
-        The remote policy's ``peer_secret_key`` (on its protocol).
-
-    Returns
-    -------
-    str
-        The ``global_id`` of the newly peered remote policy.
-    """
-    return get_active_policy().central.communication.add_peer(uri, secret)
 
 
 def set_default_directory(directory):
