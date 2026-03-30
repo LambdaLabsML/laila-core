@@ -33,7 +33,12 @@ jobs:
           python -m pip install ".[all,dev]"
 
       - name: Run tests
-        run: python -m pytest tests/ --tb=short -q
+        run: |
+          if [ -d tests ]; then
+            python -m pytest tests/ --tb=short -q
+          else
+            echo "No tests/ directory found (public repo) — skipping."
+          fi
 
       - name: Build distributions
         run: python -m build
