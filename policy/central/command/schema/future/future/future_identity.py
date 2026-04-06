@@ -69,6 +69,45 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         """
         return self.__str__()
 
+    @property
+    def status(self):
+        """Read-only status resolved from the owning policy's future bank."""
+        from ....... import _local_policies
+        gid = self.global_id
+        for policy in _local_policies.values():
+            if gid in policy.future_bank:
+                return policy.future_bank[gid].status
+        raise KeyError(f"Future {gid} not found in any local policy bank")
+
+    @property
+    def result(self):
+        """Read-only result resolved from the owning policy's future bank."""
+        from ....... import _local_policies
+        gid = self.global_id
+        for policy in _local_policies.values():
+            if gid in policy.future_bank:
+                return policy.future_bank[gid].result
+        raise KeyError(f"Future {gid} not found in any local policy bank")
+
+    @property
+    def exception(self):
+        """Read-only exception resolved from the owning policy's future bank."""
+        from ....... import _local_policies
+        gid = self.global_id
+        for policy in _local_policies.values():
+            if gid in policy.future_bank:
+                return policy.future_bank[gid].exception
+        raise KeyError(f"Future {gid} not found in any local policy bank")
+
+    def wait(self, timeout=None):
+        """Block until the future completes, resolved through the future bank."""
+        from ....... import _local_policies
+        gid = self.global_id
+        for policy in _local_policies.values():
+            if gid in policy.future_bank:
+                return policy.future_bank[gid].wait(timeout)
+        raise KeyError(f"Future {gid} not found in any local policy bank")
+
     def as_dict(self) -> Dict[str, Any]:
         """
         Return a dict with all identity fields.

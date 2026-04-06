@@ -23,6 +23,7 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
     _status: FutureStatus = PrivateAttr(default=FutureStatus.NOT_STARTED)
     _return_value: Any = PrivateAttr(default=None)
     _exception: Optional[Exception] = PrivateAttr(default=None)
+    _result_global_id: Optional[str] = PrivateAttr(default=None)
     _timeout_ms: int = PrivateAttr(default=100)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -90,11 +91,19 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
     @result.setter
     @synchronized
     def result(self, result: Any) -> None:
-        """
-        Set the result value.
-        """
+        """Set the result value, auto-wrapping non-Entry values into an Entry."""
+        from .......entry import Entry
 
-        self._return_value = result
+        if result is None:
+            self._return_value = None
+            self._result_global_id = None
+        elif isinstance(result, Entry):
+            self._return_value = result
+            self._result_global_id = result.global_id
+        else:
+            wrapped = Entry.constant(data=result)
+            self._return_value = wrapped
+            self._result_global_id = wrapped.global_id
 
     @property
     def exception(self) -> Optional[Exception]:

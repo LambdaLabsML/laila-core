@@ -110,3 +110,58 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
         """Update central memory with a new or modified entry."""
         return self.central.memory.record(entries)
 
+    # ------------------------------------------------------------------
+    # RPC helpers for remote future introspection
+    # ------------------------------------------------------------------
+
+    def _get_future_status(self, future_id: str) -> Any:
+        """Return the status of a future from this policy's bank."""
+        future = self.future_bank.get(future_id)
+        if future is None:
+            raise KeyError(f"Future {future_id} not in bank")
+        status = future.status
+        if hasattr(status, "value"):
+            return status.value
+        return status
+
+    def _get_future_exception(self, future_id: str) -> Optional[Dict]:
+        """Return a serializable representation of a future's exception."""
+        future = self.future_bank.get(future_id)
+        if future is None:
+            raise KeyError(f"Future {future_id} not in bank")
+        exc = future.exception
+        if exc is None:
+            return None
+        return {"type": type(exc).__name__, "message": str(exc)}
+
+    def _get_future_result_id(self, future_id: str) -> Any:
+        """Return the ``_result_global_id`` of the future's result Entry.
+
+        For GroupFutures, returns a list of child result IDs.
+        """
+        future = self.future_bank.get(future_id)
+        if future is None:
+            raise KeyError(f"Future {future_id} not in bank")
+        if hasattr(future, "_result_global_id"):
+            return future._result_global_id
+        if hasattr(future, "future_ids"):
+            ids = []
+            for fid in future.future_ids:
+                child = self.future_bank.get(fid)
+                if child and hasattr(child, "_result_global_id"):
+                    ids.append(child._result_global_id)
+                else:
+                    ids.append(None)
+            return ids
+        return None
+
+    def _wait_future(self, future_id: str, timeout: float = None) -> Any:
+        """Block until a future in this policy's bank completes."""
+        future = self.future_bank.get(future_id)
+        if future is None:
+            raise KeyError(f"Future {future_id} not in bank")
+        future.wait(timeout)
+        if hasattr(future, "_result_global_id"):
+            return future._result_global_id
+        return None
+

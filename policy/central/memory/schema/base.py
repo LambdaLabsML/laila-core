@@ -25,15 +25,27 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
     """Central memory controller for storing, retrieving, and deleting entries across pools."""
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_CENTRAL_MEMORY_SCOPE]))
     pool_router: Optional[_LAILA_IDENTIFIABLE_POOL_ROUTER] = Field(default=None)
+    alpha_pool: Optional[str] = Field(default=None)
 
     class Config:
         arbitrary_types_allowed = True
 
     def model_post_init(self, __context: Any) -> None:
-        """Create a default pool router when none is provided."""
+        """Create a default pool router and ensure an alpha pool exists."""
         if self.pool_router is None:
             from .....macros.defaults import DefaultPoolRouter
             self.pool_router = DefaultPoolRouter()
+
+        if self.alpha_pool is None:
+            if _DEFAULT_POOL_NICKNAME in self.pool_router.pools_nicknames:
+                self.alpha_pool = self.pool_router.pools_nicknames[_DEFAULT_POOL_NICKNAME]
+            else:
+                from .....macros.defaults import DefaultPool
+                alpha = DefaultPool()
+                self.pool_router.add_pool(
+                    alpha, affinity=1, pool_nickname=_DEFAULT_POOL_NICKNAME
+                )
+                self.alpha_pool = alpha.global_id
 
     
     def add_pool(self, pool: _LAILA_IDENTIFIABLE_POOL, *, affinity: Optional[float] = None, pool_nickname: Optional[str] = None):
@@ -172,7 +184,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         pool_nickname: Optional[str] = None,
         affinity: Optional[float] = None,
     ):
-        """Persist entries to the routed pool, returning futures for non-default pools."""
+        """Persist entries to the routed pool and return a ``GroupFuture``."""
         from ..... import active_policy
 
         pool = self.pool_router.route(
@@ -182,14 +194,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             affinity = affinity,
         )
 
-
-
-        futures = self._record(entries, pool)
-
-        if pool.global_id == self.pool_router.pools_nicknames[_DEFAULT_POOL_NICKNAME]:
-            return 
-        
-        return futures
+        return self._record(entries, pool)
 
 
     def _record(
@@ -247,7 +252,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         pool_nickname: Optional[str] = None,
         affinity: Optional[float] = None,
     ):
-        """Fetch entries from the routed pool, returning futures for non-default pools."""
+        """Fetch entries from the routed pool and return a ``GroupFuture``."""
         from ..... import active_policy
         from .....entry import Entry
 
@@ -258,14 +263,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             affinity = affinity,
         )
 
-        if pool.global_id == self.pool_router.pools_nicknames[_DEFAULT_POOL_NICKNAME]: #nothing to remember for the default pool
-            return None
-
-        futures = self._fetch(entry_ids, pool=pool)
-        if pool.global_id == self.pool_router.pools_nicknames[_DEFAULT_POOL_NICKNAME]:
-            return 
-        
-        return futures
+        return self._fetch(entry_ids, pool=pool)
 
 
     def _fetch(
@@ -322,7 +320,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         pool_nickname: Optional[str] = None,
         affinity: Optional[float] = None,
     ):
-        """Delete entries from the routed pool, returning futures for non-default pools."""
+        """Delete entries from the routed pool and return a ``GroupFuture``."""
         pool = self.pool_router.route(
             entries = entry_ids,
             pool_id = pool_id,
@@ -330,13 +328,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             affinity = affinity,
         )
 
-
-        futures = self._delete(entry_ids, pool=pool)
-
-        if pool.global_id == self.pool_router.pools_nicknames[_DEFAULT_POOL_NICKNAME]:
-            return 
-        
-        return futures
+        return self._delete(entry_ids, pool=pool)
 
     def _delete(
         self,

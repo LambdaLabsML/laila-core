@@ -34,8 +34,6 @@ class _LAILA_IDENTIFIABLE_POOL_ROUTER(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIA
                 affinity=1,
                 pool_nickname=_DEFAULT_POOL_NICKNAME
             )
-        else:
-            raise NotImplementedError
 
 
     def add_pool(

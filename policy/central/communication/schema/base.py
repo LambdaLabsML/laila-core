@@ -51,18 +51,42 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
     def add_connection(
         self, protocol: _LAILA_IDENTIFIABLE_COMM_PROTOCOL
     ) -> None:
-        """Register a transport protocol with this communication instance.
+        """Register and start a transport protocol.
 
-        Sets the protocol's back-reference so it can call back into
-        Communication for peer registration and RPC dispatch.
+        Sets the protocol's back-reference, adds it to the registry,
+        and calls ``protocol.start()`` so the connection is live when
+        this method returns.  Symmetric with :meth:`remove_connection`
+        which calls ``protocol.stop()``.
 
         Parameters
         ----------
         protocol : _LAILA_IDENTIFIABLE_COMM_PROTOCOL
-            The protocol instance to register.
+            The protocol instance to register and start.
         """
         protocol._communication = self
         self.connections[protocol.global_id] = protocol
+        protocol.start()
+
+    def remove_connection(
+        self, protocol: _LAILA_IDENTIFIABLE_COMM_PROTOCOL
+    ) -> None:
+        """Stop a transport protocol and remove it from this communication instance.
+
+        The protocol is responsible for all its own cleanup — closing
+        sockets, unregistering peers, etc.  Communication only calls
+        ``stop()`` and removes the protocol from its registry.
+
+        Parameters
+        ----------
+        protocol : _LAILA_IDENTIFIABLE_COMM_PROTOCOL
+            The protocol instance to remove.
+        """
+        proto_id = protocol.global_id
+        if proto_id not in self.connections:
+            return
+        protocol.stop()
+        self.connections.pop(proto_id, None)
+        protocol._communication = None
 
     def _resolve_protocol_for_uri(self, uri: str) -> _LAILA_IDENTIFIABLE_COMM_PROTOCOL:
         """Find a protocol that can handle *uri*, or fall back to the first one."""
@@ -143,6 +167,7 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         """Create a proxy for a newly connected peer.
 
         Called by protocol instances after a successful handshake.
+        Also registers the proxy in ``laila.remote_policies``.
 
         Parameters
         ----------
@@ -150,10 +175,15 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
             Remote policy ``global_id``.
         """
         if peer_id not in self.peers:
-            self.peers[peer_id] = RemotePolicyProxy(peer_id, self)
+            proxy = RemotePolicyProxy(peer_id, self)
+            self.peers[peer_id] = proxy
+            from ..... import _remote_policies
+            _remote_policies[peer_id] = proxy
 
     def _unregister_peer(self, peer_id: str) -> None:
         """Remove a peer proxy after the transport connection closes.
+
+        Also removes from ``laila.remote_policies``.
 
         Parameters
         ----------
@@ -161,6 +191,8 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
             Remote policy ``global_id``.
         """
         self.peers.pop(peer_id, None)
+        from ..... import _remote_policies
+        _remote_policies.pop(peer_id, None)
 
     # ------------------------------------------------------------------
     # RPC dispatch (inbound)
@@ -203,6 +235,10 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
     def _send_rpc(self, peer_id: str, path: list[str], args: tuple, kwargs: dict) -> Any:
         """Send an RPC call to a peer via the protocol that holds the connection.
 
+        If the deserialized response contains a ``__laila_future__`` marker
+        it is automatically wrapped in a :class:`RemoteFuture` and
+        registered in the local policy's ``future_bank``.
+
         Parameters
         ----------
         peer_id : str
@@ -217,7 +253,8 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         Returns
         -------
         Any
-            The deserialized return value from the remote call.
+            The deserialized return value from the remote call, or a
+            ``RemoteFuture`` when the remote returned a future.
 
         Raises
         ------
@@ -228,5 +265,27 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         """
         for proto in self.connections.values():
             if proto.has_peer(peer_id):
-                return proto.send_rpc(peer_id, path, args, kwargs)
+                result = proto.send_rpc(peer_id, path, args, kwargs)
+                return self._maybe_wrap_remote_future(result, peer_id)
         raise ConnectionError(f"No connection to peer {peer_id}")
+
+    def _maybe_wrap_remote_future(self, result: Any, peer_id: str) -> Any:
+        """Wrap a future-shaped dict in a ``RemoteFuture`` and register it."""
+        if not isinstance(result, dict) or not result.get("__laila_future__"):
+            return result
+
+        from ...command.schema.future.future.remote_future import RemoteFuture
+
+        rf = RemoteFuture(
+            remote_future_id=result["global_id"],
+            remote_policy_id=result.get("policy_id", peer_id),
+            communication=self,
+            is_group=result.get("__is_group__", False),
+        )
+
+        if self._local_policy is not None:
+            self._local_policy.future_bank[rf.global_id] = rf
+            if hasattr(self._local_policy, "central"):
+                self._local_policy.central.command._register_future_with_active_guarantees(rf)
+
+        return rf

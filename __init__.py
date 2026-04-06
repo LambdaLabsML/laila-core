@@ -29,6 +29,9 @@ args = DotMap()
 
 arg_reader = ArgReader(target=args)
 
+_local_policies = {}
+_remote_policies = {}
+
 
 def read_args(source, *, terminal_args=None) -> None:
     """Load user arguments from a TOML/JSON/.env/.xml file or ``terminal`` into ``laila.args``.
@@ -65,6 +68,7 @@ def get_active_policy():
     if _active_policy is None:
         from .macros.defaults import DefaultPolicy
         _active_policy = DefaultPolicy()
+        _local_policies[_active_policy.global_id] = _active_policy
     return _active_policy
     
 def activate_policy(policy):
@@ -117,6 +121,27 @@ class _LailaModule(types.ModuleType):
     def environment(self):
         from .basics.definitions.cli_capable import build_environment
         return build_environment(get_active_policy())
+
+    @property
+    def local_policies(self):
+        """All local policies on this machine, keyed by ``global_id``."""
+        return _local_policies
+
+    @property
+    def remote_policies(self):
+        """All remote peer policies, keyed by ``global_id``."""
+        return _remote_policies
+
+    @property
+    def universe(self):
+        """Union of local and remote policies, keyed by ``global_id``."""
+        return {**_local_policies, **_remote_policies}
+
+    @property
+    def runtime(self):
+        """Runtime introspection module for futures."""
+        import importlib
+        return importlib.import_module("laila.runtime")
 
 
 sys.modules[__name__].__class__ = _LailaModule
@@ -227,55 +252,58 @@ def add_peer(uri: str, secret: str) -> str:
 def _resolve_future(future_ref):
     """Look up the actual future object from a reference.
 
-    Accepts a future identity, a GroupFuture, a full Future, or a
-    ``global_id`` string.
+    Accepts a ``RemoteFuture``, a future identity, a GroupFuture, a
+    full Future, or a ``global_id`` string.  Searches all local policy
+    banks when resolving by string.
     """
+    from .policy.central.command.schema.future.future.remote_future import RemoteFuture
     from .policy.central.command.schema.future.future.future_identity import _LAILA_IDENTIFIABLE_FUTURE
     from .policy.central.command.schema.future.future.group_future import GroupFuture
     from .policy.central.command.schema.future.future.future import Future
 
-    bank = get_active_policy().future_bank
-
-    if isinstance(future_ref, str):
-        return bank[future_ref]
+    if isinstance(future_ref, RemoteFuture):
+        return future_ref
     if isinstance(future_ref, GroupFuture):
         return future_ref
     if isinstance(future_ref, Future):
         return future_ref
+
+    if isinstance(future_ref, str):
+        for policy in _local_policies.values():
+            if future_ref in policy.future_bank:
+                return policy.future_bank[future_ref]
+        bank = get_active_policy().future_bank
+        return bank[future_ref]
+
     if isinstance(future_ref, _LAILA_IDENTIFIABLE_FUTURE):
-        return bank[future_ref.global_id]
+        gid = future_ref.global_id
+        for policy in _local_policies.values():
+            if gid in policy.future_bank:
+                return policy.future_bank[gid]
+        bank = get_active_policy().future_bank
+        return bank[gid]
+
     raise TypeError(f"Cannot resolve future for {type(future_ref)}")
 
 
 def status(future_ref):
     """Return the status of a future.
 
-    Accepts a future identity, a GroupFuture, or a full Future object.
-    For identities the actual future is looked up in the active policy's
-    ``future_bank``.
-
-    Parameters
-    ----------
-    future_ref : _LAILA_IDENTIFIABLE_FUTURE | GroupFuture | Future | str
-        The future reference to query.  Strings are treated as ``global_id``
-        keys into the bank.
+    .. deprecated::
+        Use ``laila.runtime.status()`` instead.
     """
-    return _resolve_future(future_ref).status
+    from . import runtime
+    return runtime.status(future_ref)
 
 
 def wait(future_ref, timeout=None):
     """Block until the future completes and return its result.
 
-    Accepts a future identity, a GroupFuture, or a full Future object.
-
-    Parameters
-    ----------
-    future_ref : _LAILA_IDENTIFIABLE_FUTURE | GroupFuture | Future | str
-        The future reference to wait on.
-    timeout : float, optional
-        Maximum seconds to wait.  ``None`` waits indefinitely.
+    .. deprecated::
+        Use ``laila.runtime.wait()`` instead.
     """
-    return _resolve_future(future_ref).wait(timeout)
+    from . import runtime
+    return runtime.wait(future_ref, timeout)
 
 
 def set_default_directory(directory):

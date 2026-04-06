@@ -36,8 +36,13 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_ATOMIC_I
 
 
     # -------- Mapping-like API --------
-    def __getitem__(self, key: str) -> Optional[Any]:
-        """Retrieve the stored blob for *key*, or ``None`` if absent."""
+    def __getitem__(self, key) -> Optional[Any]:
+        """Retrieve the stored blob for *key*, or a ``PoolWrapper`` for a ``Manifest``."""
+        from ...policy.central.memory.schema.manifest import Manifest
+        if isinstance(key, Manifest):
+            from .pool_wrapper import PoolWrapper
+            return PoolWrapper(pool=self, manifest=key)
+
         with self.atomic():
             if key not in self.resource:
                 return None

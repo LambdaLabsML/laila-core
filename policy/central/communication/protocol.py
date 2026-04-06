@@ -23,11 +23,33 @@ ERR_EXECUTION = -32002
 class LailaJSONEncoder(json.JSONEncoder):
     """JSON encoder that serialises LAILA objects via their existing hooks.
 
-    Falls back to ``str(obj)`` for otherwise unserializable objects so that
-    RPC payloads never raise on encoding.
+    Futures and GroupFutures are serialized with a ``__laila_future__``
+    marker so the receiving side can detect them and wrap in a
+    ``RemoteFuture``.  Falls back to ``str(obj)`` for otherwise
+    unserializable objects so that RPC payloads never raise on encoding.
     """
 
     def default(self, o: Any) -> Any:
+        from ..command.schema.future.future.future import Future
+        from ..command.schema.future.future.group_future import GroupFuture
+
+        if isinstance(o, GroupFuture):
+            return {
+                "__laila_future__": True,
+                "__is_group__": True,
+                "global_id": o.global_id,
+                "policy_id": str(o.policy_id),
+                "future_ids": o.future_ids,
+            }
+
+        if isinstance(o, Future):
+            return {
+                "__laila_future__": True,
+                "__is_group__": False,
+                "global_id": o.global_id,
+                "policy_id": str(o.policy_id),
+            }
+
         if hasattr(o, "model_dump"):
             return o.model_dump()
         if hasattr(o, "as_dict"):

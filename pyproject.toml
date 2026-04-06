@@ -46,6 +46,12 @@ huggingface = ["huggingface_hub"]
 crypto = ["cryptography"]
 torch = ["torch", "pillow"]
 imaging = ["imageio", "pillow"]
+docs = [
+  "mkdocs-material",
+  "mkdocstrings[python]",
+  "mkdocs-gen-files",
+  "mkdocs-literate-nav",
+]
 dev = [
   "pytest",
   "nbstripout",
@@ -122,10 +128,15 @@ packages = [
   "laila.pool.s3",
   "laila.pool.schema",
   "laila.pool.sqlite",
+  "laila.tutorials",
+  "laila.runtime",
   "laila.utils",
   "laila.utils.args",
   "laila.utils.decorators",
 ]
+
+[tool.setuptools.package-data]
+"laila.tutorials" = ["*.ipynb", "*.md"]
 
 [tool.setuptools.package-dir]
 laila = "."
