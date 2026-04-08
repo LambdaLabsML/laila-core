@@ -14,6 +14,8 @@ from dotmap import DotMap
 from .entry import Entry
 from . import entry
 from . import policy
+from .policy.central.memory.schema.manifest import Manifest
+manifest = Manifest
 from .macros.aliases import *
 from .policy.schema.base import _LAILA_IDENTIFIABLE_POLICY
 from .policy.central.command import taskforce as TaskForce
@@ -136,6 +138,12 @@ class _LailaModule(types.ModuleType):
     def universe(self):
         """Union of local and remote policies, keyed by ``global_id``."""
         return {**_local_policies, **_remote_policies}
+
+    @property
+    def alpha_pool(self):
+        """The active policy's default (alpha) pool instance."""
+        mem = get_active_policy().central.memory
+        return mem.pool_router.pools[mem.alpha_pool]
 
     @property
     def runtime(self):

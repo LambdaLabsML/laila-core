@@ -1,9 +1,10 @@
 """Manifest — a structured map of user-defined keys to ``global_id`` references.
 
-A Manifest wraps a nested dictionary whose leaves are ``global_id`` strings
-(or lists thereof).  It provides ``memorize``, ``remember``, and ``forget``
-operations that batch-process the referenced entries through the active
-policy's memory layer.
+A Manifest is a special type of Entry whose payload is a blueprint: a nested
+dictionary whose leaves are ``global_id`` strings (or lists thereof).  It
+provides ``memorize``, ``remember``, and ``forget`` operations that
+batch-process the referenced entries through the active policy's memory layer,
+each returning a ``GroupFuture``.
 """
 
 from __future__ import annotations
@@ -13,140 +14,70 @@ from typing import Any, Iterator, Optional
 
 from pydantic import PrivateAttr
 
-from .....atomic.definitions.locally_atomic_identifiable_object import (
-    _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT,
-)
-from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
-from .....macros.strings import _MANIFEST_SCOPE, _ENTRY_SCOPE
+from .....entry import Entry
+from .....entry.entry_state import EntryState
+from .....macros.strings import _MANIFEST_SCOPE
 
 
-class Manifest(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
-    """Identifiable, thread-safe wrapper around a nested dict of ``global_id`` references.
+class Manifest(Entry):
+    """Entry subclass wrapping a nested dict of ``global_id`` references.
 
     A manifest maps user-defined string keys to ``global_id`` strings, lists
     of ``global_id`` strings, or recursively nested dicts following the same
-    rules.  It can be constructed from raw ID strings, from ``Entry`` objects,
-    or by recalling a previously stored manifest from a pool.
+    rules.  It can be constructed from raw ID strings or from ``Entry``
+    objects.
+
+    The manifest's ``.data`` IS the blueprint dict.  It carries scope
+    ``MANIFEST`` and evolution ``None`` (constant).
 
     Parameters
     ----------
     data : dict, optional
         A nested dict whose leaves are ``global_id`` strings, lists of
-        ``global_id`` strings, or ``Entry`` instances.
-    global_id : str, optional
-        Reconstruct the manifest by recalling its blueprint from a pool.
-    pool_nickname : str, optional
-        Pool alias used when constructing from *global_id*.
-    pool_id : str, optional
-        Explicit pool id used when constructing from *global_id*.
+        ``global_id`` strings, or ``Entry`` instances.  Entry instances are
+        converted to a blueprint of ``global_id`` strings and stashed for
+        a subsequent ``memorize()`` call.
     uuid : str, optional
         Explicit UUID for the manifest's own identity.
     nickname : str, optional
         Human-readable name converted to a deterministic UUID.
+    global_id : str, optional
+        Composite identifier used to set identity.
     """
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: [_MANIFEST_SCOPE])
-    _blueprint: Optional[dict] = PrivateAttr(default=None)
-    _resolved: Optional[dict] = PrivateAttr(default=None)
-    _pool_nickname: Optional[str] = PrivateAttr(default=None)
-    _pool_id: Optional[str] = PrivateAttr(default=None)
+    _pending_entries: Optional[list] = PrivateAttr(default=None)
 
     def __init__(self, **data: Any):
-        global_id = data.pop("global_id", None)
-        pool_nickname = data.pop("pool_nickname", None)
-        pool_id = data.pop("pool_id", None)
         raw_data = data.pop("data", None)
-        nickname = data.pop("nickname", None)
-        uuid_val = data.pop("uuid", None)
 
-        identity_kwargs: dict[str, Any] = {}
-        if nickname is not None:
-            identity_kwargs["nickname"] = nickname
-        elif uuid_val is not None:
-            identity_kwargs["uuid"] = uuid_val
+        blueprint = None
+        pending = None
 
-        if global_id is not None:
-            identity_kwargs = _LAILA_IDENTIFIABLE_OBJECT.process_global_id(global_id)
+        if raw_data is not None:
+            has_entries, has_strings = Manifest._classify_data(raw_data)
 
-        _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT.__init__(self, **identity_kwargs)
+            if has_entries and has_strings:
+                raise ValueError(
+                    "Manifest data must contain either all Entry objects or all "
+                    "global_id strings, not a mix of both."
+                )
 
-        self._pool_nickname = pool_nickname
-        self._pool_id = pool_id
+            if has_entries:
+                blueprint = Manifest._extract_blueprint(raw_data)
+                pending = list(Manifest._iter_entries(raw_data))
+            else:
+                Manifest._validate_blueprint(raw_data)
+                blueprint = copy.deepcopy(raw_data)
 
-        if global_id is not None and raw_data is None:
-            self._recall_own_blueprint(pool_nickname=pool_nickname, pool_id=pool_id)
-        elif raw_data is not None:
-            self._ingest(raw_data)
+        entry_kwargs = dict(data)
+        entry_kwargs["evolution"] = None
+        if blueprint is not None:
+            entry_kwargs["data"] = blueprint
+            entry_kwargs["state"] = EntryState.READY
 
-    # ------------------------------------------------------------------
-    # Construction helpers
-    # ------------------------------------------------------------------
-
-    def _recall_own_blueprint(
-        self,
-        *,
-        pool_nickname: Optional[str] = None,
-        pool_id: Optional[str] = None,
-    ) -> None:
-        """Recall the manifest's own blueprint dict from a pool."""
-        import laila
-
-        manifest_entry_gid = _LAILA_IDENTIFIABLE_OBJECT.to_global_id(
-            uuid=self._uuid,
-            scopes=[_ENTRY_SCOPE],
-        )
-
-        kwargs: dict[str, Any] = {}
-        if pool_nickname is not None:
-            kwargs["pool_nickname"] = pool_nickname
-        if pool_id is not None:
-            kwargs["pool_id"] = pool_id
-
-        with laila.guarantee:
-            ref = laila.remember(manifest_entry_gid, **kwargs)
-        recalled = ref.wait()
-
-        if isinstance(recalled, list):
-            recalled = recalled[0]
-
-        self._blueprint = recalled.data
-        Manifest._validate_blueprint(self._blueprint)
-
-    def _ingest(self, data: dict) -> None:
-        """Detect whether *data* contains Entry objects or raw global_id strings."""
-        from .....entry import Entry
-
-        has_entries = False
-        has_strings = False
-
-        def _check(val: Any) -> None:
-            nonlocal has_entries, has_strings
-            if isinstance(val, Entry):
-                has_entries = True
-            elif isinstance(val, str):
-                has_strings = True
-            elif isinstance(val, list):
-                for item in val:
-                    _check(item)
-            elif isinstance(val, dict):
-                for v in val.values():
-                    _check(v)
-
-        for v in data.values():
-            _check(v)
-
-        if has_entries and has_strings:
-            raise ValueError(
-                "Manifest data must contain either all Entry objects or all "
-                "global_id strings, not a mix of both."
-            )
-
-        if has_entries:
-            self._resolved = copy.deepcopy(data)
-            self._blueprint = Manifest._extract_blueprint(data)
-        else:
-            Manifest._validate_blueprint(data)
-            self._blueprint = copy.deepcopy(data)
+        Entry.__init__(self, **entry_kwargs)
+        self._pending_entries = pending
 
     # ------------------------------------------------------------------
     # Properties
@@ -155,15 +86,43 @@ class Manifest(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
     @property
     def blueprint(self) -> Optional[dict]:
         """The nested dict with ``global_id`` strings as leaf values."""
-        return self._blueprint
+        return self.data
 
     @property
-    def resolved(self) -> Optional[dict]:
-        """The nested dict with ``Entry`` objects as leaf values (after ``remember``)."""
-        return self._resolved
+    def resolved(self) -> dict:
+        """Live-fetch all referenced entries from the alpha pool.
+
+        Walks the blueprint, fetches each entry directly from the alpha
+        pool, and returns a nested dict of ``Entry`` objects mirroring
+        the blueprint structure.  No caching — each access re-fetches.
+
+        Raises
+        ------
+        RuntimeError
+            If the manifest has no blueprint.
+        KeyError
+            If any referenced entry is missing from the alpha pool.
+        """
+        import laila
+        from ..record.record import Record
+
+        if self.data is None:
+            raise RuntimeError("No blueprint to resolve — manifest is empty.")
+
+        pool = laila.alpha_pool
+        resolved_map: dict[str, Any] = {}
+
+        for gid in self:
+            blob = pool[gid]
+            if blob is None:
+                raise KeyError(f"Entry {gid} not found in the alpha pool")
+            recovered = Record.recover(blob)
+            resolved_map[gid] = recovered["entry"]
+
+        return Manifest._rebuild_with_entries(self.data, resolved_map)
 
     # ------------------------------------------------------------------
-    # Core operations
+    # Core operations (all return GroupFuture)
     # ------------------------------------------------------------------
 
     def memorize(
@@ -172,55 +131,52 @@ class Manifest(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         pool_nickname: Optional[str] = None,
         pool_id: Optional[str] = None,
         batch_size: int = 128,
-        memorize_self: bool = True,
-    ) -> None:
-        """Upload all referenced entries and store the manifest's own blueprint.
+    ):
+        """Upload all referenced entries and store the manifest's blueprint.
 
-        Walks ``_resolved`` to collect all ``Entry`` objects, uploads them in
-        batches via the active policy's memory, then builds ``_blueprint``
-        from the resulting ``global_id`` strings.  When *memorize_self* is
-        ``True``, also stores the blueprint dict itself as an entry so the
-        manifest can be reconstructed from its ``global_id`` alone.
+        Collects any pending ``Entry`` objects provided at construction time,
+        uploads them in batches, then stores the manifest itself (whose
+        payload is the blueprint dict).
 
         Parameters
         ----------
         pool_nickname : str, optional
-            Pool alias to route entries to.
+            Pool alias to route entries to.  Defaults to the alpha pool.
         pool_id : str, optional
-            Explicit pool ``global_id``.
+            Explicit pool ``global_id``.  Defaults to the alpha pool.
         batch_size : int
             Maximum entries per upload batch.
-        memorize_self : bool
-            If ``True``, persist the blueprint dict as its own entry.
+
+        Returns
+        -------
+        GroupFuture
+            Tracks all writes (leaf entries + manifest itself).
         """
         import laila
-        from .....entry import Entry
+        from ...command.schema.future.future.group_future import GroupFuture
 
-        if self._resolved is None:
-            raise RuntimeError(
-                "Nothing to memorize — the manifest has no resolved entries. "
-                "Construct with Entry objects or call remember() first."
-            )
+        if self.data is None:
+            raise RuntimeError("Nothing to memorize — manifest has no blueprint.")
 
-        all_entries = list(self._iter_resolved_entries())
+        pool_kwargs = Manifest._build_pool_kwargs(pool_nickname, pool_id)
+        all_future_ids: list[str] = []
+        policy = laila.get_active_policy()
 
-        pool_kwargs = self._pool_kwargs(pool_nickname, pool_id)
+        if self._pending_entries:
+            for i in range(0, len(self._pending_entries), batch_size):
+                batch = self._pending_entries[i : i + batch_size]
+                ref = laila.memorize(batch, **pool_kwargs)
+                all_future_ids.extend(Manifest._collect_future_ids(ref))
+            self._pending_entries = None
 
-        for i in range(0, len(all_entries), batch_size):
-            batch = all_entries[i : i + batch_size]
-            with laila.guarantee:
-                laila.memorize(batch, **pool_kwargs)
+        self_ref = laila.memorize(self, **pool_kwargs)
+        all_future_ids.extend(Manifest._collect_future_ids(self_ref))
 
-        self._blueprint = Manifest._extract_blueprint(self._resolved)
-
-        if memorize_self:
-            self_entry = Entry.constant(
-                data=copy.deepcopy(self._blueprint),
-                uuid=self._uuid,
-            )
-            with laila.guarantee:
-                laila.memorize(self_entry, **pool_kwargs)
-
+        return GroupFuture(
+            taskforce_id=policy.central.command.alpha_taskforce,
+            policy_id=policy.global_id,
+            future_ids=all_future_ids,
+        )
 
     def remember(
         self,
@@ -228,45 +184,46 @@ class Manifest(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         pool_nickname: Optional[str] = None,
         pool_id: Optional[str] = None,
         batch_size: int = 128,
-    ) -> None:
-        """Resolve all ``global_id`` strings in the blueprint to ``Entry`` objects.
+    ):
+        """Recall all referenced entries from the pool.
 
-        Collects every leaf ``global_id`` from ``_blueprint``, fetches them
-        from the pool in batches, and populates ``_resolved`` with the
-        recovered ``Entry`` instances in the same nested structure.
+        Collects every leaf ``global_id`` from the blueprint, fetches them
+        in batches via ``laila.remember()``.
 
         Parameters
         ----------
         pool_nickname : str, optional
-            Pool alias to read from.
+            Pool alias to read from.  Defaults to the alpha pool.
         pool_id : str, optional
-            Explicit pool ``global_id``.
+            Explicit pool ``global_id``.  Defaults to the alpha pool.
         batch_size : int
             Maximum entries per recall batch.
+
+        Returns
+        -------
+        GroupFuture
+            Child futures resolve to the recalled ``Entry`` objects.
         """
         import laila
+        from ...command.schema.future.future.group_future import GroupFuture
 
-        if self._blueprint is None:
+        if self.data is None:
             raise RuntimeError("No blueprint to resolve — manifest is empty.")
 
+        pool_kwargs = Manifest._build_pool_kwargs(pool_nickname, pool_id)
         all_gids = list(self)
-        pool_kwargs = self._pool_kwargs(pool_nickname, pool_id)
-
-        resolved_map: dict[str, Any] = {}
+        all_future_ids: list[str] = []
+        policy = laila.get_active_policy()
 
         for i in range(0, len(all_gids), batch_size):
             batch = all_gids[i : i + batch_size]
-            with laila.guarantee:
-                ref = laila.remember(batch, **pool_kwargs)
-            if ref is not None:
-                results = ref.wait()
-                if not isinstance(results, list):
-                    results = [results]
-                for gid, entry in zip(batch, results):
-                    resolved_map[gid] = entry
+            ref = laila.remember(batch, **pool_kwargs)
+            all_future_ids.extend(Manifest._collect_future_ids(ref))
 
-        self._resolved = Manifest._rebuild_with_entries(
-            self._blueprint, resolved_map
+        return GroupFuture(
+            taskforce_id=policy.central.command.alpha_taskforce,
+            policy_id=policy.global_id,
+            future_ids=all_future_ids,
         )
 
     def forget(
@@ -275,41 +232,67 @@ class Manifest(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         pool_nickname: Optional[str] = None,
         pool_id: Optional[str] = None,
         batch_size: int = 128,
-        forget_self: bool = True,
-    ) -> None:
-        """Delete all referenced entries (and optionally the manifest itself) from the pool.
+    ):
+        """Delete all referenced entries and the manifest itself from the pool.
+
+        Collects every leaf ``global_id`` plus the manifest's own
+        ``global_id``, deletes them in batches via ``laila.forget()``.
 
         Parameters
         ----------
         pool_nickname : str, optional
-            Pool alias to delete from.
+            Pool alias to delete from.  Defaults to the alpha pool.
         pool_id : str, optional
-            Explicit pool ``global_id``.
+            Explicit pool ``global_id``.  Defaults to the alpha pool.
         batch_size : int
             Maximum entries per deletion batch.
-        forget_self : bool
-            If ``True``, also delete the manifest's own stored blueprint entry.
+
+        Returns
+        -------
+        GroupFuture
+            Tracks all deletions (leaf entries + manifest itself).
         """
         import laila
+        from ...command.schema.future.future.group_future import GroupFuture
 
-        if self._blueprint is None:
+        if self.data is None:
             raise RuntimeError("No blueprint — nothing to forget.")
 
+        pool_kwargs = Manifest._build_pool_kwargs(pool_nickname, pool_id)
         all_gids = list(self)
-        pool_kwargs = self._pool_kwargs(pool_nickname, pool_id)
+        all_future_ids: list[str] = []
+        policy = laila.get_active_policy()
 
         for i in range(0, len(all_gids), batch_size):
             batch = all_gids[i : i + batch_size]
-            with laila.guarantee:
-                laila.forget(batch, **pool_kwargs)
+            ref = laila.forget(batch, **pool_kwargs)
+            all_future_ids.extend(Manifest._collect_future_ids(ref))
 
-        if forget_self:
-            self_entry_gid = _LAILA_IDENTIFIABLE_OBJECT.to_global_id(
-                uuid=self._uuid,
-                scopes=[_ENTRY_SCOPE],
-            )
-            with laila.guarantee:
-                laila.forget(self_entry_gid, **pool_kwargs)
+        self_ref = laila.forget(self.global_id, **pool_kwargs)
+        all_future_ids.extend(Manifest._collect_future_ids(self_ref))
+
+        return GroupFuture(
+            taskforce_id=policy.central.command.alpha_taskforce,
+            policy_id=policy.global_id,
+            future_ids=all_future_ids,
+        )
+
+    # ------------------------------------------------------------------
+    # Serialization override
+    # ------------------------------------------------------------------
+
+    def serialize(
+        self,
+        transformations=None,
+        *,
+        exclude_private=None,
+    ):
+        """Serialize the manifest, excluding transient ``_pending_entries``."""
+        if exclude_private is None:
+            exclude_private = {"_local_lock", "_payload", "_state", "_pending_entries"}
+        return Entry.serialize(
+            self, transformations, exclude_private=exclude_private
+        )
 
     # ------------------------------------------------------------------
     # Mapping-like API  (top-level blueprint keys for dict(manifest))
@@ -317,33 +300,33 @@ class Manifest(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
 
     def keys(self):
         """Top-level blueprint keys."""
-        if self._blueprint is None:
+        if self.data is None:
             return {}.keys()
-        return self._blueprint.keys()
+        return self.data.keys()
 
     def values(self):
         """Top-level blueprint values."""
-        if self._blueprint is None:
+        if self.data is None:
             return {}.values()
-        return self._blueprint.values()
+        return self.data.values()
 
     def items(self):
         """Top-level blueprint items."""
-        if self._blueprint is None:
+        if self.data is None:
             return {}.items()
-        return self._blueprint.items()
+        return self.data.items()
 
     def __getitem__(self, key: str) -> Any:
         """Look up a top-level key in the blueprint."""
-        if self._blueprint is None:
+        if self.data is None:
             raise KeyError(key)
-        return self._blueprint[key]
+        return self.data[key]
 
     def __len__(self) -> int:
         """Number of top-level keys in the blueprint."""
-        if self._blueprint is None:
+        if self.data is None:
             return 0
-        return len(self._blueprint)
+        return len(self.data)
 
     # ------------------------------------------------------------------
     # Iteration / containment  (flattened global_id leaves)
@@ -351,9 +334,9 @@ class Manifest(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
 
     def __iter__(self) -> Iterator[str]:
         """Yield every ``global_id`` string via a depth-first, insertion-order walk."""
-        if self._blueprint is None:
+        if self.data is None:
             return
-        yield from Manifest._iter_global_ids(self._blueprint)
+        yield from Manifest._iter_global_ids(self.data)
 
     def __contains__(self, global_id: object) -> bool:
         """Return ``True`` if *global_id* appears anywhere in the blueprint leaves."""
@@ -376,44 +359,71 @@ class Manifest(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         return f"Manifest({self.global_id}, entries={n})"
 
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Static / class helpers
     # ------------------------------------------------------------------
 
-    def _pool_kwargs(
-        self,
+    @staticmethod
+    def _collect_future_ids(ref) -> list[str]:
+        """Extract future IDs from a GroupFuture or a single future identity."""
+        if ref is None:
+            return []
+        if hasattr(ref, "future_ids"):
+            return list(ref.future_ids)
+        return [ref.global_id]
+
+    @staticmethod
+    def _build_pool_kwargs(
         pool_nickname: Optional[str] = None,
         pool_id: Optional[str] = None,
     ) -> dict[str, str]:
         """Build keyword arguments for pool routing."""
-        pn = pool_nickname or self._pool_nickname
-        pid = pool_id or self._pool_id
         kwargs: dict[str, str] = {}
-        if pn is not None:
-            kwargs["pool_nickname"] = pn
-        if pid is not None:
-            kwargs["pool_id"] = pid
+        if pool_nickname is not None:
+            kwargs["pool_nickname"] = pool_nickname
+        if pool_id is not None:
+            kwargs["pool_id"] = pool_id
         return kwargs
 
-    def _iter_resolved_entries(self) -> Iterator:
-        """Yield every ``Entry`` object from ``_resolved``."""
-        from .....entry import Entry
+    @staticmethod
+    def _classify_data(data: dict) -> tuple[bool, bool]:
+        """Return ``(has_entries, has_strings)`` for leaf values in *data*."""
+        from .....entry import Entry as _Entry
 
-        def _walk(node: Any) -> Iterator:
-            if isinstance(node, Entry):
-                yield node
-            elif isinstance(node, list):
-                for item in node:
-                    yield from _walk(item)
-            elif isinstance(node, dict):
-                for v in node.values():
-                    yield from _walk(v)
+        has_entries = False
+        has_strings = False
 
-        if self._resolved is not None:
-            yield from _walk(self._resolved)
+        def _check(val: Any) -> None:
+            nonlocal has_entries, has_strings
+            if isinstance(val, _Entry):
+                has_entries = True
+            elif isinstance(val, str):
+                has_strings = True
+            elif isinstance(val, list):
+                for item in val:
+                    _check(item)
+            elif isinstance(val, dict):
+                for v in val.values():
+                    _check(v)
 
-    # ------------------------------------------------------------------
-    # Static helpers
-    # ------------------------------------------------------------------
+        for v in data.values():
+            _check(v)
+
+        return has_entries, has_strings
+
+    @staticmethod
+    def _iter_entries(data: dict) -> Iterator:
+        """Yield every ``Entry`` object from a nested dict."""
+        from .....entry import Entry as _Entry
+
+        for val in data.values():
+            if isinstance(val, _Entry):
+                yield val
+            elif isinstance(val, list):
+                for item in val:
+                    if isinstance(item, _Entry):
+                        yield item
+            elif isinstance(val, dict):
+                yield from Manifest._iter_entries(val)
 
     @staticmethod
     def _validate_blueprint(data: Any) -> None:
@@ -445,17 +455,17 @@ class Manifest(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
     @staticmethod
     def _extract_blueprint(data: dict) -> dict:
         """Convert a dict of ``Entry`` objects to a blueprint of ``global_id`` strings."""
-        from .....entry import Entry
+        from .....entry import Entry as _Entry
 
         result: dict[str, Any] = {}
         for key, val in data.items():
-            if isinstance(val, Entry):
+            if isinstance(val, _Entry):
                 result[key] = val.global_id
             elif isinstance(val, str):
                 result[key] = val
             elif isinstance(val, list):
                 result[key] = [
-                    item.global_id if isinstance(item, Entry) else item
+                    item.global_id if isinstance(item, _Entry) else item
                     for item in val
                 ]
             elif isinstance(val, dict):
