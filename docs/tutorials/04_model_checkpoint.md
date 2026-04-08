@@ -25,7 +25,7 @@ s3_pool = S3Pool(
     region_name=laila.args.AWS_REGION,
     nickname="ckpt_pool",
 )
-laila.memory.add_pool(s3_pool, pool_nickname="ckpt")
+laila.memory.extend(s3_pool, pool_nickname="ckpt")
 ```
 
 ## Step 1: Define a model and optimizer

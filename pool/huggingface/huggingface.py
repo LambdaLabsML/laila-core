@@ -76,7 +76,7 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
         """Release the API handle."""
         self._api = None
 
-    def __getitem__(self, key: str) -> Optional[Any]:
+    def _read(self, key: str) -> Optional[Any]:
         """Download and parse the JSON file for *key*, or return ``None``."""
         with self.atomic():
             try:
@@ -93,7 +93,7 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
             except EntryNotFoundError:
                 return None
 
-    def __setitem__(self, key: str, entry: Any) -> None:
+    def _write(self, key: str, entry: Any) -> None:
         """Upload *entry* as a JSON file to the Hub repo."""
         value = entry
         if isinstance(value, dict):
@@ -111,7 +111,7 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
                 commit_message=f"laila: set {key}",
             )
 
-    def __delitem__(self, key: str) -> None:
+    def _delete(self, key: str) -> None:
         """Delete the file for *key* from the Hub repo; no-op if absent."""
         with self.atomic():
             try:
@@ -125,13 +125,13 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
             except EntryNotFoundError:
                 pass
 
-    def empty(self) -> None:
+    def _empty(self) -> None:
         """Remove all entries from the pool."""
         with self.atomic():
-            for key in list(self.keys(as_generator=False)):
-                del self[key]
+            for key in list(self._keys(as_generator=False)):
+                self._delete(key)
 
-    def exists(self, key: str) -> bool:
+    def _exists(self, key: str) -> bool:
         """Return ``True`` if *key* exists in the Hub repo."""
         with self.atomic():
             try:
@@ -147,10 +147,10 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
                 return False
 
     def __contains__(self, key: str) -> bool:
-        """Check membership, delegates to :meth:`exists`."""
-        return self.exists(key)
+        """Check membership, delegates to :meth:`_exists`."""
+        return self._exists(key)
 
-    def keys(self, as_generator: bool = False) -> Iterable[str]:
+    def _keys(self, as_generator: bool = False) -> Iterable[str]:
         """Return all keys in the Hub repo under the configured prefix.
 
         Parameters

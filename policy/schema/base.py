@@ -55,7 +55,7 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
         self.central.communication._local_policy = self
 
 
-    def add_pool(self, new_pool: _LAILA_IDENTIFIABLE_POOL) -> None:
+    def extend(self, new_pool: _LAILA_IDENTIFIABLE_POOL) -> None:
         """Add a MemoryPool instance to the central memory registry."""
         self.central.memory[new_pool.pool_id] = new_pool
     

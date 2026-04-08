@@ -81,13 +81,13 @@ class HDF5Pool(_LAILA_IDENTIFIABLE_POOL):
             self._file = None
 
     # ---------------- mapping API ----------------
-    def __getitem__(self, key: str) -> Optional[Any]:
+    def _read(self, key: str) -> Optional[Any]:
         """Retrieve the JSON value for *key*, or ``None`` if absent."""
         with self.atomic():
             raw = self._read_raw(key)
         return json.loads(raw) if raw is not None else None
 
-    def __setitem__(self, key: str, entry: Any) -> None:
+    def _write(self, key: str, entry: Any) -> None:
         """Store *entry* as a UTF-8 HDF5 dataset under *key*."""
         value = entry
         if isinstance(value, dict):
@@ -103,7 +103,7 @@ class HDF5Pool(_LAILA_IDENTIFIABLE_POOL):
             dt = h5py.string_dtype(encoding="utf-8")
             root.create_dataset(skey, data=value, dtype=dt)
 
-    def __delitem__(self, key: str) -> None:
+    def _delete(self, key: str) -> None:
         """Delete the dataset for *key* if it exists."""
         skey = self._storage_key(key)
         with self.atomic():
@@ -111,7 +111,7 @@ class HDF5Pool(_LAILA_IDENTIFIABLE_POOL):
             if skey in root:
                 del root[skey]
 
-    def empty(self) -> None:
+    def _empty(self) -> None:
         """Remove all entries from the pool."""
         if self._file is None:
             raise RuntimeError("HDF5Pool is closed.")
@@ -119,17 +119,17 @@ class HDF5Pool(_LAILA_IDENTIFIABLE_POOL):
             for name in list(self._file.keys()):
                 del self._file[name]
 
-    def exists(self, key: str) -> bool:
+    def _exists(self, key: str) -> bool:
         """Return ``True`` if a dataset for *key* exists."""
         skey = self._storage_key(key)
         with self.atomic():
             return skey in self._root()
 
     def __contains__(self, key: str) -> bool:
-        """Check membership, delegates to :meth:`exists`."""
-        return self.exists(key)
+        """Check membership, delegates to :meth:`_exists`."""
+        return self._exists(key)
 
-    def keys(self, as_generator: bool = False) -> Iterable[str]:
+    def _keys(self, as_generator: bool = False) -> Iterable[str]:
         """Return all keys in the HDF5 file.
 
         Parameters

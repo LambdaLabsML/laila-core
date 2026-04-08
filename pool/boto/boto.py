@@ -1,6 +1,7 @@
 """Abstract boto3-based S3-compatible pool implementation."""
 from __future__ import annotations
 
+import time
 from typing import Optional, Any, Iterable, Iterator
 from pydantic import Field, PrivateAttr
 from urllib.parse import quote, unquote
@@ -29,6 +30,7 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
     """
 
     bucket_name: str = Field(...)
+    max_req_per_second: Optional[float] = Field(default=None)
     transformations: Optional[TransformationSequence] = Field(default=transformation_base64)
 
     _client: Any = PrivateAttr(default=None)
@@ -56,13 +58,19 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
         """Decode an S3 object key back to the logical key."""
         return unquote(object_key)
 
+    def _throttle(self) -> None:
+        """Sleep to enforce the per-pool request rate cap."""
+        if self.max_req_per_second is not None:
+            time.sleep(1.0 / self.max_req_per_second)
+
     def close(self) -> None:
         """Release the boto3 client."""
         self._client = None
 
-    def __getitem__(self, key: str) -> Optional[Any]:
+    def _read(self, key: str) -> Optional[Any]:
         """Retrieve the JSON value for *key*, or ``None`` if absent."""
         with self.atomic():
+            self._throttle()
             try:
                 resp = self._get_client().get_object(
                     Bucket=self.bucket_name,
@@ -75,7 +83,7 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
                     return None
                 raise
 
-    def __setitem__(self, key: str, entry: Any) -> None:
+    def _write(self, key: str, entry: Any) -> None:
         """Store *entry* as a JSON object under *key*."""
         value = entry
         if isinstance(value, dict):
@@ -84,6 +92,7 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
             raise TypeError(f"{type(self).__name__} expects a serialized JSON string.")
 
         with self.atomic():
+            self._throttle()
             self._get_client().put_object(
                 Bucket=self.bucket_name,
                 Key=self._object_key(key),
@@ -91,28 +100,31 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
                 ContentType="application/json",
             )
 
-    def __delitem__(self, key: str) -> None:
+    def _delete(self, key: str) -> None:
         """Delete the object for *key*."""
         with self.atomic():
+            self._throttle()
             self._get_client().delete_object(
                 Bucket=self.bucket_name,
                 Key=self._object_key(key),
             )
 
-    def empty(self) -> None:
+    def _empty(self) -> None:
         """Remove all entries from the pool."""
         paginator = self._get_client().get_paginator("list_objects_v2")
         with self.atomic():
             for page in paginator.paginate(Bucket=self.bucket_name):
                 for obj in page.get("Contents", []):
+                    self._throttle()
                     self._get_client().delete_object(
                         Bucket=self.bucket_name,
                         Key=obj["Key"],
                     )
 
-    def exists(self, key: str) -> bool:
+    def _exists(self, key: str) -> bool:
         """Return ``True`` if *key* exists in the bucket."""
         with self.atomic():
+            self._throttle()
             try:
                 self._get_client().head_object(
                     Bucket=self.bucket_name,
@@ -123,10 +135,10 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
                 return False
 
     def __contains__(self, key: str) -> bool:
-        """Check membership, delegates to :meth:`exists`."""
-        return self.exists(key)
+        """Check membership, delegates to :meth:`_exists`."""
+        return self._exists(key)
 
-    def keys(self, as_generator: bool = False) -> Iterable[str]:
+    def _keys(self, as_generator: bool = False) -> Iterable[str]:
         """Return all keys in the bucket.
 
         Parameters

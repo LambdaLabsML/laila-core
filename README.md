@@ -25,7 +25,7 @@ pool = S3Pool(
 )
 
 # 2. Register the pool with LAILA's memory system
-laila.memory.add_pool(pool, pool_nickname="my_pool")
+laila.memory.extend(pool, pool_nickname="my_pool")
 
 # 3. Wrap your data in an Entry
 entry = laila.constant(data=np.random.randn(10, 10), nickname="my_matrix")

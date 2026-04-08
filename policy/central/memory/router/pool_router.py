@@ -29,14 +29,14 @@ class _LAILA_IDENTIFIABLE_POOL_ROUTER(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIA
         """Register a default pool when none are provided."""
         if len(self.pools) == 0:
             from .....macros.defaults import DefaultPool
-            self.add_pool(
+            self.extend(
                 pool = DefaultPool(), 
                 affinity=1,
                 pool_nickname=_DEFAULT_POOL_NICKNAME
             )
 
 
-    def add_pool(
+    def extend(
         self,
         pool: _LAILA_IDENTIFIABLE_POOL,
         *,

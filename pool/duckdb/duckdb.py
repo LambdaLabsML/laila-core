@@ -72,7 +72,7 @@ class DuckDBPool(_LAILA_IDENTIFIABLE_POOL):
             self._conn.close()
             self._conn = None
 
-    def __getitem__(self, key: str) -> Optional[Any]:
+    def _read(self, key: str) -> Optional[Any]:
         """Retrieve the JSON value for *key*, or ``None`` if absent."""
         with self.atomic():
             row = self._connection().execute(
@@ -81,7 +81,7 @@ class DuckDBPool(_LAILA_IDENTIFIABLE_POOL):
             ).fetchone()
         return json.loads(row[0]) if row is not None else None
 
-    def __setitem__(self, key: str, entry: Any) -> None:
+    def _write(self, key: str, entry: Any) -> None:
         """Insert or update *entry* under *key*."""
         value = entry
         if isinstance(value, dict):
@@ -99,7 +99,7 @@ class DuckDBPool(_LAILA_IDENTIFIABLE_POOL):
                 [key, value],
             )
 
-    def __delitem__(self, key: str) -> None:
+    def _delete(self, key: str) -> None:
         """Delete the row for *key*."""
         with self.atomic():
             self._connection().execute(
@@ -107,12 +107,12 @@ class DuckDBPool(_LAILA_IDENTIFIABLE_POOL):
                 [key],
             )
 
-    def empty(self) -> None:
+    def _empty(self) -> None:
         """Remove all entries from the pool."""
         with self.atomic():
             self._connection().execute("DELETE FROM laila_pool_entries")
 
-    def exists(self, key: str) -> bool:
+    def _exists(self, key: str) -> bool:
         """Return ``True`` if *key* is present."""
         with self.atomic():
             row = self._connection().execute(
@@ -122,10 +122,10 @@ class DuckDBPool(_LAILA_IDENTIFIABLE_POOL):
             return row is not None
 
     def __contains__(self, key: str) -> bool:
-        """Check membership, delegates to :meth:`exists`."""
-        return self.exists(key)
+        """Check membership, delegates to :meth:`_exists`."""
+        return self._exists(key)
 
-    def keys(self, as_generator: bool = False) -> Iterable[str]:
+    def _keys(self, as_generator: bool = False) -> Iterable[str]:
         """Return all keys in the pool.
 
         Parameters

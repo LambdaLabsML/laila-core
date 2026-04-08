@@ -35,7 +35,7 @@ pool = S3Pool(
     nickname="my_pool",
 )
 
-laila.memory.add_pool(pool, pool_nickname="my_pool")
+laila.memory.extend(pool, pool_nickname="my_pool")
 
 entry = laila.constant(data=np.random.randn(10, 10), nickname="my_matrix")
 

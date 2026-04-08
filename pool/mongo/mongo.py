@@ -204,13 +204,13 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
                     proc.wait(timeout=2.0)
         self._owns_local_server = False
 
-    def __getitem__(self, key: str) -> Optional[Any]:
+    def _read(self, key: str) -> Optional[Any]:
         """Retrieve the JSON value for *key*, or ``None`` if absent."""
         with self.atomic():
             doc = self._collection().find_one({"key": key}, {"_id": 0, "value": 1})
         return json.loads(doc["value"]) if doc is not None else None
 
-    def __setitem__(self, key: str, entry: Any) -> None:
+    def _write(self, key: str, entry: Any) -> None:
         """Upsert *entry* under *key*."""
         value = entry
         if isinstance(value, dict):
@@ -225,26 +225,26 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
                 upsert=True,
             )
 
-    def __delitem__(self, key: str) -> None:
+    def _delete(self, key: str) -> None:
         """Delete the document for *key*."""
         with self.atomic():
             self._collection().delete_one({"key": key})
 
-    def empty(self) -> None:
+    def _empty(self) -> None:
         """Remove all documents from the entries collection."""
         with self.atomic():
             self._collection().delete_many({})
 
-    def exists(self, key: str) -> bool:
+    def _exists(self, key: str) -> bool:
         """Return ``True`` if a document for *key* exists."""
         with self.atomic():
             return self._collection().count_documents({"key": key}, limit=1) > 0
 
     def __contains__(self, key: str) -> bool:
-        """Check membership, delegates to :meth:`exists`."""
-        return self.exists(key)
+        """Check membership, delegates to :meth:`_exists`."""
+        return self._exists(key)
 
-    def keys(self, as_generator: bool = False) -> Iterable[str]:
+    def _keys(self, as_generator: bool = False) -> Iterable[str]:
         """Return all keys in the collection.
 
         Parameters

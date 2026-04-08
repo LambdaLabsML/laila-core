@@ -79,7 +79,7 @@ class GCSPool(_LAILA_IDENTIFIABLE_POOL):
         self._client = None
         self._bucket = None
 
-    def __getitem__(self, key: str) -> Optional[Any]:
+    def _read(self, key: str) -> Optional[Any]:
         """Retrieve the JSON value for *key*, or ``None`` if absent."""
         with self.atomic():
             blob = self._get_bucket().blob(self._object_key(key))
@@ -89,7 +89,7 @@ class GCSPool(_LAILA_IDENTIFIABLE_POOL):
                 return None
         return json.loads(raw)
 
-    def __setitem__(self, key: str, entry: Any) -> None:
+    def _write(self, key: str, entry: Any) -> None:
         """Store *entry* as a JSON blob under *key*."""
         value = entry
         if isinstance(value, dict):
@@ -101,7 +101,7 @@ class GCSPool(_LAILA_IDENTIFIABLE_POOL):
             blob = self._get_bucket().blob(self._object_key(key))
             blob.upload_from_string(value, content_type="application/json")
 
-    def __delitem__(self, key: str) -> None:
+    def _delete(self, key: str) -> None:
         """Delete the blob for *key*; no-op if absent."""
         with self.atomic():
             blob = self._get_bucket().blob(self._object_key(key))
@@ -110,24 +110,24 @@ class GCSPool(_LAILA_IDENTIFIABLE_POOL):
             except NotFound:
                 return
 
-    def empty(self) -> None:
+    def _empty(self) -> None:
         """Remove all blobs from the bucket."""
         with self.atomic():
             blobs = list(self._get_client().list_blobs(self.bucket_name))
             for blob in blobs:
                 blob.delete()
 
-    def exists(self, key: str) -> bool:
+    def _exists(self, key: str) -> bool:
         """Return ``True`` if a blob for *key* exists."""
         with self.atomic():
             blob = self._get_bucket().blob(self._object_key(key))
             return bool(blob.exists(self._get_client()))
 
     def __contains__(self, key: str) -> bool:
-        """Check membership, delegates to :meth:`exists`."""
-        return self.exists(key)
+        """Check membership, delegates to :meth:`_exists`."""
+        return self._exists(key)
 
-    def keys(self, as_generator: bool = False) -> Iterable[str]:
+    def _keys(self, as_generator: bool = False) -> Iterable[str]:
         """Return all keys in the bucket.
 
         Parameters

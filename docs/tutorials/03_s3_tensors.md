@@ -43,7 +43,7 @@ s3_pool = S3Pool(
     nickname="s3",
 )
 
-laila.memory.add_pool(s3_pool, pool_nickname="s3")
+laila.memory.extend(s3_pool, pool_nickname="s3")
 ```
 
 ## Storing a numpy array

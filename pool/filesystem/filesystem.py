@@ -160,7 +160,7 @@ class FilesystemPool(_LAILA_IDENTIFIABLE_POOL):
         """Full filesystem path for the given entry key."""
         return os.path.join(self.mount_dir, self._storage_key(key))
 
-    def __getitem__(self, key: str) -> Optional[Any]:
+    def _read(self, key: str) -> Optional[Any]:
         """Read and parse the JSON file for *key*, or return ``None``."""
         path = self._entry_path(key)
         if not os.path.exists(path):
@@ -175,7 +175,7 @@ class FilesystemPool(_LAILA_IDENTIFIABLE_POOL):
             return None
         return json.loads(raw)
 
-    def __setitem__(self, key: str, entry: Any) -> None:
+    def _write(self, key: str, entry: Any) -> None:
         """Write *entry* as a JSON file under *key*."""
         value = entry
         if isinstance(value, dict):
@@ -188,14 +188,14 @@ class FilesystemPool(_LAILA_IDENTIFIABLE_POOL):
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(value)
 
-    def __delitem__(self, key: str) -> None:
+    def _delete(self, key: str) -> None:
         """Remove the JSON file for *key*; no-op if absent."""
         path = self._entry_path(key)
         with self.atomic():
             with suppress(FileNotFoundError):
                 os.remove(path)
 
-    def empty(self) -> None:
+    def _empty(self) -> None:
         """Remove all ``.json`` files from the mount directory."""
         with self.atomic():
             for name in os.listdir(self.mount_dir):
@@ -204,15 +204,15 @@ class FilesystemPool(_LAILA_IDENTIFIABLE_POOL):
                 with suppress(FileNotFoundError):
                     os.remove(os.path.join(self.mount_dir, name))
 
-    def exists(self, key: str) -> bool:
+    def _exists(self, key: str) -> bool:
         """Return ``True`` if a file for *key* exists on disk."""
         return os.path.exists(self._entry_path(key))
 
     def __contains__(self, key: str) -> bool:
-        """Check membership, delegates to :meth:`exists`."""
-        return self.exists(key)
+        """Check membership, delegates to :meth:`_exists`."""
+        return self._exists(key)
 
-    def keys(self, as_generator: bool = False) -> Iterable[str]:
+    def _keys(self, as_generator: bool = False) -> Iterable[str]:
         """Return all keys in the mount directory.
 
         Parameters

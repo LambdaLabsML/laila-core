@@ -93,7 +93,7 @@ def activate_policy(policy):
 class _LailaModule(types.ModuleType):
     """Module subclass that exposes subsystem shortcuts and property-based
     access so that ``laila.active_policy = my_policy`` and
-    ``laila.memory.add_pool(...)`` work naturally."""
+    ``laila.memory.extend(...)`` work naturally."""
 
     @property
     def active_policy(self):
@@ -169,7 +169,7 @@ def memorize(*args, **kwargs):
     pool_id : str, optional
         Explicit pool ``global_id`` to route to.
     pool_nickname : str, optional
-        Pool alias registered via ``add_pool``.
+        Pool alias registered via ``extend``.
     """
     return get_active_policy().central.memory.memorize(*args, **kwargs)
 
@@ -201,7 +201,7 @@ def remember(*args, **kwargs):
     pool_id : str, optional
         Explicit pool ``global_id`` to read from.
     pool_nickname : str, optional
-        Pool alias registered via ``add_pool``.
+        Pool alias registered via ``extend``.
     nickname : str, optional
         Convenience alias – converted to a deterministic ``global_id``.
     """
@@ -226,7 +226,7 @@ def forget(*args, **kwargs):
     pool_id : str, optional
         Explicit pool ``global_id`` to delete from.
     pool_nickname : str, optional
-        Pool alias registered via ``add_pool``.
+        Pool alias registered via ``extend``.
     nickname : str, optional
         Convenience alias – converted to a deterministic ``global_id``.
     """

@@ -108,6 +108,16 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
                 raise RuntimeError("Future is not associated with a native future.")
         return return_values
 
+    @property
+    def result(self) -> List[Any]:
+        """Collect results from all children without blocking.
+
+        Assumes every child has already completed (e.g. after a
+        ``laila.guarantee`` block).
+        """
+        children = self._resolve_children()
+        return [f.result for f in children]
+
     def __await__(self):
         """Await all children concurrently via ``asyncio.gather``."""
         async def _await_all():

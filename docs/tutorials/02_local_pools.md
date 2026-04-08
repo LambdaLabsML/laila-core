@@ -45,7 +45,7 @@ entry = laila.constant(data=np.random.randn(10, 10), nickname="tutorial_matrix")
 
 for nick, pool in pools:
     # Register the pool
-    laila.memory.add_pool(pool, pool_nickname=nick)
+    laila.memory.extend(pool, pool_nickname=nick)
 
     # Memorize (write)
     future = laila.memorize(entry, pool_nickname=nick)
@@ -91,7 +91,7 @@ Expected output:
 
 ## What just happened
 
-1. **`add_pool`** registered each backend under a nickname so `memorize` / `remember` know where to route.
+1. **`extend`** registered each backend under a nickname so `memorize` / `remember` know where to route.
 2. **`memorize`** serialized the entry, applied the pool's transformation sequence (base64 by default), and wrote it to the backend. It returned a future.
 3. **`wait`** blocked until the write completed.
 4. **`remember`** fetched the blob by `global_id`, reversed the transformations, and reconstructed the entry.

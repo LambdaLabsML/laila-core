@@ -216,7 +216,7 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
         return self.lock_prefix
 
 
-    def __getitem__(self, key: str) -> Optional[Any]:
+    def _read(self, key: str) -> Optional[Any]:
         """Retrieve the JSON value for *key*, or ``None`` if absent."""
         if self._client is None:
             raise RuntimeError("Redis client not initialized.")
@@ -224,7 +224,7 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
 
         return json.loads(value) if value is not None else None
 
-    def __setitem__(self, key: str, entry: Any) -> None:
+    def _write(self, key: str, entry: Any) -> None:
         """Store *entry* as a JSON string in the Redis hash."""
         value = entry
         if isinstance(value, dict):
@@ -235,29 +235,29 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
             raise TypeError("RedisPool expects a serialized JSON string.")
         self._client.hset(self.redis_hash_key, key, value)
 
-    def __delitem__(self, key: str) -> None:
+    def _delete(self, key: str) -> None:
         """Delete *key* from the Redis hash."""
         if self._client is None:
             raise RuntimeError("Redis client not initialized.")
         self._client.hdel(self.redis_hash_key, key)
 
-    def empty(self) -> None:
+    def _empty(self) -> None:
         """Remove all entries from the pool (deletes the Redis hash)."""
         if self._client is None:
             raise RuntimeError("Redis client not initialized.")
         self._client.delete(self.redis_hash_key)
 
-    def exists(self, key: str) -> bool:
+    def _exists(self, key: str) -> bool:
         """Return ``True`` if *key* exists in the Redis hash."""
         if self._client is None:
             raise RuntimeError("Redis client not initialized.")
         return bool(self._client.hexists(self.redis_hash_key, key))
 
     def __contains__(self, key: str) -> bool:
-        """Check membership, delegates to :meth:`exists`."""
-        return self.exists(key)
+        """Check membership, delegates to :meth:`_exists`."""
+        return self._exists(key)
 
-    def keys(self, as_generator: bool = False) -> Iterable[str]:
+    def _keys(self, as_generator: bool = False) -> Iterable[str]:
         """Return all keys in the Redis hash.
 
         Parameters

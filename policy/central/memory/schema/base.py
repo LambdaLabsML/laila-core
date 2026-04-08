@@ -42,15 +42,15 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             else:
                 from .....macros.defaults import DefaultPool
                 alpha = DefaultPool()
-                self.pool_router.add_pool(
+                self.pool_router.extend(
                     alpha, affinity=1, pool_nickname=_DEFAULT_POOL_NICKNAME
                 )
                 self.alpha_pool = alpha.global_id
 
     
-    def add_pool(self, pool: _LAILA_IDENTIFIABLE_POOL, *, affinity: Optional[float] = None, pool_nickname: Optional[str] = None):
+    def extend(self, pool: _LAILA_IDENTIFIABLE_POOL, *, affinity: Optional[float] = None, pool_nickname: Optional[str] = None):
         """Delegate pool registration to the pool router."""
-        self.pool_router.add_pool(pool, affinity=affinity, pool_nickname=pool_nickname)
+        self.pool_router.extend(pool, affinity=affinity, pool_nickname=pool_nickname)
 
     def _resolve_pool_ref(self, pool_ref: _LAILA_IDENTIFIABLE_POOL | str) -> _LAILA_IDENTIFIABLE_POOL:
         """Resolve a pool object, ID string, or nickname to a pool instance."""
