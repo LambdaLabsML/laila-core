@@ -118,6 +118,18 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
         children = self._resolve_children()
         return [f.result for f in children]
 
+    @property
+    def data(self) -> List[Any]:
+        """Return the unwrapped payload data from every child future.
+
+        Raises
+        ------
+        RuntimeError
+            If any child future's result is not an Entry instance.
+        """
+        children = self._resolve_children()
+        return [f.data for f in children]
+
     def __await__(self):
         """Await all children concurrently via ``asyncio.gather``."""
         async def _await_all():

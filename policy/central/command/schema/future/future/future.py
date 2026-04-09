@@ -106,6 +106,24 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
             self._result_global_id = wrapped.global_id
 
     @property
+    def data(self) -> Any:
+        """Return the unwrapped payload of the result Entry.
+
+        Raises
+        ------
+        RuntimeError
+            If the result is not an Entry instance.
+        """
+        from .......entry import Entry
+        result = self.result
+        if not isinstance(result, Entry):
+            raise RuntimeError(
+                f"Future result is not an Entry (got {type(result).__name__}); "
+                "cannot access .data"
+            )
+        return result.data
+
+    @property
     def exception(self) -> Optional[Exception]:
         """
         Return the current exception value.
@@ -165,6 +183,13 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
             precedence=self.precedence,
             purpose=self.purpose,
             uuid=self._uuid,
+        )
+
+    def wait(self, timeout: Optional[float] = None) -> Any:
+        """Block until the future completes.  Subclasses must override."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement wait(); "
+            "use a concrete subclass such as ConcurrentPackageFuture."
         )
 
     def finished(self) -> bool:
