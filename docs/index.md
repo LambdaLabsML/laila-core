@@ -2,7 +2,7 @@
 
 **Lambda's Interdisciplinary Large Atlas**
 
-LAILA is a Python platform for unifying training, simulation, and data management into a single computational workflow. It wraps heterogeneous storage backends (S3, GCS, Redis, HDF5, filesystem, and more) behind one consistent API so that memorizing data, recalling it, and orchestrating compute feels the same regardless of where things live.
+LAILA is a Python platform for unified data workflows. It wraps heterogeneous storage backends (S3, GCS, Redis, HDF5, filesystem, and more) behind one consistent API so that memorizing data, recalling it, and managing it feels the same regardless of where things live. Compute workflows will be added in later releases.
 
 ## Installation
 
