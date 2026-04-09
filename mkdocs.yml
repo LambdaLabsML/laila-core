@@ -52,6 +52,9 @@ nav:
     - 2. Local Pools: tutorials/02_local_pools.md
     - 3. S3 with Tensors: tutorials/03_s3_tensors.md
     - 4. Model Checkpoint: tutorials/04_model_checkpoint.md
+    - 5. Sentiment Dataset Manifest: tutorials/05_manifest_sentiment_dataset.md
+    - 6. Pool Proxies: tutorials/06_pool_proxies.md
+    - 7. Async Futures: tutorials/07_async_futures.md
   - API Reference: reference/
 
 markdown_extensions:

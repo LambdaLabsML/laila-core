@@ -36,17 +36,17 @@ Build a small sentiment-analysis dataset as LAILA entries, organise them under a
 
 **Requires:** `pip install "laila-core[s3]"` and a `secrets.toml` with AWS credentials.
 
-### 6. Async Operations with Futures — `06_async_futures.ipynb`
-
-Use Python's `async` / `await` with LAILA's futures to read numeric entries from S3, double each value, and write the results back without blocking the event loop. Covers three async patterns: awaiting a `GroupFuture` directly, awaiting individual futures via the future bank, and using `async with laila.guarantee_async:` to automatically track and await every future in scope.
-
-**Requires:** `pip install "laila-core[s3]"` and a `secrets.toml` with AWS credentials.
-
-### 7. Pool Proxies — Tiered Caching Across Backends — `07_pool_proxies.ipynb`
+### 6. Pool Proxies — Tiered Caching Across Backends — `06_pool_proxies.ipynb`
 
 Wire a multi-tier cache chain with a single `<<` expression: `laila.alpha_pool << hdf5_pool << s3_pool`. When you read a key from the top-level pool, the request cascades down the chain until it finds the data, then caches a copy in every intermediate layer on the way back up. Writes, deletes, and existence checks stay local — only reads propagate. Demonstrates the `<<` / `>>` operators, `proxy_to` property, detaching and reattaching proxies at runtime, and the performance benefit of cache hits.
 
 **Requires:** `pip install "laila-core[s3,hdf5]"` and a `secrets.toml` with AWS credentials.
+
+### 7. Async Operations with Futures — `07_async_futures.ipynb`
+
+Use Python's `async` / `await` with LAILA's futures to read numeric entries from S3, double each value, and write the results back without blocking the event loop. Covers three async patterns: awaiting a `GroupFuture` directly, awaiting individual futures via the future bank, and using `async with laila.guarantee_async:` to automatically track and await every future in scope.
+
+**Requires:** `pip install "laila-core[s3]"` and a `secrets.toml` with AWS credentials.
 
 ## Getting started
 
