@@ -32,6 +32,7 @@ plugins:
   - gen-files:
       scripts:
         - docs/gen_ref_pages.py
+        - docs/gen_tutorial_nav.py
   - literate-nav:
       nav_file: SUMMARY.md
   - mkdocstrings:
@@ -47,14 +48,7 @@ plugins:
 
 nav:
   - Home: index.md
-  - Tutorials:
-    - 1. Entries and Identity: tutorials/01_entries_and_identity.md
-    - 2. Local Pools: tutorials/02_local_pools.md
-    - 3. S3 with Tensors: tutorials/03_s3_tensors.md
-    - 4. Model Checkpoint: tutorials/04_model_checkpoint.md
-    - 5. Sentiment Dataset Manifest: tutorials/05_manifest_sentiment_dataset.md
-    - 6. Pool Proxies: tutorials/06_pool_proxies.md
-    - 7. Async Futures: tutorials/07_async_futures.md
+  - Tutorials: tutorials/
   - API Reference: reference/
 
 markdown_extensions:
