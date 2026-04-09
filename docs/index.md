@@ -27,6 +27,7 @@ import numpy as np
 import laila
 from laila.pool import S3Pool
 
+# Create a pool (any backend — S3, Redis, HDF5, filesystem, …)
 pool = S3Pool(
     bucket_name="your-bucket",
     access_key_id="YOUR_ACCESS_KEY_ID",
@@ -35,16 +36,29 @@ pool = S3Pool(
     nickname="my_pool",
 )
 
+# Register the pool with LAILA's memory system
 laila.memory.extend(pool, pool_nickname="my_pool")
 
+# Wrap your data in an Entry — a universal container with a unique global_id
 entry = laila.constant(data=np.random.randn(10, 10), nickname="my_matrix")
+entry_id = entry.global_id  # save the id before we lose the local reference
 
-future = laila.memorize(entry, pool_nickname="my_pool")
-laila.wait(future)
+# Memorize (write) to S3 — returns a future you can wait on
+future_memorize = laila.memorize(entry, pool_nickname="my_pool")
+laila.wait(future_memorize)
 
-recalled = laila.remember(entry.global_id, pool_nickname="my_pool")
-laila.wait(recalled)
-print(recalled.result.data)
+# Destroy local state — the only way to get the data back is through LAILA
+del entry
+
+# Remember (read) using just the global_id — reconstructs the entry from storage
+future_remember = laila.remember(entry_id, pool_nickname="my_pool")
+laila.wait(future_remember)
+
+# .data unwraps the entry and returns your original object
+# Same type that was memorized is remembered — no type casting or
+# serialization code needed. LAILA takes care of that.
+print(type(future_remember.data))  # <class 'numpy.ndarray'>
+print(future_remember.data)        # your numpy array, intact
 ```
 
 ## Core concepts
@@ -52,7 +66,7 @@ print(recalled.result.data)
 - **Entry** — an immutable (`constant`) or versioned (`variable`) container for any Python object. Each entry has a deterministic `global_id`.
 - **Pool** — a storage backend (S3, GCS, Azure, Redis, HDF5, filesystem, DuckDB, Postgres, MongoDB, Hugging Face Hub, SQLite).
 - **memorize / remember / forget** — the three core verbs: write, read, and delete entries from any registered pool.
-- **Future** — async operations return futures. Use `laila.status(future)`, `laila.wait(future)`, or access `.result` / `.exception` directly.
+- **Future** — async operations return futures. Use `laila.status(future)`, `laila.wait(future)`, `.data` to unwrap the result payload, or `.result` / `.exception` directly.
 
 ## Next steps
 

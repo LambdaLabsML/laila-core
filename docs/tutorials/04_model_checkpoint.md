@@ -138,7 +138,7 @@ manifest_future = laila.remember(
     pool_nickname="ckpt",
 )
 laila.wait(manifest_future)
-manifest_data = manifest_future.result.data
+manifest_data = manifest_future.data
 
 print(f"Model class: {manifest_data['model_class']}")
 print(f"Parameters: {list(manifest_data['model_params'].keys())}")
@@ -162,7 +162,7 @@ recalled_state_dict = {}
 for name, gid in manifest_data["model_params"].items():
     future = laila.remember(gid, pool_nickname="ckpt")
     laila.wait(future)
-    recalled_state_dict[name] = future.result.data
+    recalled_state_dict[name] = future.data
 
 model = SimpleCNN()
 model.load_state_dict(recalled_state_dict)
@@ -178,7 +178,7 @@ optim_future = laila.remember(manifest_data["optimizer"], pool_nickname="ckpt")
 laila.wait(optim_future)
 
 optimizer = torch.optim.Adam(model.parameters())
-optimizer.load_state_dict(optim_future.result.data)
+optimizer.load_state_dict(optim_future.data)
 
 print("Optimizer reconstructed from S3 ✓")
 ```

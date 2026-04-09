@@ -56,12 +56,12 @@ for nick, pool in pools:
     # Remember (read)
     recall_future = laila.remember(entry.global_id, pool_nickname=nick)
     laila.wait(recall_future)
-    recalled = recall_future.result
+    recalled_data = recall_future.data
 
-    print(f"[{nick}] remembered — data shape: {recalled.data.shape}")
+    print(f"[{nick}] remembered — data shape: {recalled_data.shape}")
 
     # Verify round-trip
-    assert np.array_equal(entry.data, recalled.data), f"Data mismatch on {nick}!"
+    assert np.array_equal(entry.data, recalled_data), f"Data mismatch on {nick}!"
     print(f"[{nick}] verified ✓")
 
     # Clean up

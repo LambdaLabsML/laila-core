@@ -110,7 +110,7 @@ manifest = Manifest(nickname=manifest_nickname)
 
 with laila.guarantee:
     ref = laila.remember(manifest.global_id, pool_nickname="sentiment_pool")
-blueprint = ref.result[0].data
+blueprint = ref.data[0]
 
 manifest = Manifest(data=blueprint, nickname=manifest_nickname)
 ```
@@ -121,8 +121,8 @@ Now remember all leaf entries:
 with laila.guarantee:
     remember_future = manifest.remember(pool_nickname="sentiment_pool")
 
-remembered_entries = remember_future.result
-entry_map = dict(zip(list(manifest), remembered_entries))
+remembered_data = remember_future.data
+data_map = dict(zip(list(manifest), remembered_data))
 ```
 
 ## Step 7: Inspect the remembered dataset
@@ -132,8 +132,8 @@ Walk the blueprint and print each datapoint:
 ```python
 for i in range(len(manifest.keys())):
     dp = manifest.blueprint[f"datapoint_{i}"]
-    text  = entry_map[dp["text_en_base"]].data
-    label = entry_map[dp["label_en_base"]].data
+    text  = data_map[dp["text_en_base"]]
+    label = data_map[dp["label_en_base"]]
     print(f"{i:<4} {label:<10} {text[:60]}")
 ```
 

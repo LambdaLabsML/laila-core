@@ -85,18 +85,18 @@ del matrix, np_entry, image_tensor, torch_entry
 # Recall numpy array
 np_future = laila.remember(np_gid, pool_nickname="s3")
 laila.wait(np_future)
-recalled_np = np_future.result
+recalled_np = np_future.data
 
-print(f"NumPy shape: {recalled_np.data.shape}")   # (100, 100)
-print(f"NumPy dtype: {recalled_np.data.dtype}")    # float64
+print(f"NumPy shape: {recalled_np.shape}")   # (100, 100)
+print(f"NumPy dtype: {recalled_np.dtype}")    # float64
 
 # Recall torch tensor
 torch_future = laila.remember(torch_gid, pool_nickname="s3")
 laila.wait(torch_future)
-recalled_torch = torch_future.result
+recalled_torch = torch_future.data
 
-print(f"Torch shape: {recalled_torch.data.shape}") # torch.Size([3, 224, 224])
-print(f"Torch dtype: {recalled_torch.data.dtype}")  # torch.float32
+print(f"Torch shape: {recalled_torch.shape}") # torch.Size([3, 224, 224])
+print(f"Torch dtype: {recalled_torch.dtype}")  # torch.float32
 ```
 
 ## Inspecting futures
