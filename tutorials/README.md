@@ -48,6 +48,32 @@ Use Python's `async` / `await` with LAILA's futures to read numeric entries from
 
 **Requires:** `pip install "laila-core[s3]"` and a `secrets.toml` with AWS credentials.
 
+## Intermediate — `02_intermediate/`
+
+### 8a. Saving the Environment to S3 — `08a_environment_to_s3.ipynb`
+
+Set up LAILA with an S3 pool and an HDF5 pool, inspect `laila.environment`, wrap the full configuration dict as a **Manifest**, and upload it to S3. Demonstrates how `laila.environment` captures every CLI-eligible field in the live policy — pool settings, routing, command parameters — as a JSON-serialisable dict, and how storing it as a manifest makes the setup recoverable from anywhere.
+
+**Requires:** `pip install "laila-core[s3,hdf5]"` and a `secrets.toml` with AWS credentials.
+
+### 8b. Recovering a Policy from a Manifest — `08b_policy_from_manifest.ipynb`
+
+Starting with nothing but S3 credentials, bootstrap a minimal policy, remember the environment manifest stored in **8a**, rebuild a fully-configured policy from the recovered dict, make it the active policy, and shut down the bootstrap policy. Shows how `laila.args = DotMap(env)` + `DefaultPolicy()` reconstructs the complete setup — including pools the bootstrap never registered.
+
+**Requires:** `pip install "laila-core[s3]"`, a `secrets.toml` with AWS credentials, and a completed run of **8a**.
+
+### 9. Peer-to-Peer Communication on Localhost — `09_peer_request_entry.ipynb`
+
+Create two policies on `127.0.0.1`, peer them over TCP, store an entry on each node, and show that either side can request the other's data by switching `active_policy` to a peer proxy. Demonstrates `DefaultTCPIPProtocol`, `add_tcpip_peer`, `laila.peers`, and symmetric bidirectional access.
+
+**No credentials or external services required.**
+
+### 10. Accessing S3 Through a Remote Peer — `10_peer_remote_s3.ipynb`
+
+Peer with a subprocess that holds AWS credentials and an S3 pool, morph into its policy via a proxy, and store / retrieve entries on S3 — all without local S3 access. Demonstrates how peering turns a remote node's storage into a transparent backend for the local process.
+
+**Requires:** `pip install "laila-core[s3]"` and a `secrets.toml` with AWS credentials.
+
 ## Getting started
 
 ```bash
