@@ -316,6 +316,35 @@ class Manifest(Entry):
             return {}.items()
         return self.data.items()
 
+    def sub_manifest(self, keys: list[str]) -> "Manifest":
+        """Return a new ``Manifest`` containing only the specified top-level keys.
+
+        Parameters
+        ----------
+        keys : list[str]
+            Top-level blueprint keys to include in the sub-manifest.
+
+        Returns
+        -------
+        Manifest
+            A new manifest whose blueprint is the subset of this manifest's
+            blueprint restricted to *keys*.
+
+        Raises
+        ------
+        RuntimeError
+            If the manifest has no blueprint.
+        KeyError
+            If any key in *keys* is not present in the blueprint.
+        """
+        if self.data is None:
+            raise RuntimeError("Cannot create sub-manifest — manifest is empty.")
+        missing = [k for k in keys if k not in self.data]
+        if missing:
+            raise KeyError(f"Keys not found in manifest: {missing}")
+        subset = {k: copy.deepcopy(self.data[k]) for k in keys}
+        return Manifest(data=subset)
+
     def __getitem__(self, key: str) -> Any:
         """Look up a top-level key in the blueprint."""
         if self.data is None:
