@@ -1,10 +1,10 @@
 # LAILA Tutorials
 
-A progressive series of hands-on Jupyter notebooks that walk you through LAILA's core concepts, from creating your first entry to checkpointing an entire PyTorch model on S3.
+A progressive series of hands-on Jupyter notebooks that walk you through LAILA's core concepts, from creating your first entry to peer-to-peer communication across processes.
 
 Each tutorial builds on the one before it. If you are new to LAILA, start at the top.
 
-## Tutorials
+## Basics — `01_basics/`
 
 ### 1. Entries and Identity — `01_entries_and_identity.ipynb`
 
@@ -18,19 +18,19 @@ Store and recall an entry across three local storage backends — **FilesystemPo
 
 **Requires:** `pip install "laila-core[redis,hdf5]"`
 
-### 3. S3 with NumPy and PyTorch Tensors — `03_s3_tensors.ipynb`
+### 3. S3 with NumPy and PyTorch Tensors — `03_remote_pools.ipynb`
 
 Move to cloud storage. Create an S3 pool, store a numpy matrix and a PyTorch tensor, delete the local references, then recall both objects purely by their `global_id`. This tutorial also introduces future inspection — checking status, reading exceptions, and using the future bank.
 
 **Requires:** `pip install "laila-core[s3,torch]"` and a `secrets.toml` with AWS credentials.
 
-### 4. Model Checkpoint and Reload — `04_model_checkpoint.ipynb`
+### 4. Model Checkpoint and Reload — `04_manifest_model_checkpoint.ipynb`
 
-The most advanced tutorial. Define a small CNN and an Adam optimizer, run a few training steps, then dump every weight tensor and the full optimizer state to S3 as individual entries. A single **manifest** entry ties them all together by mapping parameter names to `global_id` strings. After destroying all local state, you rebuild the entire model and optimizer from that one manifest — demonstrating how LAILA can serve as a checkpoint system backed by any storage pool.
+Define a small CNN and an Adam optimizer, run a few training steps, then dump every weight tensor and the full optimizer state to S3 as individual entries. A single **manifest** entry ties them all together by mapping parameter names to `global_id` strings. After destroying all local state, you rebuild the entire model and optimizer from that one manifest — demonstrating how LAILA can serve as a checkpoint system backed by any storage pool.
 
 **Requires:** `pip install "laila-core[s3,torch]"` and a `secrets.toml` with AWS credentials.
 
-### 5. Sentiment Analysis Dataset with a Manifest — `05_sentiment_dataset_manifest.ipynb`
+### 5. Sentiment Analysis Dataset with a Manifest — `05_manifest_sentiment_dataset.ipynb`
 
 Build a small sentiment-analysis dataset as LAILA entries, organise them under a **Manifest**, push everything to S3, then remember and inspect the dataset from scratch using only the manifest nickname. Demonstrates how `Manifest` batches `memorize` / `remember` / `forget` and stores a nested blueprint that maps datapoint keys to `global_id` strings.
 

@@ -106,4 +106,4 @@ The same four steps work for every pool LAILA supports — S3, GCS, Azure, Postg
 - The pool nickname is how you route data to a specific backend.
 - Round-trip integrity is guaranteed: what you memorize is exactly what you remember.
 
-Next: [Tutorial 3 — S3 with Tensors](03_s3_tensors.md), where you work with cloud storage and both numpy and PyTorch tensors.
+Next: [Tutorial 3 — S3 with Tensors](03_remote_pools.md), where you work with cloud storage and both numpy and PyTorch tensors.

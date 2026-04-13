@@ -12,7 +12,7 @@ Use Python's `async` / `await` to read numeric entries from S3, double each valu
 pip install "laila-core[s3]"
 ```
 
-You will need an AWS S3 bucket and credentials. Store them in a `secrets.toml` as described in [Tutorial 3](03_s3_tensors.md).
+You will need an AWS S3 bucket and credentials. Store them in a `secrets.toml` as described in [Tutorial 3](03_remote_pools.md).
 
 ## Setup
 
@@ -156,3 +156,5 @@ async with laila.guarantee_async:
 - `GroupFuture.__await__` uses `asyncio.gather` internally, so all children resolve concurrently.
 - `laila.status(future)` returns a percentage breakdown (`finished`, `running`, `error`, etc.) at any point.
 - This pattern generalises to any async data pipeline — transform, filter, enrich, or route entries without blocking.
+
+Next: [Tutorial 8a — Saving the Environment to S3](08a_environment_to_s3.md), where you capture and persist the full policy configuration as a manifest.

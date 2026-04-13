@@ -8,7 +8,7 @@ Build a small sentiment-analysis dataset as LAILA entries, organise them under a
 pip install "laila-core[s3]"
 ```
 
-You will need an AWS S3 bucket and credentials. Store them in a `secrets.toml` as described in [Tutorial 3](03_s3_tensors.md).
+You will need an AWS S3 bucket and credentials. Store them in a `secrets.toml` as described in [Tutorial 3](03_remote_pools.md).
 
 ## Setup
 
