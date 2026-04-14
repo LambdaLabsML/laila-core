@@ -86,6 +86,7 @@ packages = [
   "laila.basics",
   "laila.basics.definitions",
   "laila.entry",
+  "laila.entry.constitution",
   "laila.entry.compdata",
   "laila.entry.compdata.taxonomy",
   "laila.entry.compdata.transformation",

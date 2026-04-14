@@ -78,6 +78,6 @@ class Record(BaseModel):
         if isinstance (record, str):
             record=json.loads(record)
 
-        #TODO: from here on record has to be a dict
-        record["entry"] = Entry.recover(record["entry"])
+        from .....entry.constitution.recovery_maps import recover_by_scope
+        record["entry"] = recover_by_scope(record["entry"])
         return record

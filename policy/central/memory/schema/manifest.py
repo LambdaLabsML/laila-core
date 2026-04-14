@@ -16,6 +16,7 @@ from pydantic import PrivateAttr
 
 from .....entry import Entry
 from .....entry.entry_state import EntryState
+from .....entry.compdata import ComputationalData
 from .....macros.strings import _MANIFEST_SCOPE
 
 
@@ -90,35 +91,36 @@ class Manifest(Entry):
 
     @property
     def resolved(self) -> dict:
-        """Live-fetch all referenced entries from the alpha pool.
+        """Synchronously fetch all referenced entries through central memory.
 
-        Walks the blueprint, fetches each entry directly from the alpha
-        pool, and returns a nested dict of ``Entry`` objects mirroring
-        the blueprint structure.  No caching — each access re-fetches.
+        Walks the blueprint, recalls each entry via the memory layer's
+        ``remember`` path (routing, deserialization, etc.), and returns a
+        nested dict of ``Entry`` objects mirroring the blueprint structure.
+        No caching — each access re-fetches.
 
         Raises
         ------
         RuntimeError
             If the manifest has no blueprint.
         KeyError
-            If any referenced entry is missing from the alpha pool.
+            If any referenced entry is missing from the routed pool.
         """
         import laila
-        from ..record.record import Record
 
         if self.data is None:
             raise RuntimeError("No blueprint to resolve — manifest is empty.")
 
-        pool = laila.alpha_pool
-        resolved_map: dict[str, Any] = {}
+        all_gids = list(self)
+        if not all_gids:
+            return Manifest._rebuild_with_entries(self.data, {})
 
-        for gid in self:
-            blob = pool[gid]
-            if blob is None:
-                raise KeyError(f"Entry {gid} not found in the alpha pool")
-            recovered = Record.recover(blob)
-            resolved_map[gid] = recovered["entry"]
+        memory = laila.get_active_policy().central.memory
+        ref = memory.remember(entry_ids=all_gids)
+        results = ref.wait(None)
+        if not isinstance(results, list):
+            results = [results]
 
+        resolved_map = dict(zip(all_gids, results))
         return Manifest._rebuild_with_entries(self.data, resolved_map)
 
     # ------------------------------------------------------------------
@@ -293,6 +295,47 @@ class Manifest(Entry):
         return Entry.serialize(
             self, transformations, exclude_private=exclude_private
         )
+
+    @classmethod
+    def recover(cls, in_dict: dict, notify_on_creation=False):
+        """Reconstruct a Manifest from a serialised dict or JSON string.
+
+        Parameters
+        ----------
+        in_dict : dict or str or Manifest
+            Serialised representation produced by ``serialize()``, a JSON
+            string thereof, or an existing Manifest (returned as-is).
+        notify_on_creation : bool, optional
+            If ``True``, notify the active policy after construction.
+
+        Returns
+        -------
+        Manifest
+            The recovered Manifest instance.
+        """
+        import json
+
+        if isinstance(in_dict, Manifest):
+            return in_dict
+
+        if isinstance(in_dict, str):
+            try:
+                in_dict = json.loads(in_dict)
+            except Exception as e:
+                raise ValueError("Invalid JSON string") from e
+
+        if isinstance(in_dict, dict):
+            payload = ComputationalData.recover(
+                payload_blob=in_dict["transformed_payload"],
+                recovery_sequence=in_dict["recovery_sequence"],
+            )
+            blueprint = payload.data if payload is not None else None
+            return Manifest(
+                data=blueprint,
+                uuid=in_dict["_uuid"],
+            )
+
+        raise RuntimeError("Invalid input for manifest recovery.")
 
     # ------------------------------------------------------------------
     # Mapping-like API  (top-level blueprint keys for dict(manifest))
@@ -615,3 +658,7 @@ class Manifest(Entry):
             elif isinstance(val, dict):
                 result[key] = Manifest._rebuild_with_entries(val, resolved_map)
         return result
+
+
+from .....entry.constitution.recovery_maps import register_recovery
+register_recovery(_MANIFEST_SCOPE, Manifest.recover)

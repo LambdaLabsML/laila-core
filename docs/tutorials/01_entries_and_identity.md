@@ -77,22 +77,29 @@ The evolution suffix on the `global_id` lets LAILA track different versions of t
 
 ## Deterministic naming with nicknames
 
-If you pass a `nickname`, LAILA derives the UUID deterministically from that string. This means the same nickname always produces the same `global_id`:
+If you pass a `nickname`, LAILA derives the UUID deterministically from that string. The same nickname always generates the same UUID every time:
 
 ```python
 a = laila.constant(data="first", nickname="my_entry")
-b = laila.constant(data="second", nickname="my_entry")
+a_again = laila.constant(data="first", nickname="my_entry")
 
-print(a.global_id == b.global_id)  # True — same nickname, same identity
-print(a.data)   # "first"
-print(b.data)   # "second"
+print(a.uuid == a_again.uuid)  # True — same nickname, same UUID every time
 ```
 
-The two entries share the same identity (same `global_id`) but carry different data. When you memorize `b` to a pool, it overwrites `a` at that location because they have the same key. This is useful for giving stable, human-readable names to entries you want to recall later by nickname rather than by raw UUID.
+**Important:** because the UUID is derived solely from the nickname, creating a second entry with different data but the same nickname would clash with the first — avoid this:
+
+```python
+# Bad — clashes with a because the nickname is the same:
+# b = laila.constant(data="second", nickname="my_entry")
+```
+
+This makes nicknames useful for giving stable, human-readable names to entries you want to recall later rather than by raw UUID.
 
 ## Wrapping different data types
 
-`laila.constant` accepts any Python object that LAILA's serialization layer can handle — scalars, dicts, lists, numpy arrays, and torch tensors:
+`laila.constant` and `laila.variable` accept any Python object that LAILA's serialization layer can handle — scalars, dicts, lists, numpy arrays, and torch tensors.
+
+Whatever data format you put in is exactly what you get back. A `dict` comes back as a `dict`, a numpy array comes back as a numpy array, and a torch tensor comes back as a torch tensor.
 
 ```python
 import numpy as np

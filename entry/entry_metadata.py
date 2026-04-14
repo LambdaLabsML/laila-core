@@ -6,7 +6,7 @@ from typing import Optional, Any, Callable
 
 from ..basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from .entry_state import EntryState
-from .entry_constitution import EntryConstitution
+from .constitution.entry_constitution import EntryConstitution
 
 
 class EntryIdentityView(_LAILA_IDENTIFIABLE_OBJECT):

@@ -27,7 +27,7 @@ import time
 from .compdata import ComputationalData as ComputationalData
 from .entry_state import EntryState
 from .entry_metadata import EntryIdentityView, EntryHolisticView
-from .entry_constitution import EntryConstitution
+from .constitution.entry_constitution import EntryConstitution
 
 from ..macros.strings import _ENTRY_SCOPE
 from ..basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
@@ -85,6 +85,7 @@ class Entry(
         uuid = data.get("uuid", None)
         evolution = data.get("evolution", None)
         nickname = data.get("nickname", None)
+        scopes = data.get("scopes", None)
 
         if global_id is not None:
             identity_data = _LAILA_IDENTIFIABLE_OBJECT.process_global_id(global_id)
@@ -99,6 +100,9 @@ class Entry(
 
         if nickname is not None:
             identity_data["nickname"] = nickname
+
+        if scopes is not None:
+            identity_data["scopes"] = scopes
         
         _LAILA_IDENTIFIABLE_OBJECT.__init__(self, **identity_data)
 
@@ -499,6 +503,7 @@ class Entry(
                 uuid = in_dict["_uuid"],
                 evolution = in_dict["_evolution"],
                 constitution = in_dict["_constitution"],
+                scopes = in_dict.get("_scopes", None),
                 payload = ComputationalData.recover(
                     payload_blob = in_dict["transformed_payload"],
                     recovery_sequence = in_dict["recovery_sequence"]
@@ -527,3 +532,7 @@ class Entry(
     def __repr__(self):
         """Return the global identifier string."""
         return self.global_id
+
+
+from .constitution.recovery_maps import register_recovery
+register_recovery(_ENTRY_SCOPE, Entry.recover)

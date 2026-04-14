@@ -204,11 +204,11 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
     ):
         """Dispatch recording to batch or non-batch path based on pool capability."""
         if pool.batch_accelerated:
-            return self._batch_record(entries, pool)
+            return self._batch_accelerated_record(entries, pool)
         else:
-            return self._non_batch_record(entries, pool)
+            return self._parallel_individual_record(entries, pool)
 
-    def _non_batch_record(
+    def _parallel_individual_record(
         self,
         entries: Entry,
         pool: _LAILA_IDENTIFIABLE_POOL,
@@ -234,7 +234,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         return futures
 
 
-    def _batch_record(
+    def _batch_accelerated_record(
         self,
         entries: List[Entry],
         pool: _LAILA_IDENTIFIABLE_POOL,
@@ -277,12 +277,12 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         if borrow:
             raise NotImplementedError
         if pool.batch_accelerated:
-            return self._batch_fetch(entry_ids, pool=pool)
+            return self._batch_accelerated_fetch(entry_ids, pool=pool)
         else:
-            return self._non_batch_fetch(entry_ids, pool=pool)
+            return self._parallel_individual_fetch(entry_ids, pool=pool)
 
     
-    def _non_batch_fetch(
+    def _parallel_individual_fetch(
         self,
         entry_ids: List[str],
         *,
@@ -301,7 +301,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         )
         return futures
 
-    def _batch_fetch(
+    def _batch_accelerated_fetch(
         self,
         keys: List[str],
         *,
@@ -337,11 +337,11 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
     ):
         """Dispatch deletion to batch or non-batch path based on pool capability."""
         if pool.batch_accelerated:
-            return self._batch_delete(entry_ids, pool=pool)
+            return self._batch_accelerated_delete(entry_ids, pool=pool)
         else:
-            return self._non_batch_delete(entry_ids, pool=pool)
+            return self._parallel_individual_delete(entry_ids, pool=pool)
 
-    def _batch_delete(
+    def _batch_accelerated_delete(
         self,
         entry_ids: List[str],
         pool: _LAILA_IDENTIFIABLE_POOL,
@@ -350,7 +350,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         raise NotImplementedError
 
 
-    def _non_batch_delete(
+    def _parallel_individual_delete(
         self,
         entry_ids: List[str],
         pool: _LAILA_IDENTIFIABLE_POOL,

@@ -4,10 +4,10 @@ from typing import Callable, List, Optional, TYPE_CHECKING
 
 from pydantic import BaseModel, PrivateAttr
 
-from .compdata import ComputationalData
-from .entry_state import EntryState
+from ..compdata import ComputationalData
+from ..entry_state import EntryState
 if TYPE_CHECKING:
-    from .entry import Entry
+    from ..entry import Entry
 
 
 class EntryConstitution(BaseModel):
