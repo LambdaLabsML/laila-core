@@ -327,4 +327,5 @@ def set_default_directory(directory):
         "root": directory,
         "pools": os.path.join(directory, "pools"),
         "logs": os.path.join(directory, "logs"),
+        "secrets": os.path.join(directory, "secrets"),
     })

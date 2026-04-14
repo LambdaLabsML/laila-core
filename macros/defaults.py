@@ -34,4 +34,8 @@ LAILA_DEFAULT_DIRECTORIES = {
     "root": _DEFAULT_ROOT,
     "pools": os.path.join(_DEFAULT_ROOT, "pools"),
     "logs": os.path.join(_DEFAULT_ROOT, "logs"),
+    "secrets": os.path.join(_DEFAULT_ROOT, "secrets"),
 }
+
+for _dir in LAILA_DEFAULT_DIRECTORIES.values():
+    os.makedirs(_dir, exist_ok=True)

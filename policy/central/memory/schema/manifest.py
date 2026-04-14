@@ -345,6 +345,92 @@ class Manifest(Entry):
         subset = {k: copy.deepcopy(self.data[k]) for k in keys}
         return Manifest(data=subset)
 
+    def extend(self, other: "Manifest", *, overwrite: bool = False) -> None:
+        """Merge another manifest's blueprint into this one in-place.
+
+        Parameters
+        ----------
+        other : Manifest
+            The manifest whose top-level keys will be added.
+        overwrite : bool
+            If ``False`` (default), duplicate top-level keys raise
+            ``KeyError``.  If ``True``, *other*'s values silently replace
+            existing ones (like ``dict.update``).
+
+        Raises
+        ------
+        TypeError
+            If *other* is not a ``Manifest``.
+        KeyError
+            If *overwrite* is ``False`` and the blueprints share keys.
+        """
+        if not isinstance(other, Manifest):
+            raise TypeError(
+                f"extend() requires a Manifest, got {type(other).__name__}"
+            )
+        if other.data is None:
+            return
+
+        if self.data is None:
+            from .....entry.compdata.taxonomy.compdata import ComputationalData
+
+            self._payload = ComputationalData(copy.deepcopy(other.data))
+            self._state = EntryState.READY
+        else:
+            if not overwrite:
+                overlap = set(self.data) & set(other.data)
+                if overlap:
+                    raise KeyError(
+                        f"Duplicate top-level keys: {sorted(overlap)}"
+                    )
+            self.data.update(copy.deepcopy(other.data))
+
+        if other._pending_entries:
+            if self._pending_entries is None:
+                self._pending_entries = list(other._pending_entries)
+            else:
+                self._pending_entries.extend(other._pending_entries)
+
+    def __iadd__(self, other: Any) -> "Manifest":
+        """``manifest += other`` — merge *other* in-place and return self."""
+        if not isinstance(other, Manifest):
+            return NotImplemented
+        self.extend(other)
+        return self
+
+    def __add__(self, other: Any) -> "Manifest":
+        """``manifest + other`` — return a new manifest with merged blueprints."""
+        if not isinstance(other, Manifest):
+            return NotImplemented
+
+        if self.data is not None and other.data is not None:
+            overlap = set(self.data) & set(other.data)
+            if overlap:
+                raise KeyError(
+                    f"Duplicate top-level keys: {sorted(overlap)}"
+                )
+
+        merged: dict = {}
+        if self.data is not None:
+            merged.update(copy.deepcopy(self.data))
+        if other.data is not None:
+            merged.update(copy.deepcopy(other.data))
+
+        if not merged:
+            return Manifest()
+
+        result = Manifest(data=merged)
+
+        pending: list = []
+        if self._pending_entries:
+            pending.extend(self._pending_entries)
+        if other._pending_entries:
+            pending.extend(other._pending_entries)
+        if pending:
+            result._pending_entries = pending
+
+        return result
+
     def __getitem__(self, key: str) -> Any:
         """Look up a top-level key in the blueprint."""
         if self.data is None:
