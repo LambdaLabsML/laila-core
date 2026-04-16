@@ -41,6 +41,16 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
     _event_loop: Optional[asyncio.AbstractEventLoop] = PrivateAttr(default=None)
     _loop_thread: Optional[threading.Thread] = PrivateAttr(default=None)
     _started: bool = PrivateAttr(default=False)
+    _bound_port: Optional[int] = PrivateAttr(default=None)
+
+    @property
+    def bound_port(self) -> int:
+        """The actual port the server is listening on.
+
+        After ``start()`` this returns the OS-assigned port (useful when
+        ``port`` is ``0``).  Before ``start()`` it falls back to ``port``.
+        """
+        return self._bound_port if self._bound_port is not None else self.port
 
     # ------------------------------------------------------------------
     # URI routing
@@ -74,7 +84,7 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
         policy_id = self._communication.policy_id if self._communication else None
         log.info(
             "TCP/IP protocol started for policy %s on port %s",
-            policy_id, self.port,
+            policy_id, self.bound_port,
         )
 
     async def _async_start(self, ready: threading.Event) -> None:
@@ -119,6 +129,7 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
             self._loop_thread = None
 
         self._pending_rpcs.clear()
+        self._bound_port = None
         self._started = False
         policy_id = self._communication.policy_id if self._communication else None
         log.info("TCP/IP protocol stopped for policy %s", policy_id)

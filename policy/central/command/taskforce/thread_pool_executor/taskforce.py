@@ -1,6 +1,7 @@
 """Thread-pool backed taskforce using ``concurrent.futures.ThreadPoolExecutor``."""
 
 from __future__ import annotations
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, CancelledError
 from typing import Callable, Any, Iterable, Tuple, List, Union, Optional, Dict
@@ -28,7 +29,7 @@ class PythonThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     backend: str = Field(default="threads", description="Execution backend (threads only).")
-    num_workers: int = Field(default=4, ge=1, description="Number of worker threads.")
+    num_workers: int = Field(default_factory=lambda: max(1, (os.cpu_count() or 1) // 2), ge=1, description="Number of worker threads.")
 
 
     # Runtime (Private)

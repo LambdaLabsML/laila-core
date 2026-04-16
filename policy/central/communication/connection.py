@@ -36,9 +36,9 @@ async def start_server(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL) -> None:
         proto.port,
     )
     bound_port = server.sockets[0].getsockname()[1]
-    proto.port = bound_port
+    proto._bound_port = bound_port
     proto._server = server
-    log.info("Communication server listening on %s:%s", proto.host, proto.port)
+    log.info("Communication server listening on %s:%s", proto.host, proto.bound_port)
 
 
 async def _handle_inbound(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, ws: ServerConnection) -> None:

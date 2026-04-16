@@ -69,19 +69,18 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
 
     def _read(self, key: str) -> Optional[Any]:
         """Retrieve the JSON value for *key*, or ``None`` if absent."""
-        with self.atomic():
-            self._throttle()
-            try:
-                resp = self._get_client().get_object(
-                    Bucket=self.bucket_name,
-                    Key=self._object_key(key),
-                )
-                raw = resp["Body"].read().decode("utf-8")
-                return json.loads(raw)
-            except ClientError as e:
-                if e.response.get("Error", {}).get("Code") in self._no_such_key_codes:
-                    return None
-                raise
+        self._throttle()
+        try:
+            resp = self._get_client().get_object(
+                Bucket=self.bucket_name,
+                Key=self._object_key(key),
+            )
+            raw = resp["Body"].read().decode("utf-8")
+            return json.loads(raw)
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") in self._no_such_key_codes:
+                return None
+            raise
 
     def _write(self, key: str, entry: Any) -> None:
         """Store *entry* as a JSON object under *key*."""
@@ -91,48 +90,44 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
         if not isinstance(value, str):
             raise TypeError(f"{type(self).__name__} expects a serialized JSON string.")
 
-        with self.atomic():
-            self._throttle()
-            self._get_client().put_object(
-                Bucket=self.bucket_name,
-                Key=self._object_key(key),
-                Body=value.encode("utf-8"),
-                ContentType="application/json",
-            )
+        self._throttle()
+        self._get_client().put_object(
+            Bucket=self.bucket_name,
+            Key=self._object_key(key),
+            Body=value.encode("utf-8"),
+            ContentType="application/json",
+        )
 
     def _delete(self, key: str) -> None:
         """Delete the object for *key*."""
-        with self.atomic():
-            self._throttle()
-            self._get_client().delete_object(
-                Bucket=self.bucket_name,
-                Key=self._object_key(key),
-            )
+        self._throttle()
+        self._get_client().delete_object(
+            Bucket=self.bucket_name,
+            Key=self._object_key(key),
+        )
 
     def _empty(self) -> None:
         """Remove all entries from the pool."""
         paginator = self._get_client().get_paginator("list_objects_v2")
-        with self.atomic():
-            for page in paginator.paginate(Bucket=self.bucket_name):
-                for obj in page.get("Contents", []):
-                    self._throttle()
-                    self._get_client().delete_object(
-                        Bucket=self.bucket_name,
-                        Key=obj["Key"],
-                    )
+        for page in paginator.paginate(Bucket=self.bucket_name):
+            for obj in page.get("Contents", []):
+                self._throttle()
+                self._get_client().delete_object(
+                    Bucket=self.bucket_name,
+                    Key=obj["Key"],
+                )
 
     def _exists(self, key: str) -> bool:
         """Return ``True`` if *key* exists in the bucket."""
-        with self.atomic():
-            self._throttle()
-            try:
-                self._get_client().head_object(
-                    Bucket=self.bucket_name,
-                    Key=self._object_key(key),
-                )
-                return True
-            except Exception:
-                return False
+        self._throttle()
+        try:
+            self._get_client().head_object(
+                Bucket=self.bucket_name,
+                Key=self._object_key(key),
+            )
+            return True
+        except Exception:
+            return False
 
     def __contains__(self, key: str) -> bool:
         """Check membership, delegates to :meth:`_exists`."""

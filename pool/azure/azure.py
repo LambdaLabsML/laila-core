@@ -70,12 +70,11 @@ class AzurePool(_LAILA_IDENTIFIABLE_POOL):
 
     def _read(self, key: str) -> Optional[Any]:
         """Retrieve the JSON value for *key*, or ``None`` if absent."""
-        with self.atomic():
-            blob = self._get_container().get_blob_client(self._object_key(key))
-            try:
-                raw = blob.download_blob().readall().decode("utf-8")
-            except ResourceNotFoundError:
-                return None
+        blob = self._get_container().get_blob_client(self._object_key(key))
+        try:
+            raw = blob.download_blob().readall().decode("utf-8")
+        except ResourceNotFoundError:
+            return None
         return json.loads(raw)
 
     def _write(self, key: str, entry: Any) -> None:
@@ -86,31 +85,27 @@ class AzurePool(_LAILA_IDENTIFIABLE_POOL):
         if not isinstance(value, str):
             raise TypeError("AzurePool expects a serialized JSON string.")
 
-        with self.atomic():
-            blob = self._get_container().get_blob_client(self._object_key(key))
-            blob.upload_blob(value.encode("utf-8"), overwrite=True, content_type="application/json")
+        blob = self._get_container().get_blob_client(self._object_key(key))
+        blob.upload_blob(value.encode("utf-8"), overwrite=True, content_type="application/json")
 
     def _delete(self, key: str) -> None:
         """Delete the blob for *key*; no-op if absent."""
-        with self.atomic():
-            blob = self._get_container().get_blob_client(self._object_key(key))
-            try:
-                blob.delete_blob()
-            except ResourceNotFoundError:
-                return
+        blob = self._get_container().get_blob_client(self._object_key(key))
+        try:
+            blob.delete_blob()
+        except ResourceNotFoundError:
+            return
 
     def _empty(self) -> None:
         """Remove all blobs from the container."""
-        with self.atomic():
-            blobs = list(self._get_container().list_blobs())
-            for blob in blobs:
-                self._get_container().delete_blob(blob.name)
+        blobs = list(self._get_container().list_blobs())
+        for blob in blobs:
+            self._get_container().delete_blob(blob.name)
 
     def _exists(self, key: str) -> bool:
         """Return ``True`` if a blob for *key* exists."""
-        with self.atomic():
-            blob = self._get_container().get_blob_client(self._object_key(key))
-            return bool(blob.exists())
+        blob = self._get_container().get_blob_client(self._object_key(key))
+        return bool(blob.exists())
 
     def __contains__(self, key: str) -> bool:
         """Check membership, delegates to :meth:`_exists`."""
@@ -134,6 +129,5 @@ class AzurePool(_LAILA_IDENTIFIABLE_POOL):
                 yield self._logical_key(blob.name)
 
         if not as_generator:
-            with self.atomic():
-                return list(_iter_keys())
+            return list(_iter_keys())
         return _iter_keys()

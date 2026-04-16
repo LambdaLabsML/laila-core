@@ -81,12 +81,11 @@ class GCSPool(_LAILA_IDENTIFIABLE_POOL):
 
     def _read(self, key: str) -> Optional[Any]:
         """Retrieve the JSON value for *key*, or ``None`` if absent."""
-        with self.atomic():
-            blob = self._get_bucket().blob(self._object_key(key))
-            try:
-                raw = blob.download_as_text()
-            except NotFound:
-                return None
+        blob = self._get_bucket().blob(self._object_key(key))
+        try:
+            raw = blob.download_as_text()
+        except NotFound:
+            return None
         return json.loads(raw)
 
     def _write(self, key: str, entry: Any) -> None:
@@ -97,31 +96,27 @@ class GCSPool(_LAILA_IDENTIFIABLE_POOL):
         if not isinstance(value, str):
             raise TypeError("GCSPool expects a serialized JSON string.")
 
-        with self.atomic():
-            blob = self._get_bucket().blob(self._object_key(key))
-            blob.upload_from_string(value, content_type="application/json")
+        blob = self._get_bucket().blob(self._object_key(key))
+        blob.upload_from_string(value, content_type="application/json")
 
     def _delete(self, key: str) -> None:
         """Delete the blob for *key*; no-op if absent."""
-        with self.atomic():
-            blob = self._get_bucket().blob(self._object_key(key))
-            try:
-                blob.delete()
-            except NotFound:
-                return
+        blob = self._get_bucket().blob(self._object_key(key))
+        try:
+            blob.delete()
+        except NotFound:
+            return
 
     def _empty(self) -> None:
         """Remove all blobs from the bucket."""
-        with self.atomic():
-            blobs = list(self._get_client().list_blobs(self.bucket_name))
-            for blob in blobs:
-                blob.delete()
+        blobs = list(self._get_client().list_blobs(self.bucket_name))
+        for blob in blobs:
+            blob.delete()
 
     def _exists(self, key: str) -> bool:
         """Return ``True`` if a blob for *key* exists."""
-        with self.atomic():
-            blob = self._get_bucket().blob(self._object_key(key))
-            return bool(blob.exists(self._get_client()))
+        blob = self._get_bucket().blob(self._object_key(key))
+        return bool(blob.exists(self._get_client()))
 
     def __contains__(self, key: str) -> bool:
         """Check membership, delegates to :meth:`_exists`."""
@@ -145,6 +140,5 @@ class GCSPool(_LAILA_IDENTIFIABLE_POOL):
                 yield self._logical_key(blob.name)
 
         if not as_generator:
-            with self.atomic():
-                return list(_iter_keys())
+            return list(_iter_keys())
         return _iter_keys()
