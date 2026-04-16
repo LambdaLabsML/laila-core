@@ -10,43 +10,44 @@ pip install laila-core
 
 ## Quick example
 
-```python
-import numpy as np
-import laila
-from laila.pool import S3Pool
+Stack a fast local cache in front of remote storage with a single operator.
+Reads cascade through the chain until they find the data, caching a copy
+in every tier on the way back up.
 
-# Create a pool (any backend — S3, Redis, HDF5, filesystem, …)
-pool = S3Pool(
+```python
+import laila
+from laila.pool import S3Pool, HDF5Pool
+
+# Create an HDF5 pool (local disk) and an S3 pool (remote)
+hdf5_pool = HDF5Pool(nickname="cache_hdf5")
+s3_pool = S3Pool(
     bucket_name="your-bucket",
     access_key_id="YOUR_ACCESS_KEY_ID",
     secret_access_key="YOUR_SECRET_ACCESS_KEY",
     region_name="us-east-1",
-    nickname="my_pool",
+    nickname="origin_s3",
 )
 
-# Register the pool with LAILA's memory system
-laila.memory.extend(pool, pool_nickname="my_pool")
+# Register both pools with LAILA's memory system
+laila.memory.extend(hdf5_pool, pool_nickname="cache_hdf5")
+laila.memory.extend(s3_pool, pool_nickname="origin_s3")
 
-# Wrap your data in an Entry — a universal container with a unique global_id
-entry = laila.constant(data=np.random.randn(10, 10), nickname="my_matrix")
-entry_id = entry.global_id  # save the id before we lose the local reference
+# Wire a three-tier proxy chain: memory → HDF5 → S3
+laila.alpha_pool << hdf5_pool << s3_pool
 
-# Memorize (write) to S3 — returns a future you can wait on
-future_memorize = laila.memorize(entry, pool_nickname="my_pool")
-laila.wait(future_memorize)
+# Store an entry directly in S3
+entry = laila.constant(data={"msg": "hello from S3"}, nickname="proxy_demo")
+future = laila.memorize(entry, pool_nickname="origin_s3")
+laila.wait(future)
 
-# Destroy local state — the only way to get the data back is through LAILA
-del entry
+print(laila.alpha_pool.exists(entry.global_id))  # False — not cached yet
 
-# Remember (read) using just the global_id — reconstructs the entry from storage
-future_remember = laila.remember(entry_id, pool_nickname="my_pool")
-laila.wait(future_remember)
+# Read through the alpha pool — cascades to S3, caches on the way back
+blob = laila.alpha_pool[entry.global_id]
 
-# .data unwraps the entry and returns your original object
-# Same type that was memorized is remembered — no type casting or
-# serialization code needed. LAILA takes care of that.
-print(type(future_remember.data))  # <class 'numpy.ndarray'>
-print(future_remember.data)        # your numpy array, intact
+print(laila.alpha_pool.exists(entry.global_id))  # True  — cached in memory
+print(hdf5_pool.exists(entry.global_id))          # True  — cached on disk
+print(s3_pool.exists(entry.global_id))            # True  — the origin
 ```
 
 ## Core concepts

@@ -27,6 +27,12 @@ theme:
     - search.highlight
     - content.code.copy
 
+hooks:
+  - docs/hooks/notebook_download.py
+
+extra_css:
+  - stylesheets/notebook.css
+
 plugins:
   - search
   - gen-files:

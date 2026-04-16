@@ -1,0 +1,11 @@
+.notebook-download {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  font-size: 0.75rem;
+  margin-bottom: 1em;
+}
+
+.notebook-download::before {
+  content: "\2B07";
+}
