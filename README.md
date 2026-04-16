@@ -2,10 +2,48 @@
 
 **Lambda's Interdisciplinary Large Atlas**
 
-LAILA is a Python platform for unifying training, simulation, and data management into a single computational workflow. It wraps heterogeneous storage backends (S3, GCS, Redis, HDF5, filesystem, and more) behind one consistent API so that memorizing data, recalling it, and orchestrating compute feels the same regardless of where things live.
-
 ```bash
 pip install laila-core
+```
+
+LAILA is a Python platform for unifying training, simulation, and data management into a single computational workflow. It wraps heterogeneous storage backends (S3, GCS, Redis, HDF5, filesystem, and more) behind one consistent API so that memorizing data, recalling it, and orchestrating compute feels the same regardless of where things live.
+
+
+LAILA is **type-free** — whatever type you memorize is exactly the type you get back. No serialization boilerplate, no type casting, one interface for everything:
+
+```python
+import torch, laila
+
+laila.memorize(laila.constant(data={"key": [1, 2, 3]}))   # dict in, dict out
+laila.memorize(laila.constant(data=torch.randn(128, 64)))  # tensor in, tensor out
+```
+
+The same three verbs — `memorize`, `remember`, and `forget` — work across every storage backend. S3, HDF5, Cloudflare R2, Redis, GCS, filesystem — swap the pool, keep the code:
+
+```python
+from laila.pool import S3Pool, HDF5Pool, CloudflarePool
+
+s3_pool = S3Pool(...)
+hdf5_pool = HDF5Pool(...)
+cf_pool = CloudflarePool(...)
+
+laila.memory.extend(s3_pool, pool_nickname="s3")
+laila.memory.extend(hdf5_pool, pool_nickname="hdf5")
+laila.memory.extend(cf_pool, pool_nickname="cloudflare")
+
+entry = laila.constant(data=torch.randn(128, 64))
+
+laila.memorize(entry, pool_nickname="s3")          # write to S3
+laila.memorize(entry, pool_nickname="hdf5")        # write to HDF5
+laila.memorize(entry, pool_nickname="cloudflare")  # write to Cloudflare R2
+
+laila.remember(entry.global_id, pool_nickname="s3")          # read from S3
+laila.remember(entry.global_id, pool_nickname="hdf5")        # read from HDF5
+laila.remember(entry.global_id, pool_nickname="cloudflare")  # read from Cloudflare R2
+
+laila.forget(entry.global_id, pool_nickname="s3")          # delete from S3
+laila.forget(entry.global_id, pool_nickname="hdf5")        # delete from HDF5
+laila.forget(entry.global_id, pool_nickname="cloudflare")  # delete from Cloudflare R2
 ```
 
 ## Quick example
