@@ -9,15 +9,26 @@ pip install laila-core
 LAILA is a Python platform for unifying training, simulation, and data management into a single computational workflow. It wraps heterogeneous storage backends (S3, GCS, Redis, HDF5, filesystem, and more) behind one consistent API so that memorizing data, recalling it, and orchestrating compute feels the same regardless of where things live.
 
 
+## LAILA is type-free
+
 LAILA is **type-free** — whatever type you memorize is exactly the type you get back. No serialization boilerplate, no type casting, one interface for everything:
 
 ```python
 import torch, laila
 
-laila.memorize(laila.constant(data={"key": [1, 2, 3]}))   # dict in, dict out
-laila.memorize(laila.constant(data=torch.randn(128, 64)))  # tensor in, tensor out
+dict_entry = laila.constant(data={"key": [1, 2, 3]})
+laila.memorize(dict_entry)                          # memorize a dict
+laila.remember(dict_entry.global_id).data            # returns a dict
+
+tensor_entry = laila.constant(data=torch.randn(128, 64))
+laila.memorize(tensor_entry)                         # memorize a tensor
+laila.remember(tensor_entry.global_id).data           # returns a tensor
 ```
 
+
+
+
+## LAILA has a uniform API
 The same three verbs — `memorize`, `remember`, and `forget` — work across every storage backend. S3, HDF5, Cloudflare R2, Redis, GCS, filesystem — swap the pool, keep the code:
 
 ```python
@@ -44,6 +55,16 @@ laila.remember(entry.global_id, pool_nickname="cloudflare")  # read from Cloudfl
 laila.forget(entry.global_id, pool_nickname="s3")          # delete from S3
 laila.forget(entry.global_id, pool_nickname="hdf5")        # delete from HDF5
 laila.forget(entry.global_id, pool_nickname="cloudflare")  # delete from Cloudflare R2
+```
+
+## LAILA has async operations
+
+Every operation returns a **future** you can wait on synchronously or `await` asynchronously:
+
+```python
+future = laila.memorize(entry)
+laila.wait(future)    # blocking
+await future          # or async
 ```
 
 ## Quick example
