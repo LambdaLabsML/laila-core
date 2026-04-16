@@ -4,7 +4,6 @@
 [![Python](https://img.shields.io/pypi/pyversions/laila-core)](https://pypi.org/project/laila-core/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/LambdaLabsML/laila-core/blob/main/LICENSE)
 [![Status](https://img.shields.io/badge/status-beta%201.0-orange)]()
-[![Downloads](https://img.shields.io/pypi/dm/laila-core)](https://pypi.org/project/laila-core/)
 [![Docs](https://img.shields.io/badge/docs-tutorials-blueviolet)](https://github.com/LambdaLabsML/laila-core/tree/main/docs/tutorials)
 
 **Lambda's Interdisciplinary Large Atlas**
