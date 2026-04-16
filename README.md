@@ -115,15 +115,6 @@ print(hdf5_pool.exists(entry.global_id))          # True  — cached on disk
 print(s3_pool.exists(entry.global_id))            # True  — the origin
 ```
 
-## Core concepts
-
-| Concept | What it is |
-|---------|------------|
-| **Entry** | An immutable (`constant`) or versioned (`variable`) container for any Python object — tensors, dicts, strings, model weights. Each entry has a deterministic `global_id`. |
-| **Pool** | A storage backend. LAILA ships with pools for S3, GCS, Azure Blob, Cloudflare R2, Redis, HDF5, filesystem, DuckDB, Postgres, MongoDB, Hugging Face Hub, and SQLite. |
-| **memorize / remember / forget** | The three core verbs. Write, read, and delete entries from any registered pool using the same interface. |
-| **Future** | Async operations return futures. Use `laila.status(future)`, `laila.wait(future)`, `.data` to unwrap the result payload, or `.result` / `.exception` directly. |
-
 ## Installation extras
 
 Install only the backends you need:
@@ -162,5 +153,5 @@ The current release includes the **command and memory module** as the first publ
 ## Credits
 
 - Creator: Amir Zadeh
-- Tutorials and Documentation: Jessica Nicholson
+- Tutorials and Documentation: Dihan Lin
 - Acknowledgements: Jason Zhang, Xuweiyi Chen, Connor Alvarez

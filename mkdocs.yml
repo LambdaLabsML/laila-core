@@ -54,6 +54,7 @@ plugins:
 
 nav:
   - Home: index.md
+  - LAILA 101: laila_101.md
   - Tutorials: tutorials/
   - API Reference: reference/
 
