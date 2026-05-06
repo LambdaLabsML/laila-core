@@ -18,9 +18,14 @@ class EntryState(Enum):
         Entry is staged but data may not yet be materialised.
     STALE
         Entry data is out of date.
+    NA
+        Not applicable. Used by Entry subclasses whose lifecycle states are
+        meaningless (e.g. ``Manifest``). Only ``Entry`` may hold non-``NA``
+        states.
     """
     READY = auto()
     POOLED = auto()
     POOLING = auto()
     STAGED = auto()
     STALE = auto()
+    NA = auto()

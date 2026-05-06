@@ -30,8 +30,10 @@ class LailaJSONEncoder(json.JSONEncoder):
     """
 
     def default(self, o: Any) -> Any:
-        from ..command.schema.future.future.future import Future
         from ..command.schema.future.future.group_future import GroupFuture
+        from ..command.schema.future.future.future_identity import (
+            _LAILA_IDENTIFIABLE_FUTURE,
+        )
 
         if isinstance(o, GroupFuture):
             return {
@@ -39,15 +41,17 @@ class LailaJSONEncoder(json.JSONEncoder):
                 "__is_group__": True,
                 "global_id": o.global_id,
                 "policy_id": str(o.policy_id),
+                "taskforce_id": str(o.taskforce_id),
                 "future_ids": o.future_ids,
             }
 
-        if isinstance(o, Future):
+        if isinstance(o, _LAILA_IDENTIFIABLE_FUTURE):
             return {
                 "__laila_future__": True,
                 "__is_group__": False,
                 "global_id": o.global_id,
                 "policy_id": str(o.policy_id),
+                "taskforce_id": str(o.taskforce_id),
             }
 
         if hasattr(o, "model_dump"):

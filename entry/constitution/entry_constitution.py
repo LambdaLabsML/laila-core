@@ -1,110 +1,192 @@
-"""Constitution logic that declaratively derives Entry data from other Entries."""
+"""Constitution logic that derives Entry data from a Manifest.
 
-from typing import Callable, List, Optional, TYPE_CHECKING
+A constitution is a small Python *source string* defining exactly one
+function. The function takes a single argument, a ``Manifest``, and
+returns the payload for the owning Entry. The function is ``exec``'d on
+demand, mirroring the ``recovery_sequence`` pattern used by
+``ComputationalData``.
+"""
+
+from typing import Any, Optional, TYPE_CHECKING
 
 from pydantic import BaseModel, PrivateAttr
 
-from ..compdata import ComputationalData
-from ..entry_state import EntryState
 if TYPE_CHECKING:
-    from ..entry import Entry
+    from ...policy.central.memory.schema.manifest import Manifest
 
 
 class EntryConstitution(BaseModel):
-    """Encapsulates a callable constitution and its precedence list.
+    """Encapsulates a constitution source-string and its input ``Manifest``.
 
-    A constitution is a function that computes an Entry's payload from a set
-    of constituent Entries.  Once assigned, the constitution cannot be
-    reassigned.
+    Once assigned, neither the constitution code nor the manifest can be
+    reassigned. The manifest may be provided directly as a ``Manifest``
+    object or, when recovering a serialized entry, as a
+    ``manifest_global_id`` to be resolved lazily from the active policy's
+    memory at build time.
     """
 
-    _constitution: Optional[Callable[[dict[str, "Entry"]], ComputationalData]] = PrivateAttr(default=None)
-    _precedence: list[str] = PrivateAttr(default_factory=list)
-    _alias: Optional[str] = PrivateAttr(default=None)
+    _constitution: Optional[str] = PrivateAttr(default=None)
+    _manifest: Optional[Any] = PrivateAttr(default=None)
+    _manifest_global_id: Optional[str] = PrivateAttr(default=None)
+
+    def __init__(self, **data: Any):
+        """Initialise from optional ``constitution``, ``manifest``, and
+        ``manifest_global_id`` kwargs."""
+        super().__init__()
+        constitution = data.get("constitution", None)
+        manifest = data.get("manifest", None)
+        manifest_global_id = data.get("manifest_global_id", None)
+        if constitution is not None:
+            self.constitution = constitution
+        if manifest is not None:
+            self.manifest = manifest
+        elif manifest_global_id is not None:
+            self._manifest_global_id = manifest_global_id
 
     @property
-    def alias(self) -> Optional[str]:
-        """Optional human-readable alias for this constitution."""
-        return self._alias
-
-    @alias.setter
-    def alias(self, value: Optional[str]) -> None:
-        """Set the alias, must be a string or ``None``."""
-        if value is not None and not isinstance(value, str):
-            raise ValueError("alias must be a string or None")
-        self._alias = value
-        self.notify_policy()
-
-    
-    @property
-    def precedence(self) -> List[str]:
-        """Getter for the private _precedence attribute."""
-        return self._precedence
-
-    @precedence.setter
-    def precedence(self, value: List[str]) -> None:
-        """Setter for the private _precedence attribute."""
-        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-            raise ValueError("precedence must be a list of strings")
-        self._precedence = value
-        self.notify_policy()
-    
-    @property
-    def constitution(self):
-        """Return the constitution callable."""
+    def constitution(self) -> Optional[str]:
+        """Source-string defining the constitution function."""
         return self._constitution
 
     @constitution.setter
-    def constitution(self, fn):
-        """Assign the constitution callable (one-time only).
+    def constitution(self, code: str) -> None:
+        """Assign the constitution source-string (one-time only).
 
         Raises
         ------
         AttributeError
             If a constitution has already been set.
+        TypeError
+            If *code* is not a ``str``.
         """
-        if self._constitution != None:
-            raise AttributeError("Constitution is already set and cannot be reassigned.")
-        self._constitution = fn
-        self.notify_policy()
+        if self._constitution is not None:
+            raise AttributeError(
+                "Constitution is already set and cannot be reassigned."
+            )
+        if not isinstance(code, str):
+            raise TypeError("constitution must be a Python source string")
+        self._constitution = code
 
-    def run_constitution(self, constituents: dict[str, "Entry"], aliased=True):
-        """Execute the constitution function over the given constituent Entries.
+    @property
+    def manifest(self):
+        """The ``Manifest`` driving this constitution."""
+        return self._manifest
 
-        Parameters
-        ----------
-        constituents : dict[str, Entry]
-            Mapping of entry identifiers to Entry instances.
-        aliased : bool, optional
-            If ``True``, build an alias-to-payload map before invoking the
-            constitution.  Defaults to ``True``.
+    @manifest.setter
+    def manifest(self, value) -> None:
+        """Assign the manifest (one-time only).
+
+        Also records the manifest's ``global_id`` so the binding can be
+        serialized and restored across roundtrips.
+
+        Raises
+        ------
+        AttributeError
+            If a manifest has already been set.
+        TypeError
+            If *value* is not a ``Manifest``.
+        """
+        from ...policy.central.memory.schema.manifest import Manifest
+
+        if self._manifest is not None:
+            raise AttributeError(
+                "Manifest is already set and cannot be reassigned."
+            )
+        if not isinstance(value, Manifest):
+            raise TypeError("manifest must be a Manifest instance")
+        self._manifest = value
+        self._manifest_global_id = value.global_id
+
+    @property
+    def manifest_global_id(self) -> Optional[str]:
+        """The bound manifest's ``global_id``, if known (even pre-resolution)."""
+        return self._manifest_global_id
+
+    def resolve_manifest(self):
+        """Resolve ``self._manifest`` from ``self._manifest_global_id`` if needed.
+
+        Fetches the ``Manifest`` from the active policy's memory when the
+        instance was rehydrated from a serialized blob that recorded only
+        the manifest's ``global_id``. Idempotent and a no-op when the
+        manifest is already bound.
 
         Raises
         ------
         RuntimeError
-            If the payload is already finalised or no constitution is defined.
-        ValueError
-            If *aliased* is ``True`` and any constituent lacks an alias.
+            If the manifest cannot be resolved from memory.
         """
-        if self.state == EntryState.READY:
-            raise RuntimeError("payload finalized, cannot run constitution.")
+        if self._manifest is not None:
+            return self._manifest
+        if self._manifest_global_id is None:
+            return None
+
+        import laila
+        ref = laila.remember(self._manifest_global_id)
+        resolved = ref.wait(None)
+        if isinstance(resolved, list):
+            resolved = resolved[0] if resolved else None
+        if resolved is None:
+            raise RuntimeError(
+                "Could not resolve manifest from global_id "
+                f"{self._manifest_global_id!r}: not found in active memory."
+            )
+        self._manifest = resolved
+        return self._manifest
+
+    def _run(self, manifest=None):
+        """Execute the constitution function against a manifest.
+
+        Blocks on ``target.data`` inside a ``laila.guarantee`` scope so any
+        futures spawned while resolving the blueprint are tracked and
+        awaited before the constitution function is invoked.
+
+        Parameters
+        ----------
+        manifest : Manifest, optional
+            The manifest to pass to the constitution function. When
+            ``None``, falls back to ``self._manifest``.
+
+        Returns
+        -------
+        Any
+            Whatever the constitution function returns; this becomes the
+            payload of the owning Entry.
+
+        Raises
+        ------
+        RuntimeError
+            If no constitution source is defined, or no manifest is
+            available.
+        ValueError
+            If the source-string does not define exactly one callable
+            function.
+        """
+        import laila
+
         if self._constitution is None:
             raise RuntimeError("no constitution defined.")
 
+        target = manifest if manifest is not None else self._manifest
+        if target is None:
+            raise RuntimeError("no manifest available to run constitution.")
 
-        if aliased:
-            # Ensure all constituents have a non-None alias
-            if not all(hasattr(entry, 'alias') and entry.alias is not None for entry in constituents.values()):
-                raise ValueError("All constituents must have a non-None 'alias' to construct the alias-to-payload map.")
-        
-            # Build the alias → payload map
-            alias_payload_map = {
-                entry.alias: entry.payload.data
-                for entry in constituents.values()
-            }
+        namespace: dict = {}
+        exec(self._constitution, namespace)
 
-            result = self._constitution(**alias_payload_map)
-        else:
-            result = self._constitution(*constituents)
+        import types as _types
+        fns = [
+            v for k, v in namespace.items()
+            if not k.startswith("__")
+            and callable(v)
+            and not isinstance(v, _types.ModuleType)
+            and not isinstance(v, type)
+        ]
+        if len(fns) != 1:
+            raise ValueError(
+                "constitution source must define exactly one callable function"
+            )
 
-        self._payload = result
+        with laila.guarantee:
+            target.data
+
+        return fns[0](target)

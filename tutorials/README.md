@@ -52,7 +52,7 @@ Use Python's `async` / `await` with LAILA's futures to read numeric entries from
 
 ### 8a. Saving the Environment to S3 — `08a_environment_to_s3.ipynb`
 
-Set up LAILA with an S3 pool and an HDF5 pool, inspect `laila.environment`, wrap the full configuration dict as a **Manifest**, and upload it to S3. Demonstrates how `laila.environment` captures every CLI-eligible field in the live policy — pool settings, routing, command parameters — as a JSON-serialisable dict, and how storing it as a manifest makes the setup recoverable from anywhere.
+Set up LAILA with an S3 pool and an HDF5 pool, inspect `laila.args.environment`, wrap the full configuration dict as a **Manifest**, and upload it to S3. Demonstrates how `laila.args.environment.policies[<global_id>]` captures every CLI-eligible field in each live policy — pool settings, routing, command parameters — as a JSON-serialisable dict, and how storing it as a manifest makes the setup recoverable from anywhere.
 
 **Requires:** `pip install "laila-core[s3,hdf5]"` and a `secrets.toml` with AWS credentials.
 

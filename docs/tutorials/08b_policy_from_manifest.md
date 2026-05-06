@@ -73,11 +73,11 @@ print(json.dumps(recovered_env, indent=2, default=str))
 
 ## Step 3: Build a new policy from the environment
 
-The environment dict has the same shape that `laila.args` expects. Assigning it as a `DotMap` to `laila.args` makes every CLI-capable field resolve from the recovered values. Resetting `_active_policy` and constructing a fresh `DefaultPolicy` picks up the full configuration — including pools that the bootstrap policy never had.
+The recovered dict is the *contents* of a single policy (`laila.args.environment.policies[<gid>]`). Wrapping it under a top-level `"policy"` key produces the shape that `laila.args` expects for field resolution. Assigning it as a `DotMap` to `laila.args`, resetting `_active_policy_gid`, and constructing a fresh `DefaultPolicy` picks up the full configuration — including pools that the bootstrap policy never had.
 
 ```python
-laila.args = DotMap(recovered_env)
-laila._active_policy = None
+laila.args = DotMap({"policy": recovered_env})
+laila._active_policy_gid = None
 
 new_policy = DefaultPolicy()
 laila.active_policy = new_policy
@@ -92,10 +92,10 @@ print(f"Pools on new policy: {list(new_policy.central.memory.pool_router.pools.k
 The new policy should carry the full multi-pool setup from Tutorial 8a, not just the single S3 pool the bootstrap policy had:
 
 ```python
-new_env = laila.environment
+new_env = laila.args.environment.policies[laila.active_policy.global_id].toDict()
 
-new_pools = new_env["policy"]["central"]["memory"]["pool_router"]["pools"]
-old_pools = recovered_env["policy"]["central"]["memory"]["pool_router"]["pools"]
+new_pools = new_env["central"]["memory"]["pool_router"]["pools"]
+old_pools = recovered_env["central"]["memory"]["pool_router"]["pools"]
 
 print(f"Recovered environment had {len(old_pools)} pool(s)")
 print(f"New policy has {len(new_pools)} pool(s)")

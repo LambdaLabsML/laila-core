@@ -1,10 +1,10 @@
 # Tutorial 8a: Saving the Environment to S3
 
-`laila.environment` captures the full policy configuration — pools, routing, command, communication — as a JSON-serialisable dict. By wrapping that dict in a **Manifest** and uploading it to S3, the entire setup becomes recoverable from anywhere with bucket access.
+`laila.args.environment.policies[<global_id>]` is a live mirror of every policy's configuration — pools, routing, command, communication — as a JSON-serialisable dict, updated automatically whenever a CLI-capable instance is constructed. By wrapping that dict in a **Manifest** and uploading it to S3, the entire setup becomes recoverable from anywhere with bucket access.
 
 This tutorial covers:
 
-- Inspecting what `laila.environment` captures (and what it excludes)
+- Inspecting what `laila.args.environment` captures (and what it excludes)
 - Wrapping the environment dict in a Manifest
 - Persisting the manifest to S3
 - Verifying the round-trip
@@ -50,12 +50,12 @@ laila.memory.extend(hdf5_pool, pool_nickname="local_hdf5")
 print(f"Registered pools: {list(laila.active_policy.central.memory.pool_router.pools.keys())}")
 ```
 
-## Step 2: Inspect `laila.environment`
+## Step 2: Inspect `laila.args.environment`
 
-The property walks the live policy and collects every CLI-eligible field: pool configurations, routing settings, command parameters, and communication connections. Runtime-only fields marked `CLIExempt` (like `resource` and `transformations`) are excluded — only the settings needed to **reconstruct** the policy appear in the dict.
+The mirror is updated live as CLI-capable instances are constructed and collects every CLI-eligible field: pool configurations, routing settings, command parameters, and communication connections. Runtime-only fields marked `CLIExempt` (like `resource` and `transformations`) are excluded — only the settings needed to **reconstruct** the policy appear in the dict.
 
 ```python
-env = laila.environment
+env = laila.args.environment.policies[laila.active_policy.global_id].toDict()
 
 print(json.dumps(env, indent=2, default=str))
 ```
@@ -63,7 +63,7 @@ print(json.dumps(env, indent=2, default=str))
 Drill into the pools section to see what was captured:
 
 ```python
-pools_section = env["policy"]["central"]["memory"]["pool_router"]["pools"]
+pools_section = env["central"]["memory"]["pool_router"]["pools"]
 print(f"Pools captured: {len(pools_section)}")
 for pool_id, pool_cfg in pools_section.items():
     print(f"  {pool_id}")
@@ -140,7 +140,7 @@ print("Round-trip verified — recovered environment matches the original")
 
 ## Summary
 
-- `laila.environment` returns a JSON-serialisable dict of the full policy configuration.
+- `laila.args.environment.policies[<global_id>]` is a live, JSON-serialisable mirror of every CLI-capable policy's configuration.
 - Runtime-only fields (`resource`, `transformations`, etc.) are excluded — only reconstructable settings are captured.
 - Wrapping the dict in `laila.constant` + a `Manifest` turns it into a first-class LAILA artefact that can be memorised, remembered, and forgotten like any other entry.
 - The manifest nickname (`"env_manifest_v1"`) is all you need to recover the environment later.

@@ -34,7 +34,11 @@ class PythonProcessPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     backend: str = Field(default="processes", description="Execution backend (processes only).")
-    num_workers: int = Field(default_factory=lambda: max(1, (os.cpu_count() or 1) // 2), ge=1, description="Number of worker processes.")
+    num_workers: int = Field(
+        default_factory=lambda: max(4, (os.cpu_count() or 1) // 2),
+        ge=4,
+        description="Number of worker processes (minimum 4).",
+    )
 
     _cv: Optional[threading.Condition] = PrivateAttr(default=None)
     _worker_pool: Optional[ProcessPoolExecutor] = PrivateAttr(default=None)

@@ -127,6 +127,45 @@ pip install "laila-core[torch]"     # PyTorch tensor support
 pip install "laila-core[all]"       # everything
 ```
 
+## Logging
+
+LAILA ships with a single process-wide logger (`laila.logger`) that
+emits structured records into the standard library `logging` hierarchy
+rooted at `"laila"`. It has two independent sinks:
+
+- **stdout** (a stderr `StreamHandler`), gated by the `display` flag.
+- **pool**, gated by `pool_nickname` / `pool_id`, which writes every
+  record into the pool as a JSON `Entry`.
+
+The two sinks are not mutually exclusive: with `display=True` and a
+pool configured you get both. When no pool is set, `display` is forced
+to `True` so records are never silently dropped.
+
+```python
+import laila
+
+# Default level is DEBUG; with no pool, stdout is forced on.
+laila.enable_logging()
+
+# Pool only - records flow to the pool, stdout stays quiet (display=False default).
+laila.enable_logging("INFO", pool_nickname="audit_hdf5")
+
+# Pool plus stdout - both sinks active.
+laila.enable_logging("INFO", pool_nickname="audit_hdf5", display=True)
+
+# Configure via laila.args (CLI-style, mirrored under args.environment.logger)
+laila.args.logger = {"enabled": True, "level": "DEBUG", "pool_nickname": "audit_hdf5"}
+```
+
+Each record is a JSON-trivial dict with `ts`, `level`, `event`, a free-form
+`extra` bag, and the `global_id` of every actor involved (policy, pool,
+entry, future, taskforce). When `pool_nickname` (or `pool_id`) is set,
+records round-trip through the same `laila.memorize` / `laila.remember`
+verbs as any other data. The logger is a singleton (`laila.logger`
+always returns the same instance) and inherits from the same
+CLI-capable / identifiable bases as other LAILA subsystems, so its
+config appears in `laila.args.environment.logger`.
+
 ## Vision
 
 LAILA is intended to serve as an interdisciplinary platform for teams that need to move fluidly between data creation, data storage, model training, and large-scale execution. Rather than treating infrastructure boundaries as the primary abstraction, LAILA focuses on ergonomic syntax and reusable interfaces that let users reason about workflows at a higher level.

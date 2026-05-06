@@ -33,12 +33,17 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
     callbacks: Dict[FutureStatus, Callable[..., Any]] = Field(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
-        """Wire default callbacks and register this future with the active policy."""
+        """Wire default callbacks and register this future with the active local policy."""
         self._setup_default_callbacks()
-        from ....... import get_active_policy
-        policy = get_active_policy()
+        from ....... import _get_active_local_policy
+        policy = _get_active_local_policy()
         policy.central.command._register_future_with_active_guarantees(self)
         policy.future_bank[self.global_id] = self
+        try:
+            from .......logger import get_logger
+            get_logger().record_future_created(self)
+        except Exception:
+            pass
 
 
     def _setup_default_callbacks(self) -> None:
@@ -67,7 +72,14 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
         """
         Set the current status code for this Future.
         """
+        prev = self._status
         self._status = status
+        if prev != status:
+            try:
+                from .......logger import get_logger
+                get_logger().record_future_transition(self, status, prev)
+            except Exception:
+                pass
 
     
     @property

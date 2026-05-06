@@ -29,7 +29,11 @@ class PythonThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     backend: str = Field(default="threads", description="Execution backend (threads only).")
-    num_workers: int = Field(default_factory=lambda: max(1, (os.cpu_count() or 1) // 2), ge=1, description="Number of worker threads.")
+    num_workers: int = Field(
+        default_factory=lambda: max(4, (os.cpu_count() or 1) // 2),
+        ge=4,
+        description="Number of worker threads (minimum 4).",
+    )
 
 
     # Runtime (Private)

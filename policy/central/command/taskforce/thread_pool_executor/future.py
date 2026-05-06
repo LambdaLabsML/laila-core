@@ -26,14 +26,19 @@ class ConcurrentPackageFuture(Future):
 
 
     def model_post_init(self, __context: Any) -> None:
-        """Register with the active policy and attach done-callback if native future exists."""
+        """Register with the active local policy and attach done-callback if native future exists."""
         self._setup_default_callbacks()
-        from ...... import get_active_policy
-        policy = get_active_policy()
+        from ...... import _get_active_local_policy
+        policy = _get_active_local_policy()
         policy.central.command._register_future_with_active_guarantees(self)
         policy.future_bank[self.global_id] = self
         if self._native_future is not None:
             self._add_default_concurrent_future_done_callback()
+        try:
+            from ......logger import get_logger
+            get_logger().record_future_created(self)
+        except Exception:
+            pass
 
 
     @property

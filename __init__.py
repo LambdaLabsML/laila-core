@@ -25,14 +25,189 @@ from .macros.strings import _ENTRY_SCOPE
 
 from .utils.args import ArgReader
 from .utils import guarantee, guarantee_async
+from .logger import (
+    Logger,
+    get_logger,
+    enable_logging,
+    disable_logging,
+    set_log_level,
+    _install_null_handler as _install_logger_null_handler,
+)
+
+_install_logger_null_handler()
 
 
-args = DotMap()
+def _is_env_load_trigger(value: "object") -> bool:
+    """Return True if assigning *value* to ``laila.args.environment`` should reload.
+
+    Two distinct cases:
+
+    1. A *plain* ``dict`` with at least one key is interpreted as an
+       explicit user-assigned environment payload and always triggers a
+       load. ``_load_environment`` is then responsible for validating
+       its shape (raising ``ValueError`` for malformed envs).
+    2. A ``DotMap`` is treated as a load trigger only when it has a
+       non-empty ``policies`` mapping or an ``active_gid`` set. This
+       ensures the internal scaffolding path
+       (``_refresh_args_environment`` writes an empty ``DotMap`` to
+       seed ``args.environment``) does not re-enter the loader.
+
+    Anything else (non-mapping, ``None``, empty ``dict``) is inert.
+    """
+    if isinstance(value, DotMap):
+        try:
+            policies = value.get("policies")
+            active = value.get("active_gid")
+        except Exception:
+            return False
+        if active is not None:
+            return True
+        if policies is None:
+            return False
+        try:
+            return len(policies) > 0
+        except Exception:
+            return False
+    if isinstance(value, dict):
+        return len(value) > 0
+    return False
+
+
+class _LailaArgs(DotMap):
+    """``DotMap`` subclass that watches for assignments to ``environment``.
+
+    Setting ``laila.args.environment = my_env`` (or
+    ``laila.args["environment"] = my_env``) where ``my_env.policies`` is
+    a non-empty mapping triggers ``_load_environment`` -- which calls
+    ``laila.terminate(...)`` and rebuilds every policy listed in
+    ``my_env.policies`` with the right pool / taskforce / protocol
+    subclasses.
+
+    The mirror-update path (``_refresh_args_environment`` writing to
+    ``args.environment.policies[<gid>]``) goes through DotMap's normal
+    ``__setitem__`` on the inner ``policies`` DotMap and never re-enters
+    this class's hooks.
+    """
+
+    def __setattr__(self, key, value):
+        if key == "environment" and _is_env_load_trigger(value):
+            from .basics.definitions.cli_capable import _load_environment
+            _load_environment(value)
+            return
+        if isinstance(value, dict) and not isinstance(value, DotMap):
+            value = DotMap(value)
+        super().__setattr__(key, value)
+
+    def __setitem__(self, key, value):
+        if key == "environment" and _is_env_load_trigger(value):
+            from .basics.definitions.cli_capable import _load_environment
+            _load_environment(value)
+            return
+        if isinstance(value, dict) and not isinstance(value, DotMap):
+            value = DotMap(value)
+        super().__setitem__(key, value)
+
+
+args = _LailaArgs()
 
 arg_reader = ArgReader(target=args)
 
 _local_policies = {}
 _remote_policies = {}
+
+
+def terminate(*, wait: bool = True, cancel_pending: bool = False) -> list:
+    """Gracefully tear down everything ``laila`` has spawned in this process.
+
+    Walks every locally-registered policy and, in this order:
+
+    1. ``policy.central.communication.stop()`` -- closes WebSocket
+       servers, joins event-loop threads, drops peer registrations.
+    2. ``policy.central.command.shutdown(wait=..., cancel_pending=...)``
+       -- joins / cancels every taskforce.
+    3. ``pool.close()`` for each pool registered in
+       ``policy.central.memory.pool_router.pools`` -- terminates managed
+       subprocesses (Redis / Postgres / Mongo), closes file handles
+       (HDF5 / SQLite / DuckDB), and disconnects cloud clients.
+
+    Then clears ``_local_policies``, ``_remote_policies``,
+    ``_active_policy_gid``, and the ``laila.args.environment.policies``
+    mirror.
+
+    Parameters
+    ----------
+    wait : bool, default True
+        Forwarded to ``command.shutdown`` -- block until taskforce
+        workers exit.
+    cancel_pending : bool, default False
+        Forwarded to ``command.shutdown`` -- cancel queued, un-started
+        futures.
+
+    Returns
+    -------
+    list[str]
+        One error string per failed step. An empty list means clean
+        shutdown. The function never raises -- failures are recorded
+        and the next step still runs (best-effort, idempotent).
+    """
+    global _active_policy_gid
+    errors: list = []
+
+    for gid, policy in list(_local_policies.items()):
+        try:
+            comm = getattr(getattr(policy, "central", None), "communication", None)
+            if comm is not None:
+                comm.stop()
+        except Exception as e:
+            errors.append(f"communication.stop[{gid}]: {e!r}")
+
+        try:
+            cmd = getattr(getattr(policy, "central", None), "command", None)
+            if cmd is not None:
+                cmd.shutdown(wait=wait, cancel_pending=cancel_pending)
+        except Exception as e:
+            errors.append(f"command.shutdown[{gid}]: {e!r}")
+
+        try:
+            mem = getattr(getattr(policy, "central", None), "memory", None)
+            router = getattr(mem, "pool_router", None) if mem is not None else None
+            if router is not None:
+                for pool_id, pool in list(getattr(router, "pools", {}).items()):
+                    try:
+                        close = getattr(pool, "close", None)
+                        if callable(close):
+                            close()
+                    except Exception as e:
+                        errors.append(f"pool.close[{pool_id}]: {e!r}")
+        except Exception as e:
+            errors.append(f"memory.pools[{gid}]: {e!r}")
+
+    _local_policies.clear()
+    _remote_policies.clear()
+    _active_policy_gid = None
+
+    try:
+        Logger.reset_singleton()
+    except Exception as e:
+        errors.append(f"logger.reset_singleton: {e!r}")
+
+    try:
+        env = args.get("environment") if hasattr(args, "get") else None
+        if env is not None and hasattr(env, "get"):
+            policies = env.get("policies")
+            if policies is not None and hasattr(policies, "clear"):
+                policies.clear()
+            try:
+                if hasattr(env, "pop"):
+                    env.pop("logger", None)
+                elif "logger" in env:
+                    del env["logger"]
+            except Exception:
+                pass
+    except Exception as e:
+        errors.append(f"clear environment mirror: {e!r}")
+
+    return errors
 
 
 def read_args(source, *, terminal_args=None) -> None:
@@ -42,7 +217,7 @@ def read_args(source, *, terminal_args=None) -> None:
     """
     arg_reader.load(source, terminal_args=terminal_args)
 
-_active_policy = None
+_active_policy_gid: "str | None" = None
 _active_namespace = None
 
 def get_active_namespace():
@@ -65,29 +240,76 @@ def set_active_namespace(namespace_key: str):
     _active_namespace = uuid.uuid5(uuid.NAMESPACE_DNS, namespace_key)
 
 def get_active_policy():
-    """Return the active policy, lazily creating a ``DefaultPolicy`` on first access."""
-    global _active_policy
-    if _active_policy is None:
+    """Return the active policy, lazily creating a ``DefaultPolicy`` on first access.
+
+    Resolves through ``universe`` (``_local_policies`` ∪ ``_remote_policies``)
+    so that morphing into a peer via ``laila.active_policy = remote_proxy``
+    transparently returns the proxy.  Local policies take precedence when
+    a gid is registered both locally and as a remote proxy (this only
+    happens when testing multiple local policies that peer with each
+    other in the same process; in real cross-process usage the two
+    namespaces are disjoint).
+    """
+    global _active_policy_gid
+    if _active_policy_gid is None:
         from .macros.defaults import DefaultPolicy
-        _active_policy = DefaultPolicy()
-        _local_policies[_active_policy.global_id] = _active_policy
-    return _active_policy
-    
+        activate_policy(DefaultPolicy())
+    if _active_policy_gid in _local_policies:
+        return _local_policies[_active_policy_gid]
+    return _remote_policies[_active_policy_gid]
+
 def activate_policy(policy):
-    """Replace the active policy singleton.
+    """Replace the active policy.
 
     Accepts a local ``_LAILA_IDENTIFIABLE_POLICY`` or a
-    ``RemotePolicyProxy`` obtained from ``laila.peers``.
+    ``RemotePolicyProxy`` obtained from ``laila.peers``.  Multiple local
+    policies may coexist in the same process and the active one can be
+    swapped freely; the most recent call wins.
 
     Equivalent to ``laila.active_policy = policy``.
 
     Parameters
     ----------
     policy : _LAILA_IDENTIFIABLE_POLICY | RemotePolicyProxy
-        The policy instance (local or remote proxy) to activate globally.
+        The policy instance (local or remote proxy) to activate.
     """
-    global _active_policy
-    _active_policy = policy
+    global _active_policy_gid
+    new_gid = str(policy.global_id)
+    _active_policy_gid = new_gid
+
+    from .policy.schema.base import _LAILA_IDENTIFIABLE_POLICY
+    if isinstance(policy, _LAILA_IDENTIFIABLE_POLICY):
+        _local_policies[new_gid] = policy
+
+    try:
+        from .basics.definitions.cli_capable import _refresh_args_environment
+        _refresh_args_environment(policy)
+    except Exception:
+        pass
+
+
+def _get_active_local_policy():
+    """Return the local policy used for future registration.
+
+    When the active policy is a local one, returns it directly so that
+    swapping between several local policies routes future registration
+    to the currently active one.  When the active policy is a remote
+    proxy (morph mode), falls back to the single local policy registered
+    in this process; with multiple locals and a remote active policy
+    the caller must first switch back to a local policy.  When no policy
+    is active yet, lazily activates a ``DefaultPolicy`` (mirroring
+    ``get_active_policy``).
+    """
+    if _active_policy_gid is None:
+        get_active_policy()
+    if _active_policy_gid in _local_policies:
+        return _local_policies[_active_policy_gid]
+    if len(_local_policies) == 1:
+        return next(iter(_local_policies.values()))
+    raise RuntimeError(
+        "No local policy available for future registration; "
+        "set `laila.active_policy` to a local policy first."
+    )
 
 
 class _LailaModule(types.ModuleType):
@@ -120,11 +342,6 @@ class _LailaModule(types.ModuleType):
         return get_active_policy().central.communication.peers
 
     @property
-    def environment(self):
-        from .basics.definitions.cli_capable import build_environment
-        return build_environment(get_active_policy())
-
-    @property
     def local_policies(self):
         """All local policies on this machine, keyed by ``global_id``."""
         return _local_policies
@@ -136,8 +353,12 @@ class _LailaModule(types.ModuleType):
 
     @property
     def universe(self):
-        """Union of local and remote policies, keyed by ``global_id``."""
-        return {**_local_policies, **_remote_policies}
+        """Union of local and remote policies, keyed by ``global_id``.
+
+        Locals take precedence when a gid appears in both maps (only
+        possible when peering local policies in the same process).
+        """
+        return {**_remote_policies, **_local_policies}
 
     @property
     def alpha_pool(self):
@@ -150,6 +371,17 @@ class _LailaModule(types.ModuleType):
         """Runtime introspection module for futures."""
         import importlib
         return importlib.import_module("laila.runtime")
+
+    @property
+    def logger(self):
+        """Process-wide :class:`laila.logger.Logger` singleton (lazy)."""
+        return get_logger()
+
+    @logger.setter
+    def logger(self, value):
+        """Replace the singleton with a fully-built ``Logger`` instance."""
+        Logger.reset_singleton()
+        Logger._singleton = value
 
 
 sys.modules[__name__].__class__ = _LailaModule
@@ -187,7 +419,7 @@ def __resolve_nickname(kwargs):
     else:
         raise ValueError("nickname must be a string")
 
-def remember(*args, **kwargs):
+def remember(*args, persist: bool = True, **kwargs):
     """Retrieve one or more entries from the active policy's memory.
 
     Reads serialized blobs from the routed pool, applies the inverse
@@ -204,6 +436,13 @@ def remember(*args, **kwargs):
         Pool alias registered via ``extend``.
     nickname : str, optional
         Convenience alias – converted to a deterministic ``global_id``.
+    persist : bool, default True
+        When ``True``, the fetched entries are also memorized into the
+        active policy's alpha pool, and the returned future only resolves
+        after the alpha-pool write has completed.  Using
+        ``with laila.guarantee:`` therefore blocks until the alpha pool
+        has received the entries.  When the routed source pool already
+        is the alpha pool, the write is skipped.
     """
     if "nickname" in kwargs:
         args = []
@@ -211,7 +450,9 @@ def remember(*args, **kwargs):
         del kwargs["nickname"]
         if "evolution" in kwargs:
             del kwargs["evolution"]
-    return get_active_policy().central.memory.remember(*args, **kwargs)
+    return get_active_policy().central.memory.remember(
+        *args, persist=persist, **kwargs
+    )
 
 def forget(*args, **kwargs):
     """Delete one or more entries from the active policy's memory.

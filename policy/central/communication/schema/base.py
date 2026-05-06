@@ -270,22 +270,34 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         raise ConnectionError(f"No connection to peer {peer_id}")
 
     def _maybe_wrap_remote_future(self, result: Any, peer_id: str) -> Any:
-        """Wrap a future-shaped dict in a ``RemoteFuture`` and register it."""
+        """Wrap a future-shaped dict in a ``RemoteFuture`` pydantic handle.
+
+        ``RemoteFuture.model_post_init`` self-registers into the active
+        policy's ``future_bank`` and guarantee stack, so this helper only
+        builds the instance and binds the communication channel.
+        """
         if not isinstance(result, dict) or not result.get("__laila_future__"):
             return result
 
         from ...command.schema.future.future.remote_future import RemoteFuture
+        from .....basics.definitions.identifiable_object import GLOBAL_ID_REGEX_PATTERN
+        from .....macros.strings import _FUTURE_SCOPE, _GROUP_FUTURE_SCOPE
+
+        remote_gid = result["global_id"]
+        match = GLOBAL_ID_REGEX_PATTERN.match(remote_gid)
+        if match is None:
+            raise ValueError(f"Invalid remote future gid: {remote_gid!r}")
+        remote_uuid = match.group("uuid")
+        evolution_raw = match.group("evolution")
+        evolution = int(evolution_raw) if evolution_raw is not None else None
+        is_group = bool(result.get("__is_group__", False))
 
         rf = RemoteFuture(
-            remote_future_id=result["global_id"],
-            remote_policy_id=result.get("policy_id", peer_id),
-            communication=self,
-            is_group=result.get("__is_group__", False),
+            taskforce_id=result.get("taskforce_id", peer_id),
+            policy_id=result.get("policy_id", peer_id),
+            uuid=remote_uuid,
+            scopes=[_GROUP_FUTURE_SCOPE if is_group else _FUTURE_SCOPE],
+            evolution=evolution,
         )
-
-        if self._local_policy is not None:
-            self._local_policy.future_bank[rf.global_id] = rf
-            if hasattr(self._local_policy, "central"):
-                self._local_policy.central.command._register_future_with_active_guarantees(rf)
-
+        rf.bind(self, is_group=is_group)
         return rf

@@ -194,6 +194,14 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             affinity = affinity,
         )
 
+        try:
+            from .....logger import get_logger
+            get_logger().record_memorize(
+                entries=entries, pool=pool, policy=active_policy,
+            )
+        except Exception:
+            pass
+
         return self._record(entries, pool)
 
 
@@ -251,8 +259,17 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         pool_id: Optional[str] = None,
         pool_nickname: Optional[str] = None,
         affinity: Optional[float] = None,
+        persist: bool = True,
     ):
-        """Fetch entries from the routed pool and return a ``GroupFuture``."""
+        """Fetch entries from the routed pool and return a ``GroupFuture``.
+
+        When ``persist`` is ``True`` (default) and the routed source pool is
+        not already the alpha pool, the fetched entries are additionally
+        memorized into the alpha pool.  The returned future only resolves
+        after that alpha-pool write has completed, which makes
+        ``with laila.guarantee:`` block until the alpha pool has received
+        the entries.
+        """
         from ..... import active_policy
         from .....entry import Entry
 
@@ -263,7 +280,128 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             affinity = affinity,
         )
 
-        return self._fetch(entry_ids, pool=pool)
+        try:
+            from .....logger import get_logger
+            get_logger().record_remember(
+                entry_ids=entry_ids, pool=pool, policy=active_policy,
+            )
+        except Exception:
+            pass
+
+        if not persist or pool.global_id == self.alpha_pool:
+            return self._fetch(entry_ids, pool=pool)
+
+        return self._remember_with_persist(entry_ids, pool=pool)
+
+
+    def _remember_with_persist(
+        self,
+        entry_ids: List[str],
+        *,
+        pool: _LAILA_IDENTIFIABLE_POOL,
+    ):
+        """Fetch entries from *pool* and then memorize them into the alpha pool.
+
+        Returns a single future (for one id) or a ``GroupFuture`` (for many)
+        whose children only reach ``FINISHED`` once both the fetch and the
+        alpha-pool write have completed.  Modeled after ``_duplicate_pool``.
+        """
+        from ..... import active_policy
+
+        child_futures = {
+            entry_id: ConcurrentPackageFuture(
+                taskforce_id=active_policy.central.command.alpha_taskforce,
+                policy_id=active_policy.global_id,
+                purpose=f"remember_with_persist:{entry_id}",
+            )
+            for entry_id in entry_ids
+        }
+
+        group_future = None
+        if len(child_futures) > 1:
+            group_future = GroupFuture(
+                taskforce_id=active_policy.central.command.alpha_taskforce,
+                policy_id=active_policy.global_id,
+                future_ids=[f.global_id for f in child_futures.values()],
+            )
+            for child_future in child_futures.values():
+                child_future.future_group_id = group_future.global_id
+
+        alpha_pool_id = self.alpha_pool
+
+        async def _run() -> None:
+            try:
+                for child_future in child_futures.values():
+                    child_future.status = FutureStatus.RUNNING
+
+                fetch_ref = self._fetch(entry_ids, pool=pool)
+                if fetch_ref is None:
+                    raise RuntimeError(
+                        "remember with persist requires a non-default source pool "
+                        "that returns a future."
+                    )
+                fetch_fut = active_policy.future_bank[fetch_ref.global_id]
+                fetched = await fetch_fut
+
+                if isinstance(fetched, list):
+                    entries = fetched
+                else:
+                    entries = [fetched]
+
+                memorize_ref = self.memorize(entries=entries, pool_id=alpha_pool_id)
+                if memorize_ref is not None:
+                    memorize_fut = active_policy.future_bank[memorize_ref.global_id]
+                    await memorize_fut
+
+                for entry, (entry_id, child_future) in zip(
+                    entries, child_futures.items()
+                ):
+                    child_future.exception = None
+                    child_future.result = entry
+                    child_future.status = FutureStatus.FINISHED
+            except Exception as exc:
+                for child_future in child_futures.values():
+                    if child_future.status in [
+                        FutureStatus.FINISHED,
+                        FutureStatus.ERROR,
+                        FutureStatus.CANCELLED,
+                    ]:
+                        continue
+                    child_future.exception = exc
+                    child_future.result = None
+                    child_future.status = FutureStatus.ERROR
+
+        def _run_event_loop() -> None:
+            try:
+                asyncio.run(_run())
+            except Exception as exc:
+                for child_future in child_futures.values():
+                    if child_future.status in [
+                        FutureStatus.FINISHED,
+                        FutureStatus.ERROR,
+                        FutureStatus.CANCELLED,
+                    ]:
+                        continue
+                    child_future.exception = exc
+                    child_future.result = None
+                    child_future.status = FutureStatus.ERROR
+
+        thread_name = (
+            f"RememberPersist-{group_future.global_id}"
+            if group_future is not None
+            else f"RememberPersist-{next(iter(child_futures.values())).global_id}"
+        )
+        threading.Thread(
+            target=_run_event_loop,
+            name=thread_name,
+            daemon=True,
+        ).start()
+
+        if group_future is not None:
+            return group_future
+
+        single = next(iter(child_futures.values()))
+        return single.future_identity
 
 
     def _fetch(
@@ -327,6 +465,15 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             pool_nickname = pool_nickname,
             affinity = affinity,
         )
+
+        try:
+            from ..... import active_policy
+            from .....logger import get_logger
+            get_logger().record_forget(
+                entry_ids=entry_ids, pool=pool, policy=active_policy,
+            )
+        except Exception:
+            pass
 
         return self._delete(entry_ids, pool=pool)
 

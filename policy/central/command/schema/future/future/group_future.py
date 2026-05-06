@@ -16,9 +16,9 @@ from .......macros.strings import _GROUP_FUTURE_SCOPE
 
 
 def _get_future_bank():
-    """Return the active policy's future bank mapping."""
-    from ....... import get_active_policy
-    return get_active_policy().future_bank
+    """Return the active local policy's future bank mapping."""
+    from ....... import _get_active_local_policy
+    return _get_active_local_policy().future_bank
 
 
 class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
@@ -33,11 +33,16 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
     future_ids: List[str] = Field(default_factory=list)
 
     def model_post_init(self, __context: Any) -> None:
-        """Register this group future with the active policy's future bank."""
-        from ....... import get_active_policy
-        policy = get_active_policy()
+        """Register this group future with the active local policy's future bank."""
+        from ....... import _get_active_local_policy
+        policy = _get_active_local_policy()
         policy.central.command._register_future_with_active_guarantees(self)
         policy.future_bank[self.global_id] = self
+        try:
+            from .......logger import get_logger
+            get_logger().record_group_future_created(self)
+        except Exception:
+            pass
 
     def _resolve_children(self) -> List[Future]:
         """Look up child Future objects from the future bank."""
@@ -97,13 +102,18 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
 
 
     def wait(self, timeout: Optional[float] = None) -> Any:
-        """Wait for all children to complete."""
+        """Wait for all children to complete.
+
+        ``timeout`` is forwarded to each child in seconds so local
+        ``ConcurrentPackageFuture`` and ``RemoteFuture`` children share a
+        consistent unit (the previous implementation incorrectly passed
+        milliseconds).
+        """
         children = self._resolve_children()
         return_values = []
-        timeout_ms = None if timeout is None else int(timeout * 1000)
         for f in children:
             if hasattr(f, "wait"):
-                return_values.append(f.wait(timeout_ms))
+                return_values.append(f.wait(timeout))
             else:
                 raise RuntimeError("Future is not associated with a native future.")
         return return_values
