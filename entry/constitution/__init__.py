@@ -1,3 +1,5 @@
-"""Constitution sub-package for Entry recovery dispatch and constitution logic."""
+"""Constitution sub-package: build dispatch and constitution hierarchy."""
 
-from .entry_constitution import EntryConstitution
+from .constitution import Constitution
+from .simple_constitution import SimpleConstitution
+from .complex_constitution import ComplexConstitution

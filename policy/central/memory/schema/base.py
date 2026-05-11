@@ -348,10 +348,15 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
                 else:
                     entries = [fetched]
 
-                memorize_ref = self.memorize(entries=entries, pool_id=alpha_pool_id)
-                if memorize_ref is not None:
-                    memorize_fut = active_policy.future_bank[memorize_ref.global_id]
-                    await memorize_fut
+                from .....entry.entry_state import EntryState
+                ready_entries = [e for e in entries if e.state == EntryState.READY]
+                if ready_entries:
+                    memorize_ref = self.memorize(
+                        entries=ready_entries, pool_id=alpha_pool_id
+                    )
+                    if memorize_ref is not None:
+                        memorize_fut = active_policy.future_bank[memorize_ref.global_id]
+                        await memorize_fut
 
                 for entry, (entry_id, child_future) in zip(
                     entries, child_futures.items()
@@ -431,7 +436,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             from_pool = pool[entry_id]
             if from_pool is None:
                 raise KeyError(f"Entry {entry_id} not found in pool {pool.global_id}")
-            return Record.recover(from_pool)["entry"] 
+            return Record.build(from_pool)["entry"]
         
         from ..... import active_policy
         futures = active_policy.central.command.submit(

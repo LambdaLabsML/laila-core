@@ -1,10 +1,11 @@
 """Manifest — a structured map of user-defined keys to ``global_id`` references.
 
-A Manifest is a special type of Entry whose payload is a blueprint: a nested
-dictionary whose leaves are ``global_id`` strings (or lists thereof).  It
-provides ``memorize``, ``remember``, and ``forget`` operations that
-batch-process the referenced entries through the active policy's memory layer,
-each returning a ``GroupFuture``.
+A Manifest is an ``Entry`` whose payload is a *blueprint*: a nested
+dictionary whose leaves are ``global_id`` strings (or lists thereof).
+A manifest is therefore a normal `READY` entry — its payload is the
+blueprint dict itself.  The ``manifest.realized`` property batch-fetches
+every referenced entry through the active policy's central memory and
+returns a nested dict of ``Entry`` objects mirroring the blueprint.
 """
 
 from __future__ import annotations
@@ -28,13 +29,11 @@ class Manifest(Entry):
     rules.  It can be constructed from raw ID strings or from ``Entry``
     objects.
 
-    The blueprint is stored privately on ``_blueprint`` and exposed through
-    the ``blueprint`` property. Accessing ``.data`` synchronously fetches
-    every referenced entry via the active policy's central memory and
-    returns a nested dict of ``Entry`` objects mirroring the blueprint.
-
-    A manifest carries scope ``MANIFEST``, evolution ``None`` (constant),
-    and state ``EntryState.NA`` — manifest lifecycle is not applicable.
+    The blueprint *is* the manifest's payload, so ``manifest.data`` returns
+    the nested mapping of ``global_id`` strings.  ``manifest.realized``
+    synchronously fetches every referenced entry via the active policy's
+    central memory and returns a nested dict of ``Entry`` objects mirroring
+    the blueprint structure.
 
     Parameters
     ----------
@@ -43,6 +42,8 @@ class Manifest(Entry):
         ``global_id`` strings, or ``Entry`` instances.  Entry instances are
         converted to a blueprint of ``global_id`` strings and stashed for
         a subsequent ``memorize()`` call.
+    blueprint : dict, optional
+        Alias of ``data`` for explicitness.
     uuid : str, optional
         Explicit UUID for the manifest's own identity.
     nickname : str, optional
@@ -51,17 +52,14 @@ class Manifest(Entry):
         Composite identifier used to set identity.
     """
 
-    _ALLOWS_NON_NA_STATE = False
-
     _scopes: list[str] = PrivateAttr(default_factory=lambda: [_MANIFEST_SCOPE])
-    _blueprint: Optional[dict] = PrivateAttr(default=None)
     _pending_entries: Optional[list] = PrivateAttr(default=None)
 
     def __init__(self, **data: Any):
         raw_data = data.pop("data", None)
         blueprint_kwarg = data.pop("blueprint", None)
 
-        blueprint = None
+        blueprint: Optional[dict] = None
         pending = None
 
         source = raw_data if raw_data is not None else blueprint_kwarg
@@ -84,12 +82,12 @@ class Manifest(Entry):
 
         entry_kwargs = dict(data)
         entry_kwargs["evolution"] = None
+        if blueprint is not None:
+            entry_kwargs["data"] = blueprint
+            entry_kwargs.setdefault("state", EntryState.READY)
 
         Entry.__init__(self, **entry_kwargs)
-        self._blueprint = blueprint
         self._pending_entries = pending
-        self._payload = None
-        self._state = EntryState.NA
 
     # ------------------------------------------------------------------
     # Properties
@@ -97,11 +95,14 @@ class Manifest(Entry):
 
     @property
     def blueprint(self) -> Optional[dict]:
-        """The nested dict with ``global_id`` strings as leaf values."""
-        return self._blueprint
+        """The nested dict with ``global_id`` strings as leaf values.
+
+        Equivalent to ``manifest.data``.
+        """
+        return self.data
 
     @property
-    def data(self):
+    def realized(self):
         """Synchronously fetch all referenced entries and return them.
 
         Blocks until every leaf ``global_id`` has been materialised via the
@@ -118,12 +119,13 @@ class Manifest(Entry):
         """
         import laila
 
-        if self._blueprint is None:
+        bp = self.data
+        if bp is None:
             raise RuntimeError("No blueprint to resolve — manifest is empty.")
 
         all_gids = list(self)
         if not all_gids:
-            return Manifest._rebuild_with_entries(self._blueprint, {})
+            return Manifest._rebuild_with_entries(bp, {})
 
         memory = laila.get_active_policy().central.memory
         ref = memory.remember(entry_ids=all_gids)
@@ -133,20 +135,20 @@ class Manifest(Entry):
 
         if len(results) != len(all_gids) or any(r is None for r in results):
             raise KeyError(
-                "Manifest.data: one or more referenced entries failed to resolve."
+                "Manifest.realized: one or more referenced entries failed to resolve."
             )
 
         resolved_map = dict(zip(all_gids, results))
-        return Manifest._rebuild_with_entries(self._blueprint, resolved_map)
+        return Manifest._rebuild_with_entries(bp, resolved_map)
 
     @property
-    def async_data(self):
+    def async_realized(self):
         """Awaitable that asynchronously resolves all referenced entries.
 
-        Returns a coroutine so callers can ``await manifest.async_data``
+        Returns a coroutine so callers can ``await manifest.async_realized``
         inside an async context (e.g. ``async with laila.guarantee_async``).
-        Mirrors the semantics of the synchronous ``data`` property but awaits
-        the underlying ``remember`` future instead of blocking.
+        Mirrors the semantics of ``realized`` but awaits the underlying
+        ``remember`` future instead of blocking.
 
         Raises
         ------
@@ -158,12 +160,13 @@ class Manifest(Entry):
         async def _resolve():
             import laila
 
-            if self._blueprint is None:
+            bp = self.data
+            if bp is None:
                 raise RuntimeError("No blueprint to resolve — manifest is empty.")
 
             all_gids = list(self)
             if not all_gids:
-                return Manifest._rebuild_with_entries(self._blueprint, {})
+                return Manifest._rebuild_with_entries(bp, {})
 
             memory = laila.get_active_policy().central.memory
             ref = memory.remember(entry_ids=all_gids)
@@ -173,11 +176,11 @@ class Manifest(Entry):
 
             if len(results) != len(all_gids) or any(r is None for r in results):
                 raise KeyError(
-                    "Manifest.async_data: one or more referenced entries failed to resolve."
+                    "Manifest.async_realized: one or more referenced entries failed to resolve."
                 )
 
             resolved_map = dict(zip(all_gids, results))
-            return Manifest._rebuild_with_entries(self._blueprint, resolved_map)
+            return Manifest._rebuild_with_entries(bp, resolved_map)
 
         return _resolve()
 
@@ -192,30 +195,16 @@ class Manifest(Entry):
         pool_id: Optional[str] = None,
         batch_size: int = 128,
     ):
-        """Upload all referenced entries and store the manifest's blueprint.
+        """Upload all referenced entries and store the manifest itself.
 
         Collects any pending ``Entry`` objects provided at construction time,
         uploads them in batches, then stores the manifest itself (whose
         payload is the blueprint dict).
-
-        Parameters
-        ----------
-        pool_nickname : str, optional
-            Pool alias to route entries to.  Defaults to the alpha pool.
-        pool_id : str, optional
-            Explicit pool ``global_id``.  Defaults to the alpha pool.
-        batch_size : int
-            Maximum entries per upload batch.
-
-        Returns
-        -------
-        GroupFuture
-            Tracks all writes (leaf entries + manifest itself).
         """
         import laila
         from ...command.schema.future.future.group_future import GroupFuture
 
-        if self._blueprint is None:
+        if self.data is None:
             raise RuntimeError("Nothing to memorize — manifest has no blueprint.")
 
         pool_kwargs = Manifest._build_pool_kwargs(pool_nickname, pool_id)
@@ -245,29 +234,11 @@ class Manifest(Entry):
         pool_id: Optional[str] = None,
         batch_size: int = 128,
     ):
-        """Recall all referenced entries from the pool.
-
-        Collects every leaf ``global_id`` from the blueprint, fetches them
-        in batches via ``laila.remember()``.
-
-        Parameters
-        ----------
-        pool_nickname : str, optional
-            Pool alias to read from.  Defaults to the alpha pool.
-        pool_id : str, optional
-            Explicit pool ``global_id``.  Defaults to the alpha pool.
-        batch_size : int
-            Maximum entries per recall batch.
-
-        Returns
-        -------
-        GroupFuture
-            Child futures resolve to the recalled ``Entry`` objects.
-        """
+        """Recall all referenced entries from the pool."""
         import laila
         from ...command.schema.future.future.group_future import GroupFuture
 
-        if self._blueprint is None:
+        if self.data is None:
             raise RuntimeError("No blueprint to resolve — manifest is empty.")
 
         pool_kwargs = Manifest._build_pool_kwargs(pool_nickname, pool_id)
@@ -293,29 +264,11 @@ class Manifest(Entry):
         pool_id: Optional[str] = None,
         batch_size: int = 128,
     ):
-        """Delete all referenced entries and the manifest itself from the pool.
-
-        Collects every leaf ``global_id`` plus the manifest's own
-        ``global_id``, deletes them in batches via ``laila.forget()``.
-
-        Parameters
-        ----------
-        pool_nickname : str, optional
-            Pool alias to delete from.  Defaults to the alpha pool.
-        pool_id : str, optional
-            Explicit pool ``global_id``.  Defaults to the alpha pool.
-        batch_size : int
-            Maximum entries per deletion batch.
-
-        Returns
-        -------
-        GroupFuture
-            Tracks all deletions (leaf entries + manifest itself).
-        """
+        """Delete all referenced entries and the manifest itself from the pool."""
         import laila
         from ...command.schema.future.future.group_future import GroupFuture
 
-        if self._blueprint is None:
+        if self.data is None:
             raise RuntimeError("No blueprint — nothing to forget.")
 
         pool_kwargs = Manifest._build_pool_kwargs(pool_nickname, pool_id)
@@ -338,166 +291,65 @@ class Manifest(Entry):
         )
 
     # ------------------------------------------------------------------
-    # Serialization override
-    # ------------------------------------------------------------------
-
-    def serialize(
-        self,
-        transformations=None,
-        *,
-        exclude_private=None,
-    ):
-        """Serialize the manifest, excluding transient ``_pending_entries``.
-
-        The blueprint is temporarily wrapped in a ``ComputationalData``
-        payload so the parent ``Entry.serialize`` machinery serialises it
-        through the standard pipeline; the real payload (always ``None``
-        for a manifest) is restored afterwards.
-        """
-        if exclude_private is None:
-            exclude_private = {
-                "_local_lock", "_payload", "_state",
-                "_pending_entries", "_blueprint",
-            }
-
-        original_payload = self._payload
-        try:
-            if self._blueprint is not None:
-                self._payload = ComputationalData(self._blueprint)
-            return Entry.serialize(
-                self, transformations, exclude_private=exclude_private
-            )
-        finally:
-            self._payload = original_payload
-
-    @classmethod
-    def recover(cls, in_dict: dict, notify_on_creation=False):
-        """Reconstruct a Manifest from a serialised dict or JSON string.
-
-        Parameters
-        ----------
-        in_dict : dict or str or Manifest
-            Serialised representation produced by ``serialize()``, a JSON
-            string thereof, or an existing Manifest (returned as-is).
-        notify_on_creation : bool, optional
-            If ``True``, notify the active policy after construction.
-
-        Returns
-        -------
-        Manifest
-            The recovered Manifest instance.
-        """
-        import json
-
-        if isinstance(in_dict, Manifest):
-            return in_dict
-
-        if isinstance(in_dict, str):
-            try:
-                in_dict = json.loads(in_dict)
-            except Exception as e:
-                raise ValueError("Invalid JSON string") from e
-
-        if isinstance(in_dict, dict):
-            payload = ComputationalData.recover(
-                payload_blob=in_dict["transformed_payload"],
-                recovery_sequence=in_dict["recovery_sequence"],
-            )
-            blueprint = payload.data if payload is not None else None
-            return Manifest(
-                blueprint=blueprint,
-                uuid=in_dict["_uuid"],
-            )
-
-        raise RuntimeError("Invalid input for manifest recovery.")
-
-    # ------------------------------------------------------------------
     # Mapping-like API  (top-level blueprint keys for dict(manifest))
     # ------------------------------------------------------------------
 
     def keys(self):
         """Top-level blueprint keys."""
-        if self._blueprint is None:
+        bp = self.data
+        if bp is None:
             return {}.keys()
-        return self._blueprint.keys()
+        return bp.keys()
 
     def values(self):
         """Top-level blueprint values."""
-        if self._blueprint is None:
+        bp = self.data
+        if bp is None:
             return {}.values()
-        return self._blueprint.values()
+        return bp.values()
 
     def items(self):
         """Top-level blueprint items."""
-        if self._blueprint is None:
+        bp = self.data
+        if bp is None:
             return {}.items()
-        return self._blueprint.items()
+        return bp.items()
 
     def sub_manifest(self, keys: list[str]) -> "Manifest":
-        """Return a new ``Manifest`` containing only the specified top-level keys.
-
-        Parameters
-        ----------
-        keys : list[str]
-            Top-level blueprint keys to include in the sub-manifest.
-
-        Returns
-        -------
-        Manifest
-            A new manifest whose blueprint is the subset of this manifest's
-            blueprint restricted to *keys*.
-
-        Raises
-        ------
-        RuntimeError
-            If the manifest has no blueprint.
-        KeyError
-            If any key in *keys* is not present in the blueprint.
-        """
-        if self._blueprint is None:
+        """Return a new ``Manifest`` containing only the specified top-level keys."""
+        bp = self.data
+        if bp is None:
             raise RuntimeError("Cannot create sub-manifest — manifest is empty.")
-        missing = [k for k in keys if k not in self._blueprint]
+        missing = [k for k in keys if k not in bp]
         if missing:
             raise KeyError(f"Keys not found in manifest: {missing}")
-        subset = {k: copy.deepcopy(self._blueprint[k]) for k in keys}
+        subset = {k: copy.deepcopy(bp[k]) for k in keys}
         return Manifest(blueprint=subset)
 
     def extend(self, other: "Manifest", *, overwrite: bool = False) -> None:
-        """Merge another manifest's blueprint into this one in-place.
-
-        Parameters
-        ----------
-        other : Manifest
-            The manifest whose top-level keys will be added.
-        overwrite : bool
-            If ``False`` (default), duplicate top-level keys raise
-            ``KeyError``.  If ``True``, *other*'s values silently replace
-            existing ones (like ``dict.update``).
-
-        Raises
-        ------
-        TypeError
-            If *other* is not a ``Manifest``.
-        KeyError
-            If *overwrite* is ``False`` and the blueprints share keys.
-        """
+        """Merge another manifest's blueprint into this one in-place."""
         if not isinstance(other, Manifest):
             raise TypeError(
                 f"extend() requires a Manifest, got {type(other).__name__}"
             )
-        if other._blueprint is None:
+        other_bp = other.data
+        if other_bp is None:
             return
 
-        if self._blueprint is None:
-            self._blueprint = copy.deepcopy(other._blueprint)
+        bp = self.data
+        if bp is None:
+            new_bp = copy.deepcopy(other_bp)
         else:
             if not overwrite:
-                overlap = set(self._blueprint) & set(other._blueprint)
+                overlap = set(bp) & set(other_bp)
                 if overlap:
                     raise KeyError(
                         f"Duplicate top-level keys: {sorted(overlap)}"
                     )
-            self._blueprint.update(copy.deepcopy(other._blueprint))
+            new_bp = dict(bp)
+            new_bp.update(copy.deepcopy(other_bp))
+
+        self._payload = ComputationalData(new_bp)
 
         if other._pending_entries:
             if self._pending_entries is None:
@@ -517,18 +369,20 @@ class Manifest(Entry):
         if not isinstance(other, Manifest):
             return NotImplemented
 
-        if self._blueprint is not None and other._blueprint is not None:
-            overlap = set(self._blueprint) & set(other._blueprint)
+        bp = self.data
+        other_bp = other.data
+        if bp is not None and other_bp is not None:
+            overlap = set(bp) & set(other_bp)
             if overlap:
                 raise KeyError(
                     f"Duplicate top-level keys: {sorted(overlap)}"
                 )
 
         merged: dict = {}
-        if self._blueprint is not None:
-            merged.update(copy.deepcopy(self._blueprint))
-        if other._blueprint is not None:
-            merged.update(copy.deepcopy(other._blueprint))
+        if bp is not None:
+            merged.update(copy.deepcopy(bp))
+        if other_bp is not None:
+            merged.update(copy.deepcopy(other_bp))
 
         if not merged:
             return Manifest()
@@ -547,15 +401,17 @@ class Manifest(Entry):
 
     def __getitem__(self, key: str) -> Any:
         """Look up a top-level key in the blueprint."""
-        if self._blueprint is None:
+        bp = self.data
+        if bp is None:
             raise KeyError(key)
-        return self._blueprint[key]
+        return bp[key]
 
     def __len__(self) -> int:
         """Number of top-level keys in the blueprint."""
-        if self._blueprint is None:
+        bp = self.data
+        if bp is None:
             return 0
-        return len(self._blueprint)
+        return len(bp)
 
     # ------------------------------------------------------------------
     # Iteration / containment  (flattened global_id leaves)
@@ -563,9 +419,10 @@ class Manifest(Entry):
 
     def __iter__(self) -> Iterator[str]:
         """Yield every ``global_id`` string via a depth-first, insertion-order walk."""
-        if self._blueprint is None:
+        bp = self.data
+        if bp is None:
             return
-        yield from Manifest._iter_global_ids(self._blueprint)
+        yield from Manifest._iter_global_ids(bp)
 
     def __contains__(self, global_id: object) -> bool:
         """Return ``True`` if *global_id* appears anywhere in the blueprint leaves."""
@@ -656,11 +513,7 @@ class Manifest(Entry):
 
     @staticmethod
     def _validate_blueprint(data: Any) -> None:
-        """Recursively validate that *data* follows the blueprint schema.
-
-        Raises ``ValueError`` if any key is not a string or any leaf is not
-        a ``global_id`` string (or list of them).
-        """
+        """Recursively validate that *data* follows the blueprint schema."""
         if not isinstance(data, dict):
             raise ValueError("Blueprint must be a dict.")
         for key, val in data.items():
@@ -731,5 +584,5 @@ class Manifest(Entry):
         return result
 
 
-from .....entry.constitution.recovery_maps import register_recovery
-register_recovery(_MANIFEST_SCOPE, Manifest.recover)
+from .....entry.constitution.build_maps import register_builder
+register_builder(_MANIFEST_SCOPE, Manifest.build_from_dict)

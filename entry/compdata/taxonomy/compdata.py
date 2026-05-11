@@ -132,27 +132,3 @@ class ComputationalData(BaseModel):
     def __deepcopy__(self, memo=None):
         """Deep copy (subclasses must override)."""
         raise NotImplementedError
-
-    # --- Recovery logic -------------------------------------------------
-    @classmethod
-    def recover(cls, payload_blob, recovery_sequence):
-        """Recover serialized data from a payload blob and its recorded recovery sequence."""
-
-        def _recovery_step(data_as_bytes: bytes, passed_code_fn: str):
-            """Deserialize data using the provided code snippet defining one function."""
-            local_env: Dict[str, Any] = {}
-            exec(passed_code_fn, {}, local_env)
-            fns = [v for v in local_env.values() if callable(v)]
-            if len(fns) != 1:
-                raise ValueError("passed_code_fn must define exactly one callable function")
-            fn = fns[0]
-            return fn(data_as_bytes)
-
-        current_payload = payload_blob
-        for fn in recovery_sequence:
-            current_payload = _recovery_step(current_payload, fn)
-
-        if current_payload is not None and not isinstance(current_payload, ComputationalData):
-            return ComputationalData(data=current_payload)
-
-        return current_payload

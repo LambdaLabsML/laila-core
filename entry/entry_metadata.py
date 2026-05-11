@@ -6,7 +6,7 @@ from typing import Optional, Any, Callable
 
 from ..basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from .entry_state import EntryState
-from .constitution.entry_constitution import EntryConstitution
+from .constitution import Constitution
 
 
 class EntryIdentityView(_LAILA_IDENTIFIABLE_OBJECT):
@@ -21,5 +21,5 @@ class EntryHolisticView(_LAILA_IDENTIFIABLE_OBJECT):
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list(["ENTRY"]))
     _state: EntryState 
-    _constitution: EntryConstitution
+    _constitution: Constitution
 

@@ -27,7 +27,7 @@ import time
 from .compdata import ComputationalData as ComputationalData
 from .entry_state import EntryState
 from .entry_metadata import EntryIdentityView, EntryHolisticView
-from .constitution.entry_constitution import EntryConstitution
+from .constitution import Constitution, SimpleConstitution, ComplexConstitution
 
 from ..macros.strings import _ENTRY_SCOPE
 from ..basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
@@ -59,7 +59,7 @@ class Entry(
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_ENTRY_SCOPE]))
     _state: EntryState = PrivateAttr(default=EntryState.STAGED)
-    _constitution: Optional[EntryConstitution] = PrivateAttr(default = None)
+    _constitution: Optional[Constitution] = PrivateAttr(default = None)
     _payload: Optional[ComputationalData] = PrivateAttr(default=None)
 
     def __init__(self, **data: dict):
@@ -109,40 +109,54 @@ class Entry(
 
     def _initialize_payload(self, data: dict) -> None:
         """Wrap raw payload data in a ``ComputationalData`` instance."""
-        payload = data.get("payload", data.get("data", None))
-        if payload is not None and not isinstance(payload,ComputationalData):
-            payload = ComputationalData(payload)
-            
-        self._payload = payload
+        self.data = data.get("payload", data.get("data", None))
 
     def _initialize_constitution(self, data: dict) -> None:
-        """Set up the ``EntryConstitution`` if one was provided.
+        """Set up a ``Constitution`` if one was provided.
 
-        Accepts both a ``constitution`` source-string and an optional
-        ``manifest`` to bind it to. The attached ``EntryConstitution`` is
-        cleared by ``build()`` once materialization succeeds.
+        Accepts:
+          * a `Constitution` instance — used as-is;
+          * a `str` plus a `manifest` — wrapped in a `ComplexConstitution`;
+          * a `list[str]` — wrapped in a `SimpleConstitution`.
+
+        The attached constitution is cleared by ``build()`` once
+        materialization succeeds.
         """
         constitution = data.get("constitution", None)
         manifest = data.get("manifest", None)
         if constitution is None:
             return
-        kwargs = {"constitution": constitution}
-        if manifest is not None:
-            kwargs["manifest"] = manifest
-        self._constitution = EntryConstitution(**kwargs)
+        if isinstance(constitution, Constitution):
+            if manifest is not None and isinstance(constitution, ComplexConstitution):
+                if constitution.manifest is None:
+                    constitution.manifest = manifest
+            self.constitution = constitution
+            return
+        if isinstance(constitution, list):
+            self.constitution = SimpleConstitution(codes=constitution)
+            return
+        if isinstance(constitution, str):
+            kwargs = {"code": constitution}
+            if manifest is not None:
+                kwargs["manifest"] = manifest
+            self.constitution = ComplexConstitution(**kwargs)
+            return
+        raise TypeError(
+            "constitution must be a Constitution, list[str], or str"
+        )
 
 
     def _initialize_state(self, data: dict) -> None:
         """Determine the initial ``EntryState`` from *data*."""
         if not type(self)._ALLOWS_NON_NA_STATE:
-            self._state = EntryState.NA
+            self.state = EntryState.NA
             return
 
         constitution = data.get("constitution", None)
         if constitution is not None:
-            self._state = EntryState.STAGED
+            self.state = EntryState.STAGED
         else:
-            self._state = data.get("state", EntryState.STAGED)
+            self.state = data.get("state", EntryState.STAGED)
 
 
 
@@ -179,11 +193,41 @@ class Entry(
         return self._payload.data
 
 
+    @data.setter
+    @synchronized
+    def data(self, new_data: Optional[Any]) -> None:
+        """Replace the payload data.
+
+        Raw values are wrapped in a ``ComputationalData`` automatically.
+        Pass ``None`` to clear the payload.
+        """
+        if new_data is not None and not isinstance(new_data, ComputationalData):
+            new_data = ComputationalData(new_data)
+        self._payload = new_data
+        self.notify_policy()
+
+
     @property
     @synchronized
     def constitution(self):
-        """Attached ``EntryConstitution``, or ``None`` once the entry has been built."""
+        """Attached ``Constitution``, or ``None`` once the entry has been built."""
         return self._constitution
+
+
+    @constitution.setter
+    @synchronized
+    def constitution(self, new_constitution: Optional[Constitution]) -> None:
+        """Attach or clear the entry's ``Constitution``.
+
+        Raises
+        ------
+        TypeError
+            If *new_constitution* is neither a ``Constitution`` nor ``None``.
+        """
+        if new_constitution is not None and not isinstance(new_constitution, Constitution):
+            raise TypeError("constitution must be a Constitution or None")
+        self._constitution = new_constitution
+        self.notify_policy()
 
 
     @property
@@ -259,17 +303,9 @@ class Entry(
         if self._constitution is None:
             raise RuntimeError("Entry has no constitution attached.")
 
-        constitution = self._constitution
-
         def _build_task():
-            manifest = constitution.resolve_manifest()
-            result = constitution._run(manifest)
-            if result is not None and not isinstance(result, ComputationalData):
-                result = ComputationalData(result)
-            self._payload = result
-            self._constitution = None
-            self._state = EntryState.READY
-            return result
+            self._build_inplace()
+            return self
 
         import laila
         command = laila.get_active_policy().central.command
@@ -282,6 +318,27 @@ class Entry(
             taskforce_id = taskforce.global_id
 
         return command.submit([_build_task], taskforce_id=taskforce_id)
+
+    def _build_inplace(self):
+        """Run the attached constitution synchronously, in place.
+
+        Threads the current payload (if any) into the constitution as
+        ``payload_input`` and routes the result through ``_post_build``.
+        Used by both the instance-level ``build()`` task body and the
+        simple-entry branch of the classmethod ``Entry.build(in_dict)``.
+        """
+        if self._constitution is None:
+            raise RuntimeError("Entry has no constitution attached.")
+
+        payload_input = self._payload.data if self._payload is not None else None
+        result = self._constitution.build(payload_input=payload_input)
+        self._post_build(result)
+        self.constitution = None
+        self.state = EntryState.READY
+
+    def _post_build(self, result):
+        """Place the build result into the entry. Subclasses may override."""
+        self.data = result
 
 
     ###################################################
@@ -407,7 +464,7 @@ class Entry(
             )
 
         with self.atomic():
-            self._initialize_payload({"data": data})
+            self.data = data
             self._evolution = self._evolution + 1
 
 
@@ -495,124 +552,160 @@ class Entry(
     # Serialize and Recovery
     ###################################################
 
+    def as_dict(self) -> dict:
+        """Return the unified serialized shape for this entry.
+
+        Includes identity, scopes, current state, payload (if materialized
+        and serialized inline), and the attached constitution (if any).
+        """
+        constitution_dict = (
+            self._constitution.as_dict() if self._constitution is not None else None
+        )
+        payload_value = None
+        if self._payload is not None:
+            payload_value = self._payload.data
+        return {
+            "_uuid": self._uuid,
+            "_evolution": self._evolution,
+            "_scopes": list(self._scopes),
+            "_state": self._state.name,
+            "payload": payload_value,
+            "constitution": constitution_dict,
+        }
+
     def serialize(
-        self, 
+        self,
         transformations: TransformationSequence = None,
-        *,
-        exclude_private: set = None,
     ) -> dict:
         """Serialise the Entry into a plain dict suitable for storage.
+
+        Only entries in `EntryState.READY` may be serialized.
 
         Parameters
         ----------
         transformations : TransformationSequence, optional
             Pipeline applied to the serialised payload bytes.  If ``None``
             the raw Entry is returned.
-        exclude_private : set, optional
-            Private attribute names to omit from the output dict.
 
         Returns
         -------
-        dict
-            Serialised representation including ``transformed_payload`` and
-            ``recovery_sequence`` keys.
+        Entry or dict
+            The Entry itself when *transformations* is ``None``; otherwise
+            a serialised dict with the keys ``_uuid``, ``_evolution``,
+            ``_scopes``, ``_state``, ``payload``, and ``constitution``.
+
+        Raises
+        ------
+        RuntimeError
+            If the entry is not in `EntryState.READY`.
         """
-        if exclude_private is None:
-            exclude_private = {"_local_lock", "_payload", "_state", "_constitution"}
+        if self._state != EntryState.READY:
+            raise RuntimeError(
+                f"Cannot serialize entry in state {self._state.name!r}; "
+                "only READY entries can be serialized."
+            )
 
         if transformations is None:
             return self
-        
-        entry_dict = self.model_dump()
-
-        private_attrs = {
-            name: getattr(self, name)
-            for name in self.__private_attributes__
-            if name not in exclude_private
-        }
-
-        entry_dict.update(private_attrs)
-
 
         if self._payload is not None:
-            serialized_payload, recovery_code = self._payload.serialize()
-            transformed_payload, transformation_inverse_code = transformations.forward(serialized_payload)
-            transformation_inverse_code.append(recovery_code)
+            serialized_payload, payload_backward_code = self._payload.serialize()
+            transformed_payload, transformation_inverse_code = transformations.forward(
+                serialized_payload
+            )
+            codes = transformation_inverse_code + [payload_backward_code]
         else:
             transformed_payload = None
-            transformation_inverse_code = ["null_fn = lambda x:x"]
+            codes = []
 
-        entry_dict.update({
-            "transformed_payload": transformed_payload,
-            "recovery_sequence": transformation_inverse_code,
-            "_state": self.state.name
-        })
+        constitution = SimpleConstitution(codes=codes)
 
-        if self._constitution is not None:
-            entry_dict["_constitution_code"] = self._constitution.constitution
-            entry_dict["_manifest_global_id"] = self._constitution.manifest_global_id
+        return {
+            "_uuid": self._uuid,
+            "_evolution": self._evolution,
+            "_scopes": list(self._scopes),
+            "_state": self._state.name,
+            "payload": transformed_payload,
+            "constitution": constitution.as_dict(),
+        }
 
-        return entry_dict
-            
-            
     @classmethod
-    def recover(cls, in_dict: dict, notify_on_creation=False):
-        """Reconstruct an Entry from a serialised dict or JSON string.
+    def from_dict(cls, in_dict: dict) -> "Entry":
+        """Hydrate an Entry from a serialized dict (no chain execution).
+
+        Returns an entry with identity, payload (if any), and constitution
+        attached.  State is taken from the dict; no build is run.
+        """
+        entry = cls.__new__(cls)
+        Entry._initialize_identity(entry, {
+            "uuid": in_dict["_uuid"],
+            "evolution": in_dict.get("_evolution"),
+            "scopes": in_dict.get("_scopes"),
+        })
+        entry.data = in_dict.get("payload")
+        entry.state = EntryState[in_dict.get("_state", "STAGED")]
+        entry.constitution = Constitution.from_dict(in_dict.get("constitution"))
+        return entry
+
+    @classmethod
+    def build_from_dict(cls, in_dict, taskforce=None):
+        """Hydrate an entry from a serialized dict and return a Future.
+
+        For a `SimpleConstitution`, the build chain runs inside the same
+        task and the future resolves to a `READY` entry with its payload
+        materialized.  For a `ComplexConstitution`, the future resolves
+        to a `STAGED` entry with the constitution attached; the caller
+        must call `entry.build()` (or access `.data`) to materialize.
 
         Parameters
         ----------
         in_dict : dict or str or Entry
-            Serialised representation produced by ``serialize()``, a JSON
-            string thereof, or an existing Entry (returned as-is).
-        notify_on_creation : bool, optional
-            If ``True``, notify the active policy after construction.
+            Serialized representation produced by `serialize`, a JSON
+            string thereof, or a live `Entry` (returned as-is via a
+            resolved future).
+        taskforce : str or instance, optional
+            Target taskforce; defaults to the active policy's alpha
+            taskforce.
 
         Returns
         -------
-        Entry
-            The recovered Entry instance.
-
-        Raises
-        ------
-        ValueError
-            If *in_dict* is an invalid JSON string.
-        RuntimeError
-            If the input type is unsupported.
+        Future
+            Resolves to the hydrated `Entry`.
         """
-        if isinstance(in_dict, Entry):
-            return in_dict
-
         if isinstance(in_dict, str):
             try:
                 in_dict = json.loads(in_dict)
             except Exception as e:
                 raise ValueError("Invalid JSON string") from e
 
-        if isinstance(in_dict, dict):
-            payload = ComputationalData.recover(
-                payload_blob=in_dict["transformed_payload"],
-                recovery_sequence=in_dict["recovery_sequence"],
+        if isinstance(in_dict, Entry):
+            entry_obj = in_dict
+            def _passthrough_task():
+                return entry_obj
+            import laila
+            command = laila.get_active_policy().central.command
+            tf_id = command.alpha_taskforce if taskforce is None else (
+                taskforce if isinstance(taskforce, str) else taskforce.global_id
             )
-            recovered = cls.__new__(cls)
-            Entry._initialize_identity(recovered, {
-                "uuid": in_dict["_uuid"],
-                "evolution": in_dict.get("_evolution"),
-                "scopes": in_dict.get("_scopes"),
-            })
-            recovered._payload = payload
-            recovered._state = EntryState[in_dict["_state"]]
-            code = in_dict.get("_constitution_code")
-            if code is not None:
-                manifest_gid = in_dict.get("_manifest_global_id")
-                recovered._constitution = EntryConstitution(
-                    constitution=code,
-                    manifest_global_id=manifest_gid,
-                )
-            else:
-                recovered._constitution = None
-            return recovered
+            return command.submit([_passthrough_task], taskforce_id=tf_id)
 
-        raise RuntimeError("Invalid input for entry recovery.")
+        if not isinstance(in_dict, dict):
+            raise RuntimeError("Invalid input for entry build.")
+
+        captured_dict = in_dict
+
+        def _build_task():
+            entry = cls.from_dict(captured_dict)
+            if isinstance(entry._constitution, SimpleConstitution):
+                entry._build_inplace()
+            return entry
+
+        import laila
+        command = laila.get_active_policy().central.command
+        tf_id = command.alpha_taskforce if taskforce is None else (
+            taskforce if isinstance(taskforce, str) else taskforce.global_id
+        )
+        return command.submit([_build_task], taskforce_id=tf_id)
 
     ###################################################
     # Policy Communication
@@ -632,5 +725,5 @@ class Entry(
         return self.global_id
 
 
-from .constitution.recovery_maps import register_recovery
-register_recovery(_ENTRY_SCOPE, Entry.recover)
+from .constitution.build_maps import register_builder
+register_builder(_ENTRY_SCOPE, Entry.build_from_dict)

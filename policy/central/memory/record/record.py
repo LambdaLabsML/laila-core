@@ -70,14 +70,23 @@ class Record(BaseModel):
 
     
     @classmethod
-    def recover(
+    def build(
         cls,
         record: Any
     ):
-        """Reconstruct a record dict from a JSON string or raw dict."""
+        """Hydrate a record dict from a JSON string or raw dict.
+
+        Submits the entry build to ``central.command`` via
+        ``build_by_scope`` and waits for the resulting future before
+        returning the rebuilt record dict.
+        """
         if isinstance (record, str):
             record=json.loads(record)
 
-        from .....entry.constitution.recovery_maps import recover_by_scope
-        record["entry"] = recover_by_scope(record["entry"])
+        from .....entry.constitution.build_maps import build_by_scope
+        ref = build_by_scope(record["entry"])
+        if hasattr(ref, "wait"):
+            record["entry"] = ref.wait(None)
+        else:
+            record["entry"] = ref
         return record
