@@ -3,4 +3,8 @@
 from .pickle import PickleSerializer
 from .msgpack import MsgpackSerializer
 from .numpy import NumpySerializer
-from .torch import TorchSerializer
+
+try:
+    from .torch import TorchSerializer
+except ModuleNotFoundError:
+    TorchSerializer = None

@@ -7,7 +7,6 @@ from types import NoneType
 from typing import Any, ClassVar, Dict, Hashable, List, Sequence, Tuple, Union
 
 import numpy as np
-from PIL import Image
 from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic import BaseModel, Field, PrivateAttr
 from typing import Optional, Any, Callable

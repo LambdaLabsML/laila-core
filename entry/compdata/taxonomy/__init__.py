@@ -7,7 +7,7 @@ from .cd_object import CD_generic
 
 try:
     from .cd_torch import CD_torchtensor
-except ModuleNotFoundError:            # pragma: no cover
+except ImportError:                    # pragma: no cover
     pass
 
     
