@@ -90,6 +90,19 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         raise KeyError(f"Future {gid} not found in any local policy bank")
 
     @property
+    def data(self):
+        """Read-only unwrapped Entry payload, resolved through the owning policy's future bank."""
+        from ....... import _local_policies
+        pid = self.policy_id.global_id if hasattr(self.policy_id, "global_id") else self.policy_id
+        policy = _local_policies.get(pid)
+        if policy is None:
+            raise KeyError(f"Owning policy {pid} for future {self.global_id} not found locally")
+        try:
+            return policy.future_bank[self.global_id].data
+        except KeyError:
+            raise KeyError(f"Future {self.global_id} not found in policy {pid}'s future bank")
+
+    @property
     def exception(self):
         """Read-only exception resolved from the owning policy's future bank."""
         from ....... import _local_policies

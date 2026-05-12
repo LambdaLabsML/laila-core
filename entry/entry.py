@@ -161,17 +161,6 @@ class Entry(
 
 
     ###################################################
-    # Policy
-    ###################################################
-
-    def notify_policy(self):
-        """Notify the active policy, if any, that this Entry has changed."""
-        from .. import active_policy
-        if active_policy is not None:
-            active_policy.update(self)
-    
-
-    ###################################################
     # Properties
     ###################################################
 
@@ -204,7 +193,6 @@ class Entry(
         if new_data is not None and not isinstance(new_data, ComputationalData):
             new_data = ComputationalData(new_data)
         self._payload = new_data
-        self.notify_policy()
 
 
     @property
@@ -227,7 +215,6 @@ class Entry(
         if new_constitution is not None and not isinstance(new_constitution, Constitution):
             raise TypeError("constitution must be a Constitution or None")
         self._constitution = new_constitution
-        self.notify_policy()
 
 
     @property
@@ -255,7 +242,6 @@ class Entry(
                 f"{type(self).__name__} only accepts EntryState.NA"
             )
         self._state = new_state
-        self.notify_policy()
 
 
     @property
@@ -706,11 +692,6 @@ class Entry(
             taskforce if isinstance(taskforce, str) else taskforce.global_id
         )
         return command.submit([_build_task], taskforce_id=tf_id)
-
-    ###################################################
-    # Policy Communication
-    ###################################################
-
 
     ###################################################
     # String Representation
