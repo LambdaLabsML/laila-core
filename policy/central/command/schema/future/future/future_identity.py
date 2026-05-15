@@ -113,12 +113,37 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         raise KeyError(f"Future {gid} not found in any local policy bank")
 
     def wait(self, timeout=None):
-        """Block until the future completes, resolved through the future bank."""
+        """Block until the future completes, resolved through the future bank.
+
+        Raises
+        ------
+        LoopBlockingWaitError
+            If called from a thread that owns an async event loop. Use
+            ``await fut`` from inside coroutines instead.
+        """
+        from ...exceptions import _check_not_loop_thread
+        _check_not_loop_thread()
+
         from ....... import _local_policies
         gid = self.global_id
         for policy in _local_policies.values():
             if gid in policy.future_bank:
                 return policy.future_bank[gid].wait(timeout)
+        raise KeyError(f"Future {gid} not found in any local policy bank")
+
+    def __await__(self):
+        """Await the underlying concrete future via the policy's future bank.
+
+        Delegates to the concrete future's ``__await__`` (each concrete
+        class — ``ConcurrentPackageFuture``, ``ComplexFuture``,
+        ``GroupFuture``, ``RemoteFuture`` — implements its own non-blocking
+        completion signal).
+        """
+        from ....... import _local_policies
+        gid = self.global_id
+        for policy in _local_policies.values():
+            if gid in policy.future_bank:
+                return policy.future_bank[gid].__await__()
         raise KeyError(f"Future {gid} not found in any local policy bank")
 
     def as_dict(self) -> Dict[str, Any]:

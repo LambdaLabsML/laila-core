@@ -1,6 +1,7 @@
 """Abstract base task-force with lifecycle management and a submission queue."""
 
 from __future__ import annotations
+import threading
 from typing import Callable, Any, Iterable, List, Union, Tuple, Optional
 from pydantic import Field, PrivateAttr, ConfigDict
 from .....basics.definitions.cli_capable import CLIExempt, _LAILA_CLI_CAPABLE_CLASS
@@ -11,6 +12,29 @@ from .status import TaskForceStatus
 from .....macros.strings import _TASK_FORCE_SCOPE
 from .....atomic.definitions.locally_atomic_identifiable_object import _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
 from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+
+
+_LIVE_TASKFORCES: "set[Any]" = set()
+_LIVE_TASKFORCES_LOCK = threading.Lock()
+
+
+def _register_live_taskforce(tf: Any) -> None:
+    """Track *tf* in the process-wide live set so ``laila.terminate`` can sweep
+    orphan task-forces (those not reachable via ``laila._local_policies``)."""
+    with _LIVE_TASKFORCES_LOCK:
+        _LIVE_TASKFORCES.add(tf)
+
+
+def _unregister_live_taskforce(tf: Any) -> None:
+    """Remove *tf* from the live set (best-effort; idempotent)."""
+    with _LIVE_TASKFORCES_LOCK:
+        _LIVE_TASKFORCES.discard(tf)
+
+
+def _live_taskforces_snapshot() -> List[Any]:
+    """Return a snapshot list of currently-registered live task-forces."""
+    with _LIVE_TASKFORCES_LOCK:
+        return list(_LIVE_TASKFORCES)
 
 
 class _LAILA_IDENTIFIABLE_TASK_FORCE(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
@@ -59,6 +83,7 @@ class _LAILA_IDENTIFIABLE_TASK_FORCE(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_AT
             return
         self._on_start()
         self.status = TaskForceStatus.RUNNING
+        _register_live_taskforce(self)
 
     def pause(self) -> None:
         """
@@ -75,9 +100,13 @@ class _LAILA_IDENTIFIABLE_TASK_FORCE(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_AT
         Stop and release underlying resources. Mark STOPPED after subclass hook succeeds.
         """
         if self.status == TaskForceStatus.STOPPED:
+            _unregister_live_taskforce(self)
             return
-        self._on_shutdown(wait=wait, cancel_pending=cancel_pending)
-        self.status = TaskForceStatus.STOPPED
+        try:
+            self._on_shutdown(wait=wait, cancel_pending=cancel_pending)
+        finally:
+            self.status = TaskForceStatus.STOPPED
+            _unregister_live_taskforce(self)
 
     # Context manager sugar
     def __enter__(self):

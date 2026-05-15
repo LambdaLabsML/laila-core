@@ -585,4 +585,8 @@ class Manifest(Entry):
 
 
 from .....entry.constitution.build_maps import register_builder
-register_builder(_MANIFEST_SCOPE, Manifest.build_from_dict)
+register_builder(
+    _MANIFEST_SCOPE,
+    Manifest._build_from_dict_sync,
+    Manifest._build_from_dict_async,
+)

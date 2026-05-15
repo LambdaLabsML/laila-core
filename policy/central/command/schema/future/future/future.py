@@ -30,6 +30,7 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
 
 
     _default_callbacks: Dict[FutureStatus, Callable[..., Any]] = PrivateAttr(default_factory=dict)
+    _status_callbacks: Dict[FutureStatus, List[Callable[..., Any]]] = PrivateAttr(default_factory=dict)
     callbacks: Dict[FutureStatus, Callable[..., Any]] = Field(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
@@ -71,6 +72,11 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
     def status(self, status: FutureStatus) -> None:
         """
         Set the current status code for this Future.
+
+        After updating the internal state and emitting the standard logger
+        transition, fires every callback registered for *status* via
+        :meth:`add_status_callback`. Callback exceptions are swallowed to
+        avoid disrupting the producer (taskforce runner) thread.
         """
         prev = self._status
         self._status = status
@@ -78,6 +84,32 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
             try:
                 from .......logger import get_logger
                 get_logger().record_future_transition(self, status, prev)
+            except Exception:
+                pass
+            cbs = list(self._status_callbacks.get(status, ()))
+            for cb in cbs:
+                try:
+                    cb(self)
+                except Exception:
+                    pass
+
+    def add_status_callback(self, status: FutureStatus, fn: Callable[["Future"], Any]) -> None:
+        """Register *fn* to fire when this future transitions into *status*.
+
+        Multiple callbacks per status are supported (registered in insertion
+        order, fired in insertion order). The callback runs on whatever
+        thread set the status; it must therefore be cheap and non-blocking.
+        Exceptions raised inside *fn* are swallowed.
+
+        If the future is *already* in *status* at registration time, *fn* is
+        invoked immediately and synchronously to close the obvious race
+        between registration and a producer that completed first.
+        """
+        bucket = self._status_callbacks.setdefault(status, [])
+        bucket.append(fn)
+        if self._status == status:
+            try:
+                fn(self)
             except Exception:
                 pass
 

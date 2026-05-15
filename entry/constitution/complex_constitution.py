@@ -85,8 +85,14 @@ class ComplexConstitution(Constitution):
         """The bound manifest's `global_id`, if known."""
         return self._manifest_global_id
 
-    def resolve_manifest(self):
-        """Resolve `self._manifest` from `self._manifest_global_id` if needed."""
+    def _resolve_manifest_sync(self):
+        """Synchronously resolve ``self._manifest`` from ``self._manifest_global_id``.
+
+        Submits a ``laila.remember`` and blocks the calling thread on
+        the resulting future. Safe to call from any non-loop thread; if
+        called from inside an async loop thread the underlying
+        ``Future.wait()`` will raise :exc:`LoopBlockingWaitError`.
+        """
         if self._manifest is not None:
             return self._manifest
         if self._manifest_global_id is None:
@@ -96,6 +102,33 @@ class ComplexConstitution(Constitution):
 
         ref = laila.remember(self._manifest_global_id)
         resolved = ref.wait(None)
+        return self._record_resolved_manifest(resolved)
+
+    async def _resolve_manifest_async(self):
+        """Asynchronously resolve ``self._manifest`` from its global id.
+
+        Awaits the ``laila.remember`` future, yielding the loop while
+        the read/build pipeline runs.
+        """
+        if self._manifest is not None:
+            return self._manifest
+        if self._manifest_global_id is None:
+            return None
+
+        import laila
+
+        ref = laila.remember(self._manifest_global_id)
+        resolved = await ref
+        return self._record_resolved_manifest(resolved)
+
+    def _resolve_manifest(self, *, asynchronous: bool = False):
+        """Router: dispatch to sync or async manifest resolution."""
+        if asynchronous:
+            return self._resolve_manifest_async()
+        return self._resolve_manifest_sync()
+
+    def _record_resolved_manifest(self, resolved: Any):
+        """Validate and cache the resolved manifest result; return it."""
         if isinstance(resolved, list):
             resolved = resolved[0] if resolved else None
         if resolved is None:
@@ -109,15 +142,23 @@ class ComplexConstitution(Constitution):
     def build(self, payload_input: Optional[Any] = None) -> Any:
         """Resolve the manifest and apply the single constitution callable.
 
-        `payload_input` is ignored — complex constitutions read from
+        ``payload_input`` is ignored — complex constitutions read from
         their bound manifest, never from a serialized blob.
+
+        Always uses the *sync* manifest-resolution path because user
+        constitution code is sync and runs inside ``_build_inplace``,
+        which itself runs on a worker context. Coroutine-aware callers
+        (``Entry._build_async``) pre-resolve the manifest via
+        ``await self._resolve_manifest_async()`` before invoking
+        ``_build_inplace``, so this call is a cache hit and never
+        actually waits.
         """
         import laila
 
         if self._code is None:
             raise RuntimeError("no constitution code defined.")
 
-        target = self.resolve_manifest()
+        target = self._resolve_manifest_sync()
         if target is None:
             raise RuntimeError("no manifest available to run constitution.")
 

@@ -108,7 +108,15 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
         ``ConcurrentPackageFuture`` and ``RemoteFuture`` children share a
         consistent unit (the previous implementation incorrectly passed
         milliseconds).
+
+        Raises
+        ------
+        LoopBlockingWaitError
+            If called from a thread that owns an async event loop.
         """
+        from ...exceptions import _check_not_loop_thread
+        _check_not_loop_thread()
+
         children = self._resolve_children()
         return_values = []
         for f in children:

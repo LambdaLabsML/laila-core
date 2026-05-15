@@ -32,9 +32,9 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-s3 = ["boto3"]
-cloudflare = ["boto3"]
-backblaze = ["boto3"]
+s3 = ["boto3", "aioboto3"]
+cloudflare = ["boto3", "aioboto3"]
+backblaze = ["boto3", "aioboto3"]
 gcs = ["google-cloud-storage"]
 azure = ["azure-storage-blob"]
 postgres = ["psycopg[binary]"]
@@ -58,6 +58,7 @@ dev = [
 ]
 all = [
   "boto3",
+  "aioboto3",
   "google-cloud-storage",
   "azure-storage-blob",
   "psycopg[binary]",
@@ -104,6 +105,7 @@ packages = [
   "laila.policy.central.command.schema.future",
   "laila.policy.central.command.schema.future.future",
   "laila.policy.central.command.taskforce",
+  "laila.policy.central.command.taskforce.async_thread_pool_executor",
   "laila.policy.central.command.taskforce.process_pool_executor",
   "laila.policy.central.command.taskforce.thread_pool_executor",
   "laila.policy.central.communication",

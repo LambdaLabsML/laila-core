@@ -68,25 +68,41 @@ class Record(BaseModel):
         """Construct a Record from a dict (not yet implemented)."""
         raise
 
-    
     @classmethod
-    def build(
-        cls,
-        record: Any
-    ):
-        """Hydrate a record dict from a JSON string or raw dict.
+    def _build_sync(cls, record: Any) -> dict:
+        """Synchronously hydrate a record dict from a JSON string or raw dict.
 
-        Submits the entry build to ``central.command`` via
-        ``build_by_scope`` and waits for the resulting future before
-        returning the rebuilt record dict.
+        Dispatches to the registered builder for the entry's scope via
+        :func:`build_by_scope` (sync path), which returns a fully
+        hydrated :class:`Entry` directly. Mutates *record* in place to
+        replace the serialized ``entry`` field with the live entry, and
+        returns it.
         """
-        if isinstance (record, str):
-            record=json.loads(record)
+        if isinstance(record, str):
+            record = json.loads(record)
 
         from .....entry.constitution.build_maps import build_by_scope
-        ref = build_by_scope(record["entry"])
-        if hasattr(ref, "wait"):
-            record["entry"] = ref.wait(None)
-        else:
-            record["entry"] = ref
+        record["entry"] = build_by_scope(record["entry"], asynchronous=False)
         return record
+
+    @classmethod
+    async def _build_async(cls, record: Any) -> dict:
+        """Async variant of :meth:`_build_sync`.
+
+        Awaits the registered builder for the entry's scope (async path),
+        allowing nested manifest fetches to yield the loop instead of
+        blocking it.
+        """
+        if isinstance(record, str):
+            record = json.loads(record)
+
+        from .....entry.constitution.build_maps import build_by_scope
+        record["entry"] = await build_by_scope(record["entry"], asynchronous=True)
+        return record
+
+    @classmethod
+    def _build(cls, record: Any, *, asynchronous: bool = False):
+        """Router: dispatch to :meth:`_build_async` or :meth:`_build_sync`."""
+        if asynchronous:
+            return cls._build_async(record)
+        return cls._build_sync(record)

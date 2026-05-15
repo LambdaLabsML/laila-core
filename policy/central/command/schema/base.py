@@ -7,6 +7,10 @@ from typing import Dict
 import threading
 
 from .future.future import Future
+from .exceptions import (
+    _check_no_pending_submit_owner,
+    ensure_coroutine_function,
+)
 from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from .....macros.strings import _CENTRAL_COMMAND_SCOPE
 
@@ -23,15 +27,25 @@ class _LAILA_IDENTIFIABLE_CENTRAL_COMMAND(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENT
 
 
     def model_post_init(self, __context: Any) -> None:
-        """Create a default task-force and set it as alpha if none provided."""
+        """Create a default async taskforce if none was registered.
+
+        When ``taskforces`` is empty, auto-creates a single
+        ``DefaultTaskForce`` (a ``PythonAsyncThreadPoolTaskForce``) and
+        points ``alpha_taskforce`` at it. There is no longer a built-in
+        IO/compute role split — sync work submitted to the async taskforce
+        runs inline on whatever loop thread the dispatcher picks; async
+        work interleaves on loop slots. Users can still register
+        additional taskforces (e.g. process pools) via ``add_taskforce``.
+        """
         if len(self.taskforces) == 0:
             from .....macros.defaults import DefaultTaskForce
-            taskforce = DefaultTaskForce(policy_id=self.policy_id)
-            self.taskforces[taskforce.global_id] = taskforce
+            tf = DefaultTaskForce(policy_id=self.policy_id)
+            self.taskforces[tf.global_id] = tf
+            self.alpha_taskforce = tf.global_id
 
-        if self.alpha_taskforce is None:
+        if self.alpha_taskforce is None or self.alpha_taskforce not in self.taskforces:
             self.alpha_taskforce = next(iter(self.taskforces))
-        
+
         return self
 
 
@@ -86,10 +100,15 @@ class _LAILA_IDENTIFIABLE_CENTRAL_COMMAND(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENT
     ) -> Union[Future, List[Any], Any]:
         """Submit tasks to a task-force for execution.
 
+        Sync callables are auto-wrapped into trivial coroutine functions
+        at submission time so the runner sees a uniform awaitable
+        contract. The wrapped sync body still runs inline on its loop
+        thread.
+
         Parameters
         ----------
         tasks : Iterable[Callable[[], Any]]
-            Zero-arg callables to execute.
+            Zero-arg callables (sync or async).
         wait : bool, optional
             If ``True``, block until all tasks complete and return results.
         taskforce_id : str, optional
@@ -100,12 +119,22 @@ class _LAILA_IDENTIFIABLE_CENTRAL_COMMAND(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENT
         Future or list[Any] or Any
             A future (or group future) when *wait* is ``False``, otherwise
             the return value(s).
+
+        Raises
+        ------
+        NestedCommandSubmitError
+            If invoked from inside a function decorated
+            ``@no_command_submit``.
         """
+        _check_no_pending_submit_owner()
+
         if taskforce_id is None:
             taskforce_id = self.alpha_taskforce
-    
+
+        wrapped = [ensure_coroutine_function(t) for t in tasks]
+
         return self.taskforces[taskforce_id].submit(
-            tasks = tasks,
+            tasks = wrapped,
             wait = wait,
         )
 

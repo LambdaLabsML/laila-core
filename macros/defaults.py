@@ -1,7 +1,7 @@
 """Default implementations and compile-time constants for Laila."""
 
 from ..policy.central.memory.schema.base import _LAILA_IDENTIFIABLE_CENTRAL_MEMORY
-from ..policy.central.command.taskforce.thread_pool_executor import PythonThreadPoolTaskForce
+from ..policy.central.command.taskforce.async_thread_pool_executor import PythonAsyncThreadPoolTaskForce
 from ..policy.central.command.schema.base import _LAILA_IDENTIFIABLE_CENTRAL_COMMAND
 from ..policy.central.communication.schema.base import _LAILA_IDENTIFIABLE_COMMUNICATION
 from ..policy.central.communication.protocols.tcpip import _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL
@@ -11,7 +11,7 @@ from ..policy.central.memory.router.pool_router import _LAILA_IDENTIFIABLE_POOL_
 import uuid
 import os
 
-DefaultTaskForce = PythonThreadPoolTaskForce
+DefaultTaskForce = PythonAsyncThreadPoolTaskForce
 DefaultCentralCommand = _LAILA_IDENTIFIABLE_CENTRAL_COMMAND
 DefaultCentralCommunication = _LAILA_IDENTIFIABLE_COMMUNICATION
 DefaultTCPIPProtocol = _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL

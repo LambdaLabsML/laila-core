@@ -221,25 +221,40 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         entries: Entry,
         pool: _LAILA_IDENTIFIABLE_POOL,
     ):
-        """Serialize and write each entry individually via the command taskforce."""
+        r"""Memorize each entry as a single per-entry async coroutine.
+
+        Each entry's coroutine:
+
+        1. wraps the entry in a :class:`Record` and runs ``serialize`` inline
+           (pure CPU, no await needed),
+        2. ``await``\ s the pool's ``_write_async`` for the actual storage
+           round-trip.
+
+        Submits one coroutine per entry to the alpha taskforce. Returns a
+        single future identity for one entry, or a :class:`GroupFuture`
+        for many. Replaces the previous two-stage :class:`ComplexFuture`
+        pipeline that double-queued each leg.
+        """
         from ..... import active_policy
 
-        def _individual_record_subprocedure(entry: Entry, pool: _LAILA_IDENTIFIABLE_POOL):
-            record=Record(
-                    entry = entry,
-                    creator = active_policy.global_id,
-                    borrower = active_policy.global_id
-                )
-            transformations = pool.transformations
-            #TODO: Add comm encryption here
-            #comm_encryption_protocol = active_policy.central_communication.encryption_protocol
-            final_transformations = transformations
-            pool[entry.global_id] = record.serialize(transformations = final_transformations)
+        cmd = active_policy.central.command
+        alpha_id = cmd.alpha_taskforce
+        policy_gid = active_policy.global_id
+        transformations = pool.transformations
 
-        futures = active_policy.central.command.submit(
-            tasks=[lambda entry=entry, pool=pool: _individual_record_subprocedure(entry, pool) for entry in entries]
-        )
-        return futures
+        async def _memorize_one(e=None, p=pool, t=transformations, pgid=policy_gid):
+            record = Record(entry=e, creator=pgid, borrower=pgid)
+            blob = record.serialize(transformations=t)
+            if hasattr(blob, "data"):
+                blob = blob.data
+            await p._write_async(e.global_id, blob)
+            return e.global_id
+
+        factories = [
+            (lambda e=entry: _memorize_one(e=e))
+            for entry in entries
+        ]
+        return cmd.submit(tasks=factories, taskforce_id=alpha_id)
 
 
     def _batch_accelerated_record(
@@ -431,18 +446,37 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         *,
         pool: Optional[Dict[str, _LAILA_IDENTIFIABLE_POOL]] = None,
     ):
-        """Fetch each entry individually via the command taskforce."""
-        def _individual_fetch_subprocedure(entry_id: str, pool: _LAILA_IDENTIFIABLE_POOL):
-            from_pool = pool[entry_id]
-            if from_pool is None:
-                raise KeyError(f"Entry {entry_id} not found in pool {pool.global_id}")
-            return Record.build(from_pool)["entry"]
-        
+        r"""Fetch and deserialize each entry via a single per-entry coroutine.
+
+        Each entry's coroutine:
+
+        1. ``await``\ s the pool's ``_read_async`` for the storage round-trip,
+        2. ``await``\ s :meth:`Record._build_async` to deserialize and
+           recursively hydrate any nested entries (which themselves may
+           ``await`` further fetches on the same loop).
+
+        Submits one coroutine per entry to the alpha taskforce and
+        returns a single future identity (one entry) or a
+        :class:`GroupFuture` (many). Replaces the previous two-stage
+        :class:`ComplexFuture` pipeline.
+        """
         from ..... import active_policy
-        futures = active_policy.central.command.submit(
-            tasks=[lambda entry_id=entry_id, pool=pool: _individual_fetch_subprocedure(entry_id, pool) for entry_id in entry_ids]
-        )
-        return futures
+
+        cmd = active_policy.central.command
+        alpha_id = cmd.alpha_taskforce
+
+        async def _remember_one(eid=None, p=pool):
+            raw = await p._read_async(eid)
+            if raw is None:
+                raise KeyError(f"Entry {eid} not found in pool {p.global_id}")
+            record = await Record._build_async(raw)
+            return record["entry"]
+
+        factories = [
+            (lambda eid=entry_id: _remember_one(eid=eid))
+            for entry_id in entry_ids
+        ]
+        return cmd.submit(tasks=factories, taskforce_id=alpha_id)
 
     def _batch_accelerated_fetch(
         self,
@@ -507,12 +541,18 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         entry_ids: List[str],
         pool: _LAILA_IDENTIFIABLE_POOL,
     ):
-        """Delete each entry individually via the command taskforce."""
-        def _individual_delete_subprocedure(entry_id: str, pool: _LAILA_IDENTIFIABLE_POOL):
-            del pool[entry_id]
-        
+        """Delete each entry via a single per-entry async coroutine."""
         from ..... import active_policy
-        futures = active_policy.central.command.submit(
-            tasks=[lambda entry_id=entry_id, pool=pool: _individual_delete_subprocedure(entry_id, pool) for entry_id in entry_ids]
-        )
-        return futures
+
+        cmd = active_policy.central.command
+        alpha_id = cmd.alpha_taskforce
+
+        async def _delete_one(eid=None, p=pool):
+            await p._delete_async(eid)
+            return eid
+
+        factories = [
+            (lambda eid=entry_id: _delete_one(eid=eid))
+            for entry_id in entry_ids
+        ]
+        return cmd.submit(tasks=factories, taskforce_id=alpha_id)

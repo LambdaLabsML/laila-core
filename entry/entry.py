@@ -165,20 +165,35 @@ class Entry(
 
 
     @property
-    @synchronized
     def data(self) -> Optional[Any]:
-        """Unwrapped payload data, building on first access if a constitution is attached.
+        """Return the unwrapped payload data.
 
-        When this Entry was created with a constitution (and has not yet
-        been built), the first call to ``.data`` triggers ``build()`` and
-        blocks on the returned future so callers see a fully materialized
-        payload.
+        Reads only — no implicit build is performed. Use
+        ``laila.build(entry).wait()`` (sync), ``await laila.build(entry)``
+        (async), or ``laila.remember(entry_id)`` to materialize a
+        constitution-backed entry first.
+
+        Raises
+        ------
+        EntryNotBuiltError
+            If a constitution is attached but the entry has not been
+            built (no payload yet). Implicit blocking on first access
+            was removed because it deadlocked when invoked from inside
+            an async loop thread (the build would need the same loop to
+            advance).
         """
-        if self._payload is None and self._constitution is not None:
-            self.build().wait(None)
-        if self._payload is None:
+        with self.atomic(scope="local"):
+            if self._payload is not None:
+                return self._payload.data
+            if self._constitution is not None:
+                from .exceptions import EntryNotBuiltError
+                raise EntryNotBuiltError(
+                    f"Entry {self.global_id} is not built. "
+                    "Use `laila.build(entry).wait()` (or "
+                    "`await laila.build(entry, asynchronous=True)`) "
+                    "to materialize it before accessing .data."
+                )
             return None
-        return self._payload.data
 
 
     @data.setter
@@ -259,58 +274,82 @@ class Entry(
     # Constitution Operations
     ###################################################
 
-    def build(self, taskforce=None):
-        """Submit constitution-driven materialization to a taskforce.
+    def _build_sync(self):
+        """Synchronously materialize this entry by running its constitution.
 
-        Returns immediately with a ``Future``. When the task completes, the
-        payload is populated, ``_state`` becomes ``READY``, ``_constitution``
-        is cleared, and the policy is notified — at which point the entry
-        is indistinguishable from a regular built entry.
-
-        Parameters
-        ----------
-        taskforce : str | _LAILA_IDENTIFIABLE_TASK_FORCE, optional
-            Target taskforce (ID string or instance). Defaults to the
-            active policy's alpha taskforce.
-
-        Returns
-        -------
-        Future
-            Resolves once the entry has been fully materialized.
+        Runs ``_build_inplace`` directly on the calling thread — no
+        command submission, no future. Returns ``self`` for convenience.
+        Public callers go through :func:`laila.build` which submits this
+        method to a taskforce.
 
         Raises
         ------
         RuntimeError
-            If the entry is already built, or has no constitution attached.
+            If the entry is already built or has no constitution.
+        """
+        if self._state == EntryState.READY:
+            raise RuntimeError("Entry is already built.")
+        if self._constitution is None:
+            raise RuntimeError("Entry has no constitution attached.")
+        self._build_inplace()
+        return self
+
+    async def _build_async(self):
+        """Asynchronously materialize this entry by running its constitution.
+
+        For ``ComplexConstitution`` entries, awaits the manifest's
+        ``async_realized`` to ensure all referenced entries are present
+        in the alpha pool, then runs the constitution code inline. For
+        ``SimpleConstitution`` entries, the work is pure-CPU with no
+        nested waits, so ``_build_inplace`` runs inline as well.
+
+        Returns ``self`` for convenience.
         """
         if self._state == EntryState.READY:
             raise RuntimeError("Entry is already built.")
         if self._constitution is None:
             raise RuntimeError("Entry has no constitution attached.")
 
-        def _build_task():
-            self._build_inplace()
+        import asyncio
+
+        if isinstance(self._constitution, ComplexConstitution):
+            from .constitution.constitution import _exec_one_fn
+
+            c = self._constitution
+            if c._code is None:
+                raise RuntimeError("no constitution code defined.")
+
+            target = await c._resolve_manifest_async()
+            if target is None:
+                raise RuntimeError("no manifest available to run constitution.")
+
+            await target.async_realized
+            # User constitution code is sync and may itself call
+            # `manifest.realized` (a sync wait). Offload to a worker
+            # thread so it doesn't block the loop and can safely call
+            # blocking ``Future.wait()`` paths.
+            result = await asyncio.to_thread(_exec_one_fn(c._code), target)
+            self._post_build(result)
+            self.constitution = None
+            self.state = EntryState.READY
             return self
 
-        import laila
-        command = laila.get_active_policy().central.command
+        self._build_inplace()
+        return self
 
-        if taskforce is None:
-            taskforce_id = command.alpha_taskforce
-        elif isinstance(taskforce, str):
-            taskforce_id = taskforce
-        else:
-            taskforce_id = taskforce.global_id
-
-        return command.submit([_build_task], taskforce_id=taskforce_id)
+    def _build(self, *, asynchronous: bool = False):
+        """Router: dispatch to :meth:`_build_async` or :meth:`_build_sync`."""
+        if asynchronous:
+            return self._build_async()
+        return self._build_sync()
 
     def _build_inplace(self):
         """Run the attached constitution synchronously, in place.
 
         Threads the current payload (if any) into the constitution as
         ``payload_input`` and routes the result through ``_post_build``.
-        Used by both the instance-level ``build()`` task body and the
-        simple-entry branch of the classmethod ``Entry.build(in_dict)``.
+        Used by ``_build_sync`` and the simple-entry branch of
+        ``_build_from_dict_sync``.
         """
         if self._constitution is None:
             raise RuntimeError("Entry has no constitution attached.")
@@ -633,64 +672,75 @@ class Entry(
         return entry
 
     @classmethod
-    def build_from_dict(cls, in_dict, taskforce=None):
-        """Hydrate an entry from a serialized dict and return a Future.
+    def _build_from_dict_sync(cls, in_dict) -> "Entry":
+        """Synchronously hydrate an entry from a serialized dict.
 
-        For a `SimpleConstitution`, the build chain runs inside the same
-        task and the future resolves to a `READY` entry with its payload
-        materialized.  For a `ComplexConstitution`, the future resolves
-        to a `STAGED` entry with the constitution attached; the caller
-        must call `entry.build()` (or access `.data`) to materialize.
+        Returns the hydrated entry directly — no command submission,
+        no future. For ``SimpleConstitution`` entries, the build chain
+        runs inline so the returned entry is ``READY`` with its payload
+        materialized. For ``ComplexConstitution`` entries the returned
+        entry is ``STAGED`` with the constitution attached; the caller
+        must run ``laila.build(entry).wait()`` to materialize.
 
-        Parameters
-        ----------
-        in_dict : dict or str or Entry
-            Serialized representation produced by `serialize`, a JSON
-            string thereof, or a live `Entry` (returned as-is via a
-            resolved future).
-        taskforce : str or instance, optional
-            Target taskforce; defaults to the active policy's alpha
-            taskforce.
-
-        Returns
-        -------
-        Future
-            Resolves to the hydrated `Entry`.
+        Live ``Entry`` inputs are returned as-is.
         """
-        if isinstance(in_dict, str):
+        local = in_dict
+        if isinstance(local, str):
             try:
-                in_dict = json.loads(in_dict)
+                local = json.loads(local)
             except Exception as e:
                 raise ValueError("Invalid JSON string") from e
 
-        if isinstance(in_dict, Entry):
-            entry_obj = in_dict
-            def _passthrough_task():
-                return entry_obj
-            import laila
-            command = laila.get_active_policy().central.command
-            tf_id = command.alpha_taskforce if taskforce is None else (
-                taskforce if isinstance(taskforce, str) else taskforce.global_id
-            )
-            return command.submit([_passthrough_task], taskforce_id=tf_id)
+        if isinstance(local, Entry):
+            return local
 
-        if not isinstance(in_dict, dict):
+        if not isinstance(local, dict):
             raise RuntimeError("Invalid input for entry build.")
 
-        captured_dict = in_dict
+        entry = cls.from_dict(local)
+        if isinstance(entry._constitution, SimpleConstitution):
+            entry._build_inplace()
+        return entry
 
-        def _build_task():
-            entry = cls.from_dict(captured_dict)
-            if isinstance(entry._constitution, SimpleConstitution):
-                entry._build_inplace()
-            return entry
+    @classmethod
+    async def _build_from_dict_async(cls, in_dict) -> "Entry":
+        """Async variant of :meth:`_build_from_dict_sync`.
 
-        import laila
-        command = laila.get_active_policy().central.command
-        tf_id = command.alpha_taskforce if taskforce is None else (
-            taskforce if isinstance(taskforce, str) else taskforce.global_id
-        )
-        return command.submit([_build_task], taskforce_id=tf_id)
+        Hydrates from the dict inline (the from_dict step is pure
+        Python with no waits), then runs ``_build_inplace`` for
+        ``SimpleConstitution`` entries (which is pure CPU, no waits).
+        ``ComplexConstitution`` entries are returned ``STAGED``; their
+        constitution is materialized later via ``laila.build``.
+
+        Mirrors the sync path's behavior — both unconditionally run the
+        SimpleConstitution chain on the freshly-hydrated entry, even
+        when the serialized ``_state`` is already ``READY``, because the
+        constitution is what reverses the storage transformations.
+        """
+        local = in_dict
+        if isinstance(local, str):
+            try:
+                local = json.loads(local)
+            except Exception as e:
+                raise ValueError("Invalid JSON string") from e
+
+        if isinstance(local, Entry):
+            return local
+
+        if not isinstance(local, dict):
+            raise RuntimeError("Invalid input for entry build.")
+
+        entry = cls.from_dict(local)
+        if isinstance(entry._constitution, SimpleConstitution):
+            entry._build_inplace()
+        return entry
+
+    @classmethod
+    def _build_from_dict(cls, in_dict, *, asynchronous: bool = False):
+        """Router: dispatch to async or sync ``_build_from_dict``."""
+        if asynchronous:
+            return cls._build_from_dict_async(in_dict)
+        return cls._build_from_dict_sync(in_dict)
 
     ###################################################
     # String Representation
@@ -706,4 +756,8 @@ class Entry(
 
 
 from .constitution.build_maps import register_builder
-register_builder(_ENTRY_SCOPE, Entry.build_from_dict)
+register_builder(
+    _ENTRY_SCOPE,
+    Entry._build_from_dict_sync,
+    Entry._build_from_dict_async,
+)

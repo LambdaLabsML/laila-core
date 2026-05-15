@@ -119,7 +119,16 @@ class RemoteFuture(_LAILA_IDENTIFIABLE_FUTURE):
         )
 
     def wait(self, timeout: Optional[float] = None) -> Any:
-        """Block until the remote future completes, returning the result id."""
+        """Block until the remote future completes, returning the result id.
+
+        Raises
+        ------
+        LoopBlockingWaitError
+            If called from a thread that owns an async event loop.
+        """
+        from ...exceptions import _check_not_loop_thread
+        _check_not_loop_thread()
+
         return self._comm._send_rpc(
             str(self.policy_id),
             ["_wait_future"],

@@ -9,6 +9,7 @@ import sys
 import types
 import uuid
 import os
+from typing import Optional
 from dotmap import DotMap
 
 from .entry import Entry
@@ -185,6 +186,18 @@ def terminate(*, wait: bool = True, cancel_pending: bool = False) -> list:
     _local_policies.clear()
     _remote_policies.clear()
     _active_policy_gid = None
+
+    try:
+        from .policy.central.command.taskforce.base import (
+            _live_taskforces_snapshot,
+        )
+        for tf in _live_taskforces_snapshot():
+            try:
+                tf.shutdown(wait=wait, cancel_pending=cancel_pending)
+            except Exception as e:
+                errors.append(f"orphan_taskforce.shutdown[{getattr(tf, 'global_id', '?')}]: {e!r}")
+    except Exception as e:
+        errors.append(f"orphan_taskforce sweep: {e!r}")
 
     try:
         Logger.reset_singleton()
@@ -385,6 +398,48 @@ class _LailaModule(types.ModuleType):
 
 
 sys.modules[__name__].__class__ = _LailaModule
+
+
+def build(entry, *, taskforce_id: Optional["str"] = None):
+    """Materialize *entry* by submitting its async build to the active command.
+
+    Always submits the entry's ``_build_async`` coroutine to the alpha
+    taskforce. Both build flavors compose cleanly on a loop thread:
+
+    - ``SimpleConstitution`` entries finish their build inline (pure CPU,
+      no nested awaits).
+    - ``ComplexConstitution`` entries ``await`` ``laila.remember(...)``
+      to fetch their manifest and then ``await`` ``manifest.async_realized``
+      to materialize referenced entries — all without ever blocking the
+      loop on a sync ``Future.wait()``.
+
+    From sync callers (e.g. main thread, tests), ``ref.wait(None)`` blocks
+    until completion. From async callers, ``await ref`` yields the loop
+    while the build progresses.
+
+    On completion the entry is mutated in place: ``_payload`` is populated,
+    ``_constitution`` is cleared, and ``_state`` is ``READY``. The future
+    also resolves to the entry for convenience.
+
+    Parameters
+    ----------
+    entry : Entry
+        The entry to materialize. Must have a constitution attached.
+    taskforce_id : str, optional
+        Target taskforce; defaults to the alpha taskforce.
+
+    Returns
+    -------
+    Future
+        Future identity that resolves to the (mutated) entry.
+
+    Raises
+    ------
+    RuntimeError
+        If *entry* has no constitution or is already built.
+    """
+    command = get_active_policy().central.command
+    return command.submit([entry._build_async], taskforce_id=taskforce_id)
 
 
 def memorize(*args, **kwargs):

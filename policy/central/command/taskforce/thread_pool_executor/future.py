@@ -77,7 +77,16 @@ class ConcurrentPackageFuture(Future):
 
 
     def wait(self, timeout: Optional[float] = None) -> Any:
-        """Block until the future completes or *timeout* seconds elapse."""
+        """Block until the future completes or *timeout* seconds elapse.
+
+        Raises
+        ------
+        LoopBlockingWaitError
+            If called from a thread that owns an async event loop.
+        """
+        from ...schema.exceptions import _check_not_loop_thread
+        _check_not_loop_thread()
+
         deadline = None if timeout is None else time.monotonic() + timeout
         poll_interval_s = 0.01
 

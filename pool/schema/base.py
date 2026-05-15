@@ -118,6 +118,30 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_ATOMIC_I
         with self.atomic():
             self.resource.clear()
 
+    # -------- Default async hooks (override in async-capable pools) --------
+    async def _read_async(self, key: str) -> Optional[Any]:
+        """Default async read: invokes the sync ``_read`` inline on the calling loop.
+
+        Subclasses with a native-async client (e.g. ``aioboto3``) should
+        override this to ``await`` non-blocking I/O. The default impl runs
+        the sync call inline, which blocks other coroutines on the same
+        loop for its duration — correct, honest behavior for pools without
+        a true async client.
+        """
+        return self._read(key)
+
+    async def _write_async(self, key: str, value: Any) -> None:
+        """Default async write: invokes the sync ``_write`` inline on the calling loop."""
+        self._write(key, value)
+
+    async def _delete_async(self, key: str) -> None:
+        """Default async delete: invokes the sync ``_delete`` inline on the calling loop."""
+        self._delete(key)
+
+    async def _exists_async(self, key: str) -> bool:
+        """Default async exists: invokes the sync ``_exists`` inline on the calling loop."""
+        return self._exists(key)
+
     # -------- Proxy-aware public API --------
     def __getitem__(self, key) -> Optional[Any]:
         """Retrieve the stored blob for *key*, or a ``PoolWrapper`` for a ``Manifest``.
