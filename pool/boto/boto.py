@@ -1,4 +1,36 @@
-"""Abstract boto3-based S3-compatible pool implementation."""
+"""Abstract boto3-based S3-compatible pool implementation.
+
+:class:`BotoPool` is the shared chassis used by every S3-API-compatible
+backend in laila (AWS S3, Cloudflare R2, BackBlaze B2, ...).
+Concrete subclasses provide the bucket-vendor-specific
+``_get_client`` factory; everything else -- key encoding, throttling,
+async-via-aioboto3, connection-pool sizing, multi-loop client
+caching, and pool teardown -- is handled here.
+
+Sync vs async paths
+-------------------
+Every method has both a sync (:meth:`_read`, :meth:`_write`, ...)
+implementation that drives a regular boto3 client and an async
+(:meth:`_read_async`, ...) implementation that drives an aioboto3
+client when ``async_default`` is ``True``. With
+``async_default=False`` the async paths fall back to the inherited
+default of running the sync call inline on the calling event loop.
+
+Per-loop async client caching
+-----------------------------
+``aioboto3`` clients are bound to the event loop they're created on,
+so we cache one client *per loop* in :attr:`_aio_clients`. That keeps
+the underlying aiohttp connector pool warm (and respects
+``max_pool_connections``) without leaking clients across loops --
+critical when laila spins up multiple async taskforces, each with
+its own loop.
+
+Throttling
+----------
+Optional simple per-call sleep (:meth:`_throttle` / :meth:`_athrottle`)
+to keep the pool under a request-per-second cap. Defaults to no
+throttling.
+"""
 from __future__ import annotations
 
 import asyncio

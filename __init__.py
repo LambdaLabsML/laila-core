@@ -1,8 +1,71 @@
-"""Laila top-level package.
+"""Laila top-level package — Lambda's Interdisciplinary Large Atlas.
 
-Provides the public API for policy management, subsystem access
-(``laila.memory``, ``laila.command``, ``laila.communication``),
-future lifecycle helpers, and argument loading.
+This module is the single, opinionated entry point that user code
+imports as ``import laila``. Every other capability — storage pools,
+task-forces, peer-to-peer communication, futures, manifests,
+constitutions, and the CLI/TOML environment loader — is reachable
+either as a public attribute on this module or as a free function
+defined below.
+
+Major surface
+-------------
+**Subsystem shortcuts** (resolved against the *active* policy):
+
+- ``laila.memory`` -> :class:`policy.central.memory.schema.base._LAILA_IDENTIFIABLE_CENTRAL_MEMORY`
+- ``laila.command`` -> :class:`policy.central.command.schema.base._LAILA_IDENTIFIABLE_CENTRAL_COMMAND`
+- ``laila.communication`` -> :class:`policy.central.communication.schema.base._LAILA_IDENTIFIABLE_COMMUNICATION`
+- ``laila.peers`` -> dict of :class:`RemotePolicyProxy` keyed by ``global_id``
+- ``laila.alpha_pool`` -> the active policy's default storage pool
+- ``laila.runtime`` -> :mod:`laila.runtime` (futures introspection)
+- ``laila.logger`` -> the process-wide :class:`laila.logger.Logger` singleton
+
+**Active policy management**:
+
+- ``laila.active_policy`` (read/write) -- get or set the active policy.
+  Setting accepts both local policies and remote :class:`RemotePolicyProxy`
+  objects, enabling "morph" mode where local code transparently routes
+  through a peer.
+- :func:`activate_policy` / :func:`get_active_policy` -- explicit forms.
+- :func:`get_active_namespace` / :func:`set_active_namespace` -- control
+  the UUID-5 namespace used to derive deterministic IDs from nicknames.
+- ``laila.local_policies`` / ``laila.remote_policies`` / ``laila.universe``
+  -- enumerate every policy reachable from this process.
+
+**High-level memory operations** (delegate to the active policy's central
+memory):
+
+- :func:`memorize` -- write entries to the routed pool.
+- :func:`remember` -- read entries (optionally caching into the alpha pool).
+- :func:`forget`  -- delete entries.
+- :func:`build`   -- materialize an entry by running its constitution.
+
+**Lifecycle and configuration**:
+
+- :func:`terminate` -- best-effort, idempotent tear-down of every
+  subsystem this process owns.
+- :func:`read_args` -- load TOML/JSON/.env/.xml/CLI args into ``laila.args``.
+- ``laila.args`` -- a :class:`_LailaArgs` (DotMap subclass) used by every
+  ``_LAILA_CLI_CAPABLE_CLASS`` for 4-tier parameter resolution. Assigning
+  to ``laila.args.environment`` triggers a full environment reload.
+- :func:`set_default_directory` -- relocate the on-disk root used by
+  pools, logs, and secrets.
+
+**Networking helpers**:
+
+- :func:`add_peer` -- handshake with a remote policy and return its gid.
+
+Implementation notes
+--------------------
+This module installs a ``__class__`` swap (``sys.modules[__name__].__class__``)
+so that simple attribute access (``laila.memory``, ``laila.active_policy``)
+can be backed by Python ``property`` descriptors -- see :class:`_LailaModule`.
+That trick is what makes "subsystem shortcuts" work without forcing users
+to call helper functions on every access.
+
+The module also installs a null logging handler at import time so that
+applications which never call :func:`laila.enable_logging` do not see
+"No handlers could be found" warnings from the standard ``logging``
+machinery.
 """
 
 import sys
@@ -39,21 +102,51 @@ _install_logger_null_handler()
 
 
 def _is_env_load_trigger(value: "object") -> bool:
-    """Return True if assigning *value* to ``laila.args.environment`` should reload.
+    """Decide whether assigning *value* to ``laila.args.environment`` should
+    trigger a full :func:`_load_environment` cycle.
 
-    Two distinct cases:
+    The ``args.environment`` slot is overloaded -- it serves two roles
+    that share the same key, and we must distinguish them at write time
+    to avoid an infinite loop:
 
-    1. A *plain* ``dict`` with at least one key is interpreted as an
-       explicit user-assigned environment payload and always triggers a
-       load. ``_load_environment`` is then responsible for validating
-       its shape (raising ``ValueError`` for malformed envs).
-    2. A ``DotMap`` is treated as a load trigger only when it has a
-       non-empty ``policies`` mapping or an ``active_gid`` set. This
-       ensures the internal scaffolding path
-       (``_refresh_args_environment`` writes an empty ``DotMap`` to
-       seed ``args.environment``) does not re-enter the loader.
+    1. **User-driven full reload.** A user (or a CLI / TOML loader)
+       assigns a *fully-populated* environment payload to
+       ``laila.args.environment``. We must call :func:`_load_environment`
+       which tears down the current process state and rebuilds every
+       policy described by the payload.
 
-    Anything else (non-mapping, ``None``, empty ``dict``) is inert.
+    2. **Internal mirror update.** Whenever a CLI-capable class is
+       constructed or mutated, :func:`_refresh_args_environment` writes
+       a snapshot of the owning policy back to
+       ``laila.args.environment.policies[<gid>]``. That write must NOT
+       re-enter :func:`_load_environment` -- otherwise every model
+       construction during a load would recursively trigger another load.
+
+    The two cases are distinguished as follows:
+
+    - A *plain* ``dict`` with at least one key is always treated as a
+      user-driven payload. (``_refresh_args_environment`` only ever
+      writes ``DotMap`` instances, never plain dicts.) The load function
+      itself is responsible for validating the dict's shape and raising
+      ``ValueError`` for malformed envs.
+    - A ``DotMap`` is treated as a load trigger only when it carries a
+      non-empty ``policies`` mapping or an ``active_gid``. The mirror
+      path can briefly leave ``args.environment`` as an *empty* DotMap
+      (during initial scaffolding) and must not re-enter the loader.
+    - Anything else (non-mapping, ``None``, empty ``dict``) is inert
+      and silently passes through to :class:`DotMap`'s normal setter.
+
+    Parameters
+    ----------
+    value : object
+        The proposed new value for ``laila.args.environment``.
+
+    Returns
+    -------
+    bool
+        ``True`` if :func:`_load_environment` should be invoked,
+        ``False`` if the assignment should fall through to the default
+        DotMap behavior.
     """
     if isinstance(value, DotMap):
         try:
@@ -75,19 +168,43 @@ def _is_env_load_trigger(value: "object") -> bool:
 
 
 class _LailaArgs(DotMap):
-    """``DotMap`` subclass that watches for assignments to ``environment``.
+    """``DotMap`` subclass that watches for assignments to ``environment``
+    and triggers a full process-wide reload when one arrives.
 
+    ``laila.args`` is a single instance of this class created at import
+    time. Almost every CLI-capable Pydantic model in the package walks
+    ``laila.args`` during validation to fill in defaults (see
+    :class:`laila.basics.definitions.cli_capable._LAILA_CLI_CAPABLE_CLASS`).
+    The ``environment`` key, however, is special: it stores a
+    machine-readable snapshot of the *current* runtime (which policies
+    exist, which taskforces and pools are wired, which protocols are
+    registered) and is also the input format for restoring that runtime
+    on another process or after :func:`terminate`.
+
+    Hooked behavior
+    ---------------
     Setting ``laila.args.environment = my_env`` (or
-    ``laila.args["environment"] = my_env``) where ``my_env.policies`` is
-    a non-empty mapping triggers ``_load_environment`` -- which calls
-    ``laila.terminate(...)`` and rebuilds every policy listed in
-    ``my_env.policies`` with the right pool / taskforce / protocol
-    subclasses.
+    ``laila.args["environment"] = my_env``) where ``my_env`` carries a
+    non-empty ``policies`` mapping (or an ``active_gid``) triggers a
+    cascade:
 
-    The mirror-update path (``_refresh_args_environment`` writing to
-    ``args.environment.policies[<gid>]``) goes through DotMap's normal
-    ``__setitem__`` on the inner ``policies`` DotMap and never re-enters
-    this class's hooks.
+    1. :func:`terminate` is invoked to shut down every existing policy,
+       close every pool, and stop every taskforce.
+    2. :func:`_load_environment` walks ``my_env.policies`` and, using
+       the ``class_token`` recorded for each taskforce, pool, and
+       protocol, instantiates the appropriate concrete subclasses with
+       the recorded UUIDs preserved.
+    3. The chosen policy is activated.
+
+    Plain ``dict`` -> ``DotMap`` coercion is also performed for any
+    other key, so users can write ``laila.args.foo = {"bar": 1}`` and
+    immediately access ``laila.args.foo.bar``.
+
+    The mirror-update path -- ``_refresh_args_environment`` writing to
+    ``args.environment.policies[<gid>]`` -- goes through DotMap's normal
+    ``__setitem__`` on the inner ``policies`` DotMap (NOT through this
+    class's hooks), so the recursive loop described in
+    :func:`_is_env_load_trigger` is impossible.
     """
 
     def __setattr__(self, key, value):
@@ -120,36 +237,70 @@ _remote_policies = {}
 def terminate(*, wait: bool = True, cancel_pending: bool = False) -> list:
     """Gracefully tear down everything ``laila`` has spawned in this process.
 
-    Walks every locally-registered policy and, in this order:
+    This is the canonical "go back to a clean slate" call. It is safe
+    to call from anywhere -- including inside an exception handler --
+    and is automatically invoked at the start of every full environment
+    reload (see :class:`_LailaArgs`).
+
+    Order of operations
+    -------------------
+    For each policy in :data:`_local_policies` (a snapshot is taken first
+    so concurrent mutation is harmless):
 
     1. ``policy.central.communication.stop()`` -- closes WebSocket
-       servers, joins event-loop threads, drops peer registrations.
+       servers, joins their event-loop threads, drops every peer
+       registration. This is done first because peer-side RPCs that
+       arrive after a taskforce shuts down would otherwise raise
+       confusing exceptions instead of clean ``ConnectionClosed`` errors.
     2. ``policy.central.command.shutdown(wait=..., cancel_pending=...)``
-       -- joins / cancels every taskforce.
+       -- shuts down every registered taskforce. With ``wait=True`` we
+       block until the workers drain; with ``cancel_pending=True`` any
+       queued-but-unstarted submissions are dropped.
     3. ``pool.close()`` for each pool registered in
        ``policy.central.memory.pool_router.pools`` -- terminates managed
        subprocesses (Redis / Postgres / Mongo), closes file handles
-       (HDF5 / SQLite / DuckDB), and disconnects cloud clients.
+       (HDF5 / SQLite / DuckDB / filesystem mounts), and disconnects
+       cloud clients (S3, GCS, Azure, Backblaze, Cloudflare R2).
 
-    Then clears ``_local_policies``, ``_remote_policies``,
-    ``_active_policy_gid``, and the ``laila.args.environment.policies``
-    mirror.
+    After the per-policy sweep:
+
+    4. :data:`_local_policies`, :data:`_remote_policies`, and
+       :data:`_active_policy_gid` are cleared.
+    5. *Orphan* taskforces -- those created via raw ``TaskForce.*``
+       instantiation but never attached to a policy -- are looked up
+       through :func:`_live_taskforces_snapshot` and shut down.
+    6. The :class:`Logger` singleton is reset so the next call to
+       :func:`get_logger` returns a fresh instance.
+    7. The ``laila.args.environment.policies`` and
+       ``laila.args.environment.logger`` mirrors are cleared so a
+       subsequent ``laila.args.environment = {...}`` assignment is not
+       contaminated by stale entries.
+
+    Best-effort semantics
+    ---------------------
+    Each step is wrapped in its own ``try``/``except`` so that a failure
+    in one subsystem (e.g. a hung Redis connection) does not prevent the
+    others from being torn down. Failures are recorded in the returned
+    list as short ``"<step>[<id>]: <repr>"`` strings; this function never
+    raises directly.
 
     Parameters
     ----------
     wait : bool, default True
         Forwarded to ``command.shutdown`` -- block until taskforce
-        workers exit.
+        workers exit. Set to ``False`` for non-blocking, fire-and-forget
+        teardown (typically only useful in test harnesses).
     cancel_pending : bool, default False
         Forwarded to ``command.shutdown`` -- cancel queued, un-started
-        futures.
+        futures. Already-running tasks are not cancelled regardless of
+        this flag.
 
     Returns
     -------
     list[str]
-        One error string per failed step. An empty list means clean
-        shutdown. The function never raises -- failures are recorded
-        and the next step still runs (best-effort, idempotent).
+        One short error string per failed step. An empty list means
+        clean shutdown. The function never raises -- failures are
+        recorded and the next step still runs (best-effort, idempotent).
     """
     global _active_policy_gid
     errors: list = []
@@ -224,9 +375,49 @@ def terminate(*, wait: bool = True, cancel_pending: bool = False) -> list:
 
 
 def read_args(source, *, terminal_args=None) -> None:
-    """Load user arguments from a TOML/JSON/.env/.xml file or ``terminal`` into ``laila.args``.
+    """Load user arguments from a file or terminal flags into ``laila.args``.
 
-    Mutates ``laila.args`` in place. Always returns ``None``.
+    A thin wrapper around the singleton :class:`laila.utils.args.ArgReader`
+    bound to the live ``laila.args`` :class:`_LailaArgs` instance.
+
+    Supported sources
+    -----------------
+    - ``"path/to/config.toml"`` -- parsed with :mod:`tomllib`.
+    - ``"path/to/config.json"`` -- parsed with :mod:`json`.
+    - ``"path/to/.env"``        -- parsed line-by-line as ``KEY=value``.
+    - ``"path/to/config.xml"``  -- parsed as a flat XML key-value map.
+    - ``"terminal"``            -- consume :data:`sys.argv` (or
+      *terminal_args*) as ``--key value`` / ``--key=value`` pairs.
+
+    For non-terminal sources, nested TOML tables map cleanly onto nested
+    DotMap attributes (``[policy.central.memory]`` becomes
+    ``laila.args.policy.central.memory``).
+
+    Side effects
+    ------------
+    - Mutates ``laila.args`` in place. Existing keys are *merged*, not
+      replaced -- callers that need a clean slate should construct a
+      fresh dict and assign it to ``laila.args.environment`` to trigger
+      a full reload via :class:`_LailaArgs`.
+    - If the loaded payload contains an ``environment`` key with a
+      non-empty ``policies`` mapping, the assignment hook fires and
+      :func:`_load_environment` is invoked, which calls
+      :func:`terminate` and rebuilds the entire policy graph.
+
+    Parameters
+    ----------
+    source : str
+        Path to a TOML/JSON/.env/.xml file, or the literal string
+        ``"terminal"``.
+    terminal_args : list[str], optional
+        Override for :data:`sys.argv` when *source* is ``"terminal"``.
+        Useful in tests; also lets callers strip off ``argv[0]``
+        themselves.
+
+    Returns
+    -------
+    None
+        Always. Inspect ``laila.args`` for the result.
     """
     arg_reader.load(source, terminal_args=terminal_args)
 
@@ -234,7 +425,27 @@ _active_policy_gid: "str | None" = None
 _active_namespace = None
 
 def get_active_namespace():
-    """Return the active UUID namespace, initializing it on first access."""
+    """Return the UUID-5 namespace used to derive deterministic IDs from nicknames.
+
+    Every nickname-based identifier in laila (``Entry.constant(nickname=...)``,
+    ``Entry.variable(nickname=...)``, the convenience ``nickname=`` argument
+    on :func:`memorize` / :func:`remember` / :func:`forget`) is hashed
+    against this namespace to produce a stable :class:`uuid.UUID`. Two
+    processes that share the same namespace and nickname will compute
+    *identical* global IDs, which is what makes nicknames usable for
+    cross-process / cross-machine entry resolution.
+
+    On first access the namespace is initialized to
+    :data:`laila.macros.defaults.LAILA_UNIVERSAL_NAMESPACE`. Override it
+    via :func:`set_active_namespace` to scope your project's nickname
+    space (e.g. so two unrelated projects can't accidentally collide on
+    the nickname ``"images"``).
+
+    Returns
+    -------
+    uuid.UUID
+        The currently active namespace UUID.
+    """
     global _active_namespace
     if _active_namespace is None:
         from .macros.defaults import LAILA_UNIVERSAL_NAMESPACE
@@ -242,12 +453,31 @@ def get_active_namespace():
     return _active_namespace
 
 def set_active_namespace(namespace_key: str):
-    """Set the active UUID namespace derived from *namespace_key*.
+    """Replace the active UUID-5 namespace with one derived from *namespace_key*.
+
+    The new namespace is computed as ``uuid.uuid5(uuid.NAMESPACE_DNS,
+    namespace_key)``. After this call every nickname-based identifier
+    minted by laila will be derived from the new namespace.
+
+    Typical use is once at startup, with a stable project identifier:
+
+    .. code-block:: python
+
+        laila.set_active_namespace("acme.research.experiments")
+
+    Two processes that pass the same ``namespace_key`` will derive the
+    same namespace UUID, so nicknames remain interoperable across them.
 
     Parameters
     ----------
     namespace_key : str
-        DNS-style key used with ``uuid.uuid5`` to generate the namespace.
+        DNS-style key used with :func:`uuid.uuid5` to generate the
+        namespace. Any string is accepted; using a reverse-domain
+        identifier you control is recommended to avoid collisions.
+
+    See Also
+    --------
+    get_active_namespace : retrieve the currently active namespace.
     """
     global _active_namespace
     _active_namespace = uuid.uuid5(uuid.NAMESPACE_DNS, namespace_key)
@@ -255,13 +485,36 @@ def set_active_namespace(namespace_key: str):
 def get_active_policy():
     """Return the active policy, lazily creating a ``DefaultPolicy`` on first access.
 
-    Resolves through ``universe`` (``_local_policies`` ∪ ``_remote_policies``)
-    so that morphing into a peer via ``laila.active_policy = remote_proxy``
-    transparently returns the proxy.  Local policies take precedence when
-    a gid is registered both locally and as a remote proxy (this only
-    happens when testing multiple local policies that peer with each
-    other in the same process; in real cross-process usage the two
-    namespaces are disjoint).
+    The "active policy" is the implicit subject of every top-level
+    laila call (``laila.memorize``, ``laila.remember``, ``laila.build``,
+    ``laila.memory``, etc.). At most one policy is active per process at
+    any given time, but multiple policies may coexist in
+    :data:`_local_policies` and the active one can be swapped via
+    :func:`activate_policy` (or, equivalently, by assigning to
+    ``laila.active_policy``).
+
+    Resolution order
+    ----------------
+    1. If no policy has been activated yet, instantiate a fresh
+       :class:`laila.macros.defaults.DefaultPolicy` and activate it.
+       This makes "import laila and use it" work without ceremony.
+    2. If the active gid maps to a *local* policy, return that instance.
+    3. Otherwise the active gid must map to a *remote* peer (we
+       previously activated a :class:`RemotePolicyProxy`); return the
+       proxy. This is "morph mode": local code transparently routes
+       every memory / command / communication call through the peer.
+
+    Local policies take precedence when a gid appears in both
+    :data:`_local_policies` and :data:`_remote_policies` -- this can
+    only happen when two local policies in the same process peer with
+    each other (a test-only setup); in real cross-process usage the
+    namespaces are disjoint.
+
+    Returns
+    -------
+    _LAILA_IDENTIFIABLE_POLICY | RemotePolicyProxy
+        The active policy. On first access this is always a freshly-
+        constructed ``DefaultPolicy``.
     """
     global _active_policy_gid
     if _active_policy_gid is None:
@@ -272,19 +525,43 @@ def get_active_policy():
     return _remote_policies[_active_policy_gid]
 
 def activate_policy(policy):
-    """Replace the active policy.
+    """Replace the active policy with *policy*.
 
-    Accepts a local ``_LAILA_IDENTIFIABLE_POLICY`` or a
-    ``RemotePolicyProxy`` obtained from ``laila.peers``.  Multiple local
-    policies may coexist in the same process and the active one can be
-    swapped freely; the most recent call wins.
+    Mutates the module-level :data:`_active_policy_gid` and, when
+    *policy* is a *local* policy, ensures it is registered in
+    :data:`_local_policies`. After this call:
+
+    - :func:`get_active_policy` returns *policy*.
+    - The subsystem shortcuts ``laila.memory``, ``laila.command``,
+      ``laila.communication``, and ``laila.peers`` resolve through
+      *policy*.
+    - High-level helpers (:func:`memorize`, :func:`remember`,
+      :func:`forget`, :func:`build`) operate on *policy*.
+    - The ``laila.args.environment`` mirror is best-effort refreshed
+      so a subsequent restart can recreate the same configuration.
 
     Equivalent to ``laila.active_policy = policy``.
+
+    Switching freely
+    ----------------
+    Multiple local policies may coexist in the same process; this call
+    simply swings the "currently active" pointer. To use a remote
+    policy ("morph mode"), pass a :class:`RemotePolicyProxy` obtained
+    from ``laila.peers`` -- subsequent local calls then transparently
+    RPC into the peer.
 
     Parameters
     ----------
     policy : _LAILA_IDENTIFIABLE_POLICY | RemotePolicyProxy
         The policy instance (local or remote proxy) to activate.
+        Must expose a ``global_id`` property.
+
+    Notes
+    -----
+    The args-environment refresh is wrapped in a broad ``try``/``except``
+    -- failures here are non-fatal because the in-memory policy state is
+    the source of truth; the environment mirror is purely for
+    serialization / restart purposes.
     """
     global _active_policy_gid
     new_gid = str(policy.global_id)
@@ -302,16 +579,40 @@ def activate_policy(policy):
 
 
 def _get_active_local_policy():
-    """Return the local policy used for future registration.
+    """Return the local policy that should own newly-created futures.
 
-    When the active policy is a local one, returns it directly so that
-    swapping between several local policies routes future registration
-    to the currently active one.  When the active policy is a remote
-    proxy (morph mode), falls back to the single local policy registered
-    in this process; with multiple locals and a remote active policy
-    the caller must first switch back to a local policy.  When no policy
-    is active yet, lazily activates a ``DefaultPolicy`` (mirroring
-    ``get_active_policy``).
+    Used by :class:`Future` / :class:`GroupFuture` (and other
+    ``_LAILA_IDENTIFIABLE_FUTURE`` subclasses) at construction time so
+    they can self-register into ``policy.future_bank``. Futures must
+    always live in a *local* policy (a :class:`RemotePolicyProxy` does
+    not have a real ``future_bank``), even when the *active* policy is
+    a remote peer in morph mode.
+
+    Resolution order
+    ----------------
+    1. If no policy is active yet, lazily activate a ``DefaultPolicy``
+       via :func:`get_active_policy`. This means importing laila and
+       creating a future works without any setup.
+    2. If the active gid maps to a *local* policy, return it. This is
+       the common case and ensures that swapping between several local
+       policies routes future registration to the currently active one.
+    3. Otherwise (active policy is a remote proxy):
+       - if exactly one local policy exists in this process, return it
+         (an obvious unambiguous fallback);
+       - if multiple local policies exist, raise ``RuntimeError`` --
+         the caller must first switch back to a local policy with
+         :func:`activate_policy`.
+
+    Returns
+    -------
+    _LAILA_IDENTIFIABLE_POLICY
+        A local policy suitable for future registration.
+
+    Raises
+    ------
+    RuntimeError
+        If the active policy is a remote proxy and the number of local
+        policies is not exactly one.
     """
     if _active_policy_gid is None:
         get_active_policy()
@@ -326,73 +627,130 @@ def _get_active_local_policy():
 
 
 class _LailaModule(types.ModuleType):
-    """Module subclass that exposes subsystem shortcuts and property-based
-    access so that ``laila.active_policy = my_policy`` and
-    ``laila.memory.extend(...)`` work naturally."""
+    """Module subclass that backs ``laila.<name>`` attribute access with
+    Python ``property`` descriptors.
+
+    Why subclass :class:`types.ModuleType`?
+    ---------------------------------------
+    Plain modules cannot expose computed attributes (you get a fresh
+    ``laila.memory`` every call only if it is recomputed each time --
+    a normal module-level binding is static). By installing this
+    subclass as ``sys.modules[__name__].__class__`` at the bottom of
+    this file we get the best of both worlds: ``import laila`` still
+    returns a module, but every read of ``laila.memory`` /
+    ``laila.command`` / ``laila.communication`` re-resolves through
+    the *current* active policy, so swapping the active policy is
+    instantly visible to user code without any extra plumbing.
+
+    The same trick lets ``laila.active_policy = my_policy`` and
+    ``laila.logger = MyLogger()`` work as ordinary assignments while
+    still routing through :func:`activate_policy` and
+    :meth:`Logger.reset_singleton`.
+    """
 
     @property
     def active_policy(self):
+        """Currently active policy (lazy ``DefaultPolicy`` on first access)."""
         return get_active_policy()
 
     @active_policy.setter
     def active_policy(self, value):
+        """Replace the active policy via :func:`activate_policy`."""
         activate_policy(value)
 
     @property
     def communication(self):
+        """Active policy's ``central.communication`` -- peers, protocols, RPC."""
         return get_active_policy().central.communication
 
     @property
     def memory(self):
+        """Active policy's ``central.memory`` -- memorize/remember/forget, pools."""
         return get_active_policy().central.memory
 
     @property
     def command(self):
+        """Active policy's ``central.command`` -- taskforces, submit, futures."""
         return get_active_policy().central.command
 
     @property
     def peers(self):
+        """Mapping of ``global_id`` -> :class:`RemotePolicyProxy` for every connected peer."""
         return get_active_policy().central.communication.peers
 
     @property
     def local_policies(self):
-        """All local policies on this machine, keyed by ``global_id``."""
+        """All local policies on this machine, keyed by ``global_id``.
+
+        A *local* policy is one whose subsystems live in this process.
+        At any time at most one is active, but several may coexist (e.g.
+        for testing peer-to-peer flows in a single process).
+        """
         return _local_policies
 
     @property
     def remote_policies(self):
-        """All remote peer policies, keyed by ``global_id``."""
+        """All remote peer policies, keyed by ``global_id``.
+
+        Each value is a :class:`RemotePolicyProxy` that translates
+        attribute access into RPC calls against the peer. Membership
+        is updated automatically by handshake / disconnect events on
+        the underlying communication protocols.
+        """
         return _remote_policies
 
     @property
     def universe(self):
         """Union of local and remote policies, keyed by ``global_id``.
 
-        Locals take precedence when a gid appears in both maps (only
-        possible when peering local policies in the same process).
+        Useful when you have a gid in hand and don't care whether the
+        owner is local or remote. Locals take precedence when a gid
+        appears in both maps (only possible when peering local
+        policies in the same process for tests).
         """
         return {**_remote_policies, **_local_policies}
 
     @property
     def alpha_pool(self):
-        """The active policy's default (alpha) pool instance."""
+        """The active policy's default (alpha) pool instance.
+
+        The alpha pool is the destination for ``laila.memorize(...)``
+        when no explicit ``pool_id`` / ``pool_nickname`` is provided,
+        and the cache target for ``laila.remember(..., persist=True)``.
+        """
         mem = get_active_policy().central.memory
         return mem.pool_router.pools[mem.alpha_pool]
 
     @property
     def runtime(self):
-        """Runtime introspection module for futures."""
+        """The :mod:`laila.runtime` module -- future status / wait / result helpers.
+
+        Loaded lazily via :func:`importlib.import_module` to avoid
+        pulling the runtime symbols into the top-level namespace at
+        import time (they would otherwise shadow the deprecated
+        :func:`status` / :func:`wait` shims).
+        """
         import importlib
         return importlib.import_module("laila.runtime")
 
     @property
     def logger(self):
-        """Process-wide :class:`laila.logger.Logger` singleton (lazy)."""
+        """Process-wide :class:`laila.logger.Logger` singleton (lazy).
+
+        A singleton because every ``record_*`` call writes to the same
+        underlying handlers; sharing one instance avoids duplicate
+        output when several pieces of code want to log.
+        """
         return get_logger()
 
     @logger.setter
     def logger(self, value):
-        """Replace the singleton with a fully-built ``Logger`` instance."""
+        """Replace the logger singleton with a fully-built :class:`Logger`.
+
+        Resets the existing singleton first so any cached references
+        (e.g. inside CLI-capable models that captured ``get_logger()``
+        during validation) become stale and re-resolve on next access.
+        """
         Logger.reset_singleton()
         Logger._singleton = value
 
@@ -401,42 +759,71 @@ sys.modules[__name__].__class__ = _LailaModule
 
 
 def build(entry, *, taskforce_id: Optional["str"] = None):
-    """Materialize *entry* by submitting its async build to the active command.
+    """Materialize *entry* by running its constitution on a taskforce.
 
-    Always submits the entry's ``_build_async`` coroutine to the alpha
-    taskforce. Both build flavors compose cleanly on a loop thread:
+    A :class:`laila.entry.Entry` may be created with a
+    :class:`Constitution` rather than a concrete payload; in that case
+    its ``state`` is :class:`EntryState.STAGED` and ``entry.data`` will
+    raise :class:`EntryNotBuiltError` until you call :func:`build`.
 
-    - ``SimpleConstitution`` entries finish their build inline (pure CPU,
-      no nested awaits).
-    - ``ComplexConstitution`` entries ``await`` ``laila.remember(...)``
-      to fetch their manifest and then ``await`` ``manifest.async_realized``
-      to materialize referenced entries — all without ever blocking the
-      loop on a sync ``Future.wait()``.
+    What this function does
+    -----------------------
+    Always submits the entry's :meth:`Entry._build_async` coroutine to
+    the chosen taskforce (alpha by default). The unified async path
+    composes cleanly with the rest of the system:
 
-    From sync callers (e.g. main thread, tests), ``ref.wait(None)`` blocks
-    until completion. From async callers, ``await ref`` yields the loop
-    while the build progresses.
+    - **SimpleConstitution** entries: a pure-CPU chain of inverse
+      transformations (e.g. base64-decode -> zlib-decompress ->
+      msgpack-deserialize). The coroutine runs the chain inline on its
+      loop thread because there is no I/O to ``await``.
+    - **ComplexConstitution** entries: the user-provided builder
+      function takes a :class:`Manifest`. The coroutine first
+      ``await``\\ s :func:`Manifest.async_realized` to recursively
+      materialize every referenced entry (each of which may itself be
+      a complex build), then offloads the user's sync builder body to
+      :func:`asyncio.to_thread` so that any internal blocking ``.wait()``
+      calls don't deadlock the loop.
 
-    On completion the entry is mutated in place: ``_payload`` is populated,
-    ``_constitution`` is cleared, and ``_state`` is ``READY``. The future
-    also resolves to the entry for convenience.
+    Calling conventions
+    -------------------
+    The returned future identity is awaitable both ways:
+
+    - From sync callers (main thread, tests): ``build(entry).wait()``
+      blocks until completion.
+    - From async callers: ``await build(entry)`` yields the loop while
+      the build progresses.
+
+    Either way, on completion the entry is mutated in place:
+    ``_payload`` is populated, ``_constitution`` is cleared, and
+    ``_state`` flips to ``READY``. The future *also* resolves to the
+    same entry instance for convenience.
 
     Parameters
     ----------
     entry : Entry
-        The entry to materialize. Must have a constitution attached.
+        The entry to materialize. Must have a constitution attached
+        (otherwise :meth:`Entry._build_async` raises ``RuntimeError``).
     taskforce_id : str, optional
-        Target taskforce; defaults to the alpha taskforce.
+        Target taskforce ``global_id``; defaults to
+        ``policy.central.command.alpha_taskforce``. Pass a different
+        taskforce gid to route CPU-heavy builds to a process pool.
 
     Returns
     -------
     Future
-        Future identity that resolves to the (mutated) entry.
+        Future identity that resolves to the (now-built) entry.
 
     Raises
     ------
     RuntimeError
-        If *entry* has no constitution or is already built.
+        Raised inside the future when *entry* has no constitution or is
+        already built. (The submission itself does not raise.)
+
+    See Also
+    --------
+    laila.memorize : persist a built entry to a pool.
+    laila.remember : fetch (and optionally build) an entry from a pool.
+    laila.entry.Entry.variable : create an entry with a constitution.
     """
     command = get_active_policy().central.command
     return command.submit([entry._build_async], taskforce_id=taskforce_id)
@@ -445,23 +832,85 @@ def build(entry, *, taskforce_id: Optional["str"] = None):
 def memorize(*args, **kwargs):
     """Persist one or more entries into the active policy's memory.
 
-    Entries are serialized, transformed, and written to the routed pool.
-    Returns a future (or ``GroupFuture``) that resolves when the write
-    completes.  Returns ``None`` when the default in-memory pool is used.
+    Thin top-level shim that forwards to
+    :meth:`policy.central.memory.memorize`. The work performed there:
+
+    1. Resolve the destination pool via the
+       :class:`PoolRouter` (``pool_id`` > ``pool_nickname`` > alpha).
+    2. For each entry, wrap it in a :class:`Record`, serialize the
+       record + its payload through the pool's
+       :class:`TransformationSequence` (e.g. msgpack -> zlib -> base64),
+       and ``await`` the pool's ``_write_async`` for the actual storage
+       round-trip.
+    3. Submit one async coroutine per entry to the alpha taskforce so
+       writes proceed concurrently without blocking the caller.
+
+    Return shape
+    ------------
+    A *future identity* you can ``await`` (async) or ``.wait()`` (sync):
+
+    - One entry -> a single :class:`Future`.
+    - Many entries -> a :class:`GroupFuture` that completes when all
+      child writes complete.
+
+    Pure in-memory pools that perform writes synchronously inside the
+    submission may return ``None`` -- callers that need a future-shaped
+    handle should pick a non-default pool or use ``with laila.guarantee:``.
 
     Parameters
     ----------
     entries : Entry | list[Entry]
-        The entry or entries to store.
+        The entry or entries to store. Already-list inputs are passed
+        through; single entries are auto-wrapped.
     pool_id : str, optional
         Explicit pool ``global_id`` to route to.
     pool_nickname : str, optional
-        Pool alias registered via ``extend``.
+        Pool alias registered via :meth:`PoolRouter.extend` /
+        :meth:`Policy.extend`. Falls back to the alpha pool when neither
+        ``pool_id`` nor ``pool_nickname`` is given.
+    affinity : float, optional
+        Reserved for future affinity-based routing.
+
+    Returns
+    -------
+    Future or GroupFuture or None
+        Future-like handle resolving when the write(s) finish.
+
+    See Also
+    --------
+    laila.remember : the inverse operation.
+    laila.policy.central.memory.schema.base._LAILA_IDENTIFIABLE_CENTRAL_MEMORY.memorize :
+        the concrete implementation invoked by this shim.
     """
     return get_active_policy().central.memory.memorize(*args, **kwargs)
 
 def __resolve_nickname(kwargs):
-    """Convert a nickname in *kwargs* to a deterministic ``global_id`` list."""
+    """Translate a ``nickname=`` (and optional ``evolution=``) kwarg pair
+    into the canonical ``[global_id]`` shape consumed by
+    :meth:`memory.remember` / :meth:`memory.forget`.
+
+    Routed through :func:`Entry.to_global_id` so the resulting gid uses
+    the *active* UUID-5 namespace (see :func:`get_active_namespace`).
+    Anyone in the same namespace who calls with the same nickname will
+    derive the same gid -- that's what makes nicknames usable for
+    cross-process entry resolution.
+
+    Parameters
+    ----------
+    kwargs : dict
+        Caller's kwargs dict; expects ``nickname`` (str) and optionally
+        ``evolution`` (int).
+
+    Returns
+    -------
+    list[str]
+        A single-element list containing the derived global_id.
+
+    Raises
+    ------
+    ValueError
+        If ``kwargs["nickname"]`` is not a string.
+    """
     if isinstance(kwargs["nickname"], str):
         args = [
             Entry.to_global_id(
@@ -477,9 +926,38 @@ def __resolve_nickname(kwargs):
 def remember(*args, persist: bool = True, **kwargs):
     """Retrieve one or more entries from the active policy's memory.
 
-    Reads serialized blobs from the routed pool, applies the inverse
-    transformation sequence, and returns recovered ``Entry`` objects
-    wrapped in a future.
+    Thin top-level shim that forwards to
+    :meth:`policy.central.memory.remember`. The work performed there:
+
+    1. Resolve the source pool via the :class:`PoolRouter`.
+    2. For each ``entry_id``, ``await`` the pool's ``_read_async`` and
+       then route the raw blob through :meth:`Record._build_async`,
+       which inverts the pool's :class:`TransformationSequence` and
+       hydrates a fresh :class:`Entry`.
+    3. Submit one async coroutine per entry to the alpha taskforce.
+
+    The ``persist`` cache-back semantics
+    -------------------------------------
+    By default (``persist=True``), if the routed source pool is *not*
+    the alpha pool, the fetched entries are additionally memorized into
+    the alpha pool and the returned future only resolves once that
+    write completes. This means:
+
+    - ``with laila.guarantee:`` blocks until the alpha pool has the
+      entries, so subsequent reads from the alpha pool are safe.
+    - The next ``remember(...)`` for the same ids hits the alpha pool
+      directly and skips the slower remote round-trip.
+
+    Pass ``persist=False`` to opt out -- useful for one-shot reads
+    where you don't want to grow the alpha pool.
+
+    Identifying entries
+    -------------------
+    Either pass explicit ``entry_ids=...`` or use the convenience
+    ``nickname=...`` form which derives the gid via
+    :func:`Entry.to_global_id` against the active namespace. The
+    ``nickname`` and ``evolution`` kwargs are consumed and removed
+    before the call is forwarded.
 
     Parameters
     ----------
@@ -488,16 +966,21 @@ def remember(*args, persist: bool = True, **kwargs):
     pool_id : str, optional
         Explicit pool ``global_id`` to read from.
     pool_nickname : str, optional
-        Pool alias registered via ``extend``.
+        Pool alias registered via :meth:`Policy.extend`.
     nickname : str, optional
-        Convenience alias – converted to a deterministic ``global_id``.
+        Convenience alias -- converted to a deterministic ``global_id``
+        via :func:`Entry.to_global_id` against the active namespace.
+        Mutually exclusive with ``entry_ids`` for that slot.
+    evolution : int, optional
+        Optional evolution suffix to append to the nickname-derived gid.
     persist : bool, default True
-        When ``True``, the fetched entries are also memorized into the
-        active policy's alpha pool, and the returned future only resolves
-        after the alpha-pool write has completed.  Using
-        ``with laila.guarantee:`` therefore blocks until the alpha pool
-        has received the entries.  When the routed source pool already
-        is the alpha pool, the write is skipped.
+        Cache-back into the alpha pool. See "persist semantics" above.
+
+    Returns
+    -------
+    Future or GroupFuture
+        Future-like handle resolving to the rebuilt :class:`Entry` (or
+        list of entries for multiple ids).
     """
     if "nickname" in kwargs:
         args = []
@@ -512,8 +995,19 @@ def remember(*args, persist: bool = True, **kwargs):
 def forget(*args, **kwargs):
     """Delete one or more entries from the active policy's memory.
 
-    Removes the stored blob from the routed pool.  Returns a future
-    that resolves when the deletion completes.
+    Thin top-level shim that forwards to
+    :meth:`policy.central.memory.forget`. For each gid, ``await``\\ s
+    the routed pool's ``_delete_async`` (or the batch path on
+    batch-accelerated pools) and yields a future per entry.
+
+    Forgetting is *pool-local*: it only removes the blob from the
+    routed pool, not from any other pool that may have a copy. To wipe
+    an entry everywhere, iterate over ``laila.memory.pool_router.pools``
+    explicitly.
+
+    Identifying entries follows the same rules as :func:`remember`: pass
+    either ``entry_ids`` or the convenience ``nickname`` (+ optional
+    ``evolution``) form.
 
     Parameters
     ----------
@@ -522,9 +1016,17 @@ def forget(*args, **kwargs):
     pool_id : str, optional
         Explicit pool ``global_id`` to delete from.
     pool_nickname : str, optional
-        Pool alias registered via ``extend``.
+        Pool alias registered via :meth:`Policy.extend`.
     nickname : str, optional
-        Convenience alias – converted to a deterministic ``global_id``.
+        Convenience alias -- converted to a deterministic ``global_id``
+        via :func:`Entry.to_global_id`.
+    evolution : int, optional
+        Optional evolution suffix for the nickname form.
+
+    Returns
+    -------
+    Future or GroupFuture
+        Future-like handle resolving when the delete(s) finish.
     """
     if "nickname" in kwargs:
         args = []
@@ -536,29 +1038,94 @@ def forget(*args, **kwargs):
 
 
 def add_peer(uri: str, secret: str) -> str:
-    """Connect to a remote policy and register it as a peer.
+    """Connect to a remote policy and register it as a peer of the active policy.
+
+    Delegates to :meth:`Communication.add_peer`, which:
+
+    1. Picks a transport protocol that can handle *uri* (currently the
+       TCP/IP WebSocket protocol; matches ``ws://`` and ``wss://``).
+    2. Performs the handshake -- exchanges ``peer_secret_key`` values
+       and policy ``global_id``\\ s.
+    3. Registers a :class:`RemotePolicyProxy` in
+       ``laila.peers[<remote_gid>]`` and in :data:`_remote_policies`.
+
+    Once registered, the proxy can be passed to
+    :func:`activate_policy` ("morph mode") so subsequent local calls
+    transparently RPC into the peer, or it can be used directly:
+
+    .. code-block:: python
+
+        gid = laila.add_peer("ws://host:9000", secret="...")
+        peer = laila.peers[gid]
+        peer.memorize(my_entry)  # explicit RPC, active policy unchanged
 
     Parameters
     ----------
     uri : str
-        URI of the remote policy (e.g. ``"ws://host:port"``).
+        URI of the remote policy. Today the only supported scheme is
+        WebSocket: ``"ws://host:port"`` or ``"wss://host:port"``.
     secret : str
-        The remote policy's ``peer_secret_key`` (on its protocol).
+        The remote policy's ``peer_secret_key`` (configured on the
+        remote's communication protocol). Required for the handshake to
+        succeed.
 
     Returns
     -------
     str
-        The ``global_id`` of the newly peered remote policy.
+        The ``global_id`` of the newly peered remote policy. Use it to
+        index ``laila.peers``.
+
+    Raises
+    ------
+    ConnectionError
+        If no registered protocol can handle *uri*, or if the underlying
+        transport refuses to connect.
+    PermissionError
+        If the *secret* is rejected by the remote's protocol.
     """
     return get_active_policy().central.communication.add_peer(uri, secret)
 
 
 def _resolve_future(future_ref):
-    """Look up the actual future object from a reference.
+    """Look up the actual future object from a heterogeneous reference.
 
-    Accepts a ``RemoteFuture``, a future identity, a GroupFuture, a
-    full Future, or a ``global_id`` string.  Searches all local policy
-    banks when resolving by string.
+    The various ``laila`` APIs accept many shapes that all *refer* to
+    a future without necessarily *being* one. This helper normalizes
+    them to a concrete future instance you can call ``.wait()`` /
+    ``.status`` / ``.exception`` on.
+
+    Accepted shapes
+    ---------------
+    - :class:`RemoteFuture` -- already a usable handle, returned as-is.
+    - :class:`GroupFuture`  -- already a usable handle, returned as-is.
+    - :class:`Future`       -- already a usable handle, returned as-is.
+    - :class:`_LAILA_IDENTIFIABLE_FUTURE` (the lightweight identity
+      shape returned by :meth:`command.submit`) -- looked up by gid in
+      every local policy's ``future_bank`` and finally in the active
+      policy's bank.
+    - ``str`` -- treated as a future ``global_id`` and looked up the
+      same way.
+
+    The local-banks-first search lets future references created against
+    a non-active local policy still resolve correctly when the active
+    policy has been swapped out.
+
+    Parameters
+    ----------
+    future_ref : RemoteFuture | Future | GroupFuture | _LAILA_IDENTIFIABLE_FUTURE | str
+        Anything that uniquely identifies a future.
+
+    Returns
+    -------
+    Future | GroupFuture | RemoteFuture
+        The concrete future object.
+
+    Raises
+    ------
+    KeyError
+        If the gid is not found in any future bank.
+    TypeError
+        If *future_ref* is not one of the accepted types.
     """
     from .policy.central.command.schema.future.future.remote_future import RemoteFuture
     from .policy.central.command.schema.future.future.future_identity import _LAILA_IDENTIFIABLE_FUTURE
@@ -591,32 +1158,66 @@ def _resolve_future(future_ref):
 
 
 def status(future_ref):
-    """Return the status of a future.
+    """Return the lifecycle status of *future_ref*.
+
+    Backwards-compatible shim that forwards to :func:`laila.runtime.status`.
+    See that function for the full type-shape contract of *future_ref*.
 
     .. deprecated::
-        Use ``laila.runtime.status()`` instead.
+        Use :func:`laila.runtime.status` directly. This top-level form
+        exists only so older notebooks and tutorials keep working.
     """
     from . import runtime
     return runtime.status(future_ref)
 
 
 def wait(future_ref, timeout=None):
-    """Block until the future completes and return its result.
+    """Block until *future_ref* completes and return its result.
+
+    Backwards-compatible shim that forwards to :func:`laila.runtime.wait`.
+
+    Parameters
+    ----------
+    future_ref : Any
+        See :func:`_resolve_future` for accepted shapes.
+    timeout : float, optional
+        Maximum seconds to block. ``None`` waits indefinitely.
 
     .. deprecated::
-        Use ``laila.runtime.wait()`` instead.
+        Use :func:`laila.runtime.wait` directly.
     """
     from . import runtime
     return runtime.wait(future_ref, timeout)
 
 
 def set_default_directory(directory):
-    """Override the default root directory and derived sub-directories.
+    """Relocate every on-disk sub-directory laila uses by default.
+
+    Mutates :data:`laila.macros.defaults.LAILA_DEFAULT_DIRECTORIES` in
+    place. Pools created *after* this call resolve their backing
+    directories from the new root; pools that have already opened
+    files keep their existing paths (they captured the old root in
+    ``model_post_init``).
+
+    The four conventional subdirectories are derived from the new root:
+
+    - ``root``    -- the directory itself
+    - ``pools``   -- per-pool data folders (``pools/<pool_uuid>/``)
+    - ``logs``    -- log files written by :class:`Logger`
+    - ``secrets`` -- key material loaded by the ``crypto`` extras
+
+    ``~`` and ``~user`` are expanded via :func:`os.path.expanduser`.
 
     Parameters
     ----------
     directory : str
         Filesystem path (may contain ``~``) to use as the new root.
+
+    Notes
+    -----
+    Call this *before* instantiating any pool that you want rooted at
+    the new location -- typically at the very top of your script,
+    immediately after ``import laila``.
     """
     directory = os.path.expanduser(directory)
     LAILA_DEFAULT_DIRECTORIES.update({

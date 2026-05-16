@@ -1,4 +1,17 @@
-"""Thread-safe boolean flag."""
+"""Thread-safe boolean flag.
+
+:class:`AtomicFlag` is the simplest of the atomic types: a single
+boolean guarded by an :class:`threading.RLock` so the usual
+:meth:`set` / :meth:`clear` / :meth:`toggle` / :meth:`is_set`
+operations are safe to call from multiple threads. Use it for
+"has this happened yet?" signals -- shutdown sentinels, init flags,
+one-shot guards -- where a full :class:`threading.Event` is overkill
+because no thread ever needs to *wait* on the flag.
+
+For coordinated wait-for-state semantics, prefer
+:class:`threading.Event`. For atomically-incrementable counters,
+see :class:`AtomicInt`.
+"""
 from __future__ import annotations
 from threading import RLock
 from pydantic import BaseModel, Field, PrivateAttr, ConfigDict

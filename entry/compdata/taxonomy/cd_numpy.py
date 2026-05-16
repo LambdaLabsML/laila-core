@@ -1,4 +1,10 @@
-"""``ComputationalData`` subclass for NumPy ``ndarray`` payloads."""
+""":class:`ComputationalData` subclass for :class:`numpy.ndarray` payloads.
+
+Uses :class:`NumpySerializer` (the ``.npy`` format under the hood) so
+arrays are persisted with their dtype and shape in a portable,
+language-neutral binary format -- much more compact than pickle for
+numeric data and readable from any process with NumPy installed.
+"""
 
 from .compdata import ComputationalData, register_cdtype, _scalar_len
 import numpy as np
@@ -9,9 +15,13 @@ import copy
 
 @register_cdtype(np.ndarray)
 class CD_numpyarray(ComputationalData):
-    """Computational data wrapper for ``numpy.ndarray`` objects.
+    """Computational-data wrapper for :class:`numpy.ndarray` payloads.
 
-    Uses ``NumpySerializer`` by default.
+    Defaults to :class:`NumpySerializer` (``.npy`` format). ``len()``
+    follows NumPy semantics (size of the first axis) and raises for
+    0-D arrays. :attr:`shape` returns the array's native shape tuple.
+    Both shallow and deep copy emit a contiguous NumPy copy of the
+    underlying buffer.
     """
 
     data: np.ndarray

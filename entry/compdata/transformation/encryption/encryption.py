@@ -1,4 +1,30 @@
-"""Fernet symmetric encryption / decryption data transformation."""
+"""Fernet symmetric encryption / decryption data transformation.
+
+The :class:`FernetEncryption` transformation slots into a
+transformation pipeline as the encryption step. It wraps a UTF-8
+string in a Fernet token (AES-128-CBC + HMAC-SHA256, time-stamped,
+URL-safe base64 encoded) using the :mod:`cryptography` library.
+
+A pipeline that compresses then encrypts (e.g.
+``[Json, Zlib, FernetEncryption, Base64]``) gives you compact,
+ciphertext-only blobs that can sit safely in any text-only pool
+backend.
+
+Optional TTL
+------------
+``backward_kwargs={"ttl": seconds}`` instructs :meth:`backward` to
+reject tokens older than ``seconds`` (raising :class:`ValueError`).
+This is useful for ephemeral payloads that should not be readable
+after a deadline -- the same machinery is exposed in the standalone
+recovery snippet emitted into ``backward_code``.
+
+Security note
+-------------
+The ``key`` is embedded in the ``backward_code`` string so that the
+constitution can stand-alone replay decryption without re-importing
+this class. That means the recovery code itself must be considered
+*secret* -- handle it with the same care as the key.
+"""
 
 import textwrap
 from typing import Any, Union

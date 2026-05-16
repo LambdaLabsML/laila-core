@@ -1,4 +1,18 @@
-"""JSON string serialisation / deserialisation data transformation."""
+"""JSON string serialisation / deserialisation data transformation.
+
+The :class:`JsonString` transformation is the canonical "round-trip
+through JSON text" step. ``forward`` accepts any JSON-serialisable
+Python object and emits a compact JSON string (no whitespace,
+unicode-preserving); ``backward`` parses the string back to the
+equivalent Python value.
+
+This is most useful as the final step of a pipeline whose pool
+backend stores plain strings (filesystem JSON files, S3 JSON objects,
+postgres TEXT columns, ...). For binary serialisation of arbitrary
+Python objects, prefer :class:`PickleSerializer`; for compact
+binary representations of JSON-shaped data, prefer
+:class:`MsgpackSerializer`.
+"""
 
 import json
 import textwrap

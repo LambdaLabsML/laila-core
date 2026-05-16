@@ -1,40 +1,81 @@
 site_name: LAILA
 site_description: Lambda's Interdisciplinary Large Atlas — unified data and compute workflows
+site_author: Lambda Labs ML
 repo_url: https://github.com/LambdaLabsML/laila-core
 repo_name: LambdaLabsML/laila-core
+copyright: >
+  Copyright &copy; Lambda Labs &middot;
+  <span class="footer-tag">// SYSTEM READY</span>
 
 theme:
   name: material
+  language: en
+  font: false
+  icon:
+    repo: fontawesome/brands/github
+    logo: octicons/cpu-16
+    admonition:
+      note: octicons/book-16
+      abstract: octicons/checklist-16
+      info: octicons/info-16
+      tip: octicons/light-bulb-16
+      success: octicons/check-circle-16
+      question: octicons/question-16
+      warning: octicons/alert-16
+      failure: octicons/x-circle-16
+      danger: octicons/zap-16
+      bug: octicons/bug-16
+      example: octicons/beaker-16
+      quote: octicons/quote-16
   palette:
-    - scheme: default
-      primary: deep purple
-      accent: amber
+    - media: "(prefers-color-scheme: light)"
+      scheme: laila-paper
       toggle:
-        icon: material/brightness-7
-        name: Switch to dark mode
-    - scheme: slate
-      primary: deep purple
-      accent: amber
+        icon: material/weather-night
+        name: Switch to CRT mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: laila-crt
       toggle:
-        icon: material/brightness-4
-        name: Switch to light mode
+        icon: material/white-balance-sunny
+        name: Switch to paper mode
   features:
     - navigation.tabs
+    - navigation.tabs.sticky
     - navigation.sections
-    - navigation.expand
+    - navigation.indexes
     - navigation.top
+    - navigation.tracking
+    - navigation.footer
+    - toc.follow
     - search.suggest
     - search.highlight
+    - search.share
     - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.tooltips
+    - announce.dismiss
 
 hooks:
   - docs/hooks/notebook_download.py
 
 extra_css:
+  - stylesheets/retro.css
   - stylesheets/notebook.css
 
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/LambdaLabsML/laila-core
+      name: LAILA on GitHub
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/laila-core/
+      name: LAILA on PyPI
+
 plugins:
-  - search
+  - search:
+      separator: '[\s\-,:!=\[\]()"`/]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
   - gen-files:
       scripts:
         - docs/gen_ref_pages.py
@@ -59,13 +100,34 @@ nav:
   - API Reference: reference/
 
 markdown_extensions:
+  - abbr
   - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: "¶"
+      permalink_title: "Anchor link to this section"
+  - pymdownx.betterem
+  - pymdownx.caret
+  - pymdownx.mark
+  - pymdownx.tilde
+  - pymdownx.smartsymbols
   - pymdownx.details
   - pymdownx.superfences
   - pymdownx.highlight:
       anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
   - pymdownx.inlinehilite
   - pymdownx.snippets
-  - toc:
-      permalink: true
-  - tables
+  - pymdownx.keys
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg

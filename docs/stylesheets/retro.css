@@ -1,0 +1,642 @@
+/* =========================================================================
+   LAILA — Retro Atari × Academic Manual theme
+   -------------------------------------------------------------------------
+   Visual concept: an early-80s home-computer reference manual. Pixel/terminal
+   typefaces for the chrome (headers, nav, code) paired with a refined serif
+   for body text so the documentation stays academically readable.
+   ========================================================================= */
+
+/* ----- Fonts -------------------------------------------------------------- */
+@import url("https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&family=JetBrains+Mono:wght@400;500;700&family=Crimson+Pro:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap");
+
+/* =========================================================================
+   COLOR SCHEMES
+   ========================================================================= */
+
+/* ----- Light: "laila-paper" — yellowed manual page ------------------------ */
+[data-md-color-scheme="laila-paper"] {
+  /* Atari-inspired palette */
+  --atari-red:      #C8102E;
+  --atari-red-deep: #8B0A1F;
+  --atari-blue:     #1B3B6F;
+  --atari-amber:    #E08A1E;
+  --atari-cream:    #F2EBD9;
+  --atari-paper:    #FBF6E8;
+  --atari-ink:      #1B1B1B;
+  --atari-rule:     #2A2A2A;
+
+  --md-primary-fg-color:        var(--atari-red);
+  --md-primary-fg-color--light: #E03A52;
+  --md-primary-fg-color--dark:  var(--atari-red-deep);
+  --md-primary-bg-color:        var(--atari-paper);
+  --md-primary-bg-color--light: var(--atari-cream);
+
+  --md-accent-fg-color:         var(--atari-blue);
+  --md-accent-fg-color--transparent: rgba(27, 59, 111, 0.10);
+  --md-accent-bg-color:         var(--atari-paper);
+
+  --md-default-fg-color:           var(--atari-ink);
+  --md-default-fg-color--light:    #3a3a3a;
+  --md-default-fg-color--lighter:  #6a6a6a;
+  --md-default-fg-color--lightest: rgba(27, 27, 27, 0.07);
+  --md-default-bg-color:           var(--atari-paper);
+  --md-default-bg-color--light:    var(--atari-cream);
+  --md-default-bg-color--lighter:  #FFFFFF;
+  --md-default-bg-color--lightest: #FFFFFF;
+
+  --md-typeset-a-color: var(--atari-blue);
+  --md-typeset-mark-color: rgba(224, 138, 30, 0.32);
+
+  --md-code-fg-color: #1B1B1B;
+  --md-code-bg-color: #ECE3CC;
+  --md-code-hl-color: rgba(224, 138, 30, 0.30);
+
+  --md-footer-bg-color:      #1B1B1B;
+  --md-footer-bg-color--dark: #0F0F0F;
+  --md-footer-fg-color:        #F2EBD9;
+  --md-footer-fg-color--light: #C8C0AB;
+  --md-footer-fg-color--lighter: #8A8472;
+}
+
+/* ----- Dark: "laila-crt" — phosphor terminal ----------------------------- */
+[data-md-color-scheme="laila-crt"] {
+  --atari-red:      #E84A60;
+  --atari-red-deep: #C8102E;
+  --atari-amber:    #F5B849;
+  --atari-cyan:     #4FE3FF;
+  --atari-green:    #7BE25A;
+  --atari-navy:     #07111F;
+  --atari-panel:    #0F1B2D;
+  --atari-panel-2:  #182742;
+  --atari-text:     #ECE3CC;
+  --atari-text-dim: #B7AC8F;
+
+  color-scheme: dark;
+
+  --md-primary-fg-color:        var(--atari-red);
+  --md-primary-fg-color--light: #FF6E84;
+  --md-primary-fg-color--dark:  var(--atari-red-deep);
+  --md-primary-bg-color:        var(--atari-text);
+  --md-primary-bg-color--light: var(--atari-text-dim);
+
+  --md-accent-fg-color:         var(--atari-cyan);
+  --md-accent-fg-color--transparent: rgba(79, 227, 255, 0.12);
+  --md-accent-bg-color:         var(--atari-navy);
+
+  --md-default-fg-color:           var(--atari-text);
+  --md-default-fg-color--light:    #D0C7AE;
+  --md-default-fg-color--lighter:  #8A8472;
+  --md-default-fg-color--lightest: rgba(236, 227, 204, 0.08);
+  --md-default-bg-color:           var(--atari-navy);
+  --md-default-bg-color--light:    var(--atari-panel);
+  --md-default-bg-color--lighter:  var(--atari-panel-2);
+  --md-default-bg-color--lightest: #213254;
+
+  --md-typeset-a-color: var(--atari-cyan);
+  --md-typeset-mark-color: rgba(245, 184, 73, 0.28);
+
+  --md-code-fg-color: #DDF1D2;
+  --md-code-bg-color: #08131E;
+  --md-code-hl-color: rgba(123, 226, 90, 0.18);
+
+  --md-footer-bg-color:      #04090F;
+  --md-footer-bg-color--dark: #02050A;
+  --md-footer-fg-color:        var(--atari-text);
+  --md-footer-fg-color--light: var(--atari-text-dim);
+  --md-footer-fg-color--lighter: #5e5942;
+}
+
+/* =========================================================================
+   TYPOGRAPHY
+   ========================================================================= */
+
+:root {
+  --font-display: "Press Start 2P", "VT323", monospace;   /* pixel */
+  --font-terminal: "VT323", "JetBrains Mono", monospace;  /* terminal */
+  --font-mono: "JetBrains Mono", "VT323", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-body: "Crimson Pro", Georgia, "Times New Roman", serif;
+}
+
+body, .md-typeset {
+  font-family: var(--font-body);
+  font-size: 17px;
+  line-height: 1.7;
+  font-feature-settings: "kern", "liga", "onum";
+}
+
+.md-typeset {
+  font-size: 0.92rem;
+}
+
+.md-typeset p,
+.md-typeset li {
+  letter-spacing: 0.005em;
+}
+
+/* Headings: pixel display for top of hierarchy, terminal for the rest */
+.md-typeset h1 {
+  font-family: var(--font-display);
+  font-weight: normal;
+  font-size: 1.55rem;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  color: var(--md-default-fg-color);
+  border-bottom: 4px solid var(--md-primary-fg-color);
+  padding-bottom: 0.6em;
+  margin-bottom: 1.2em;
+  text-transform: uppercase;
+}
+
+.md-typeset h1::before {
+  content: "▐ ";
+  color: var(--md-primary-fg-color);
+}
+
+.md-typeset h2 {
+  font-family: var(--font-terminal);
+  font-weight: 700;
+  font-size: 1.85rem;
+  line-height: 1.2;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--md-default-fg-color);
+  border-bottom: 2px dashed var(--md-default-fg-color--lighter);
+  padding-bottom: 0.25em;
+  margin-top: 2.2em;
+}
+
+.md-typeset h2::before {
+  content: ">> ";
+  color: var(--md-primary-fg-color);
+  font-weight: 700;
+}
+
+.md-typeset h3 {
+  font-family: var(--font-terminal);
+  font-weight: 700;
+  font-size: 1.5rem;
+  letter-spacing: 0.02em;
+  color: var(--md-accent-fg-color);
+  text-transform: uppercase;
+}
+
+.md-typeset h3::before {
+  content: "» ";
+  color: var(--md-default-fg-color--lighter);
+}
+
+.md-typeset h4 {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--md-default-fg-color--light);
+}
+
+/* Body links — academic feel: underlined on hover, color always meaningful */
+.md-typeset a {
+  text-decoration: underline;
+  text-decoration-color: var(--md-accent-fg-color--transparent);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 2px;
+  transition: text-decoration-color 120ms ease, color 120ms ease;
+}
+.md-typeset a:hover {
+  text-decoration-color: var(--md-accent-fg-color);
+}
+
+/* Drop cap on the first paragraph of the home page — academic flourish */
+.md-typeset > h1:first-of-type + p::first-letter {
+  font-family: var(--font-display);
+  font-size: 2.6rem;
+  float: left;
+  line-height: 1;
+  padding: 0.15em 0.18em 0.05em 0;
+  margin-right: 0.1em;
+  color: var(--md-primary-fg-color);
+}
+
+/* =========================================================================
+   HEADER / NAVIGATION
+   ========================================================================= */
+
+.md-header {
+  background: var(--md-default-bg-color--lighter);
+  color: var(--md-default-fg-color);
+  border-bottom: 3px solid var(--md-primary-fg-color);
+  box-shadow: 0 4px 0 0 var(--md-default-fg-color--lightest);
+}
+[data-md-color-scheme="laila-crt"] .md-header {
+  background: linear-gradient(180deg, #0B1729 0%, #07111F 100%);
+}
+
+.md-header__title {
+  font-family: var(--font-display);
+  font-size: 0.85rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.md-header__topic > .md-ellipsis {
+  color: var(--md-default-fg-color);
+}
+
+.md-tabs {
+  background: var(--md-default-bg-color--light);
+  color: var(--md-default-fg-color);
+  border-bottom: 2px solid var(--md-default-fg-color--lightest);
+}
+[data-md-color-scheme="laila-crt"] .md-tabs {
+  background: #0B1729;
+}
+
+.md-tabs__link {
+  font-family: var(--font-terminal);
+  font-size: 1.05rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 1;
+  color: var(--md-default-fg-color--light);
+  padding: 0 0.35em;
+  margin: 0 0.4em;
+  border-bottom: 3px solid transparent;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.md-tabs__link:hover,
+.md-tabs__link--active {
+  color: var(--md-primary-fg-color);
+  border-bottom-color: var(--md-primary-fg-color);
+}
+
+/* Sidebar nav */
+.md-nav {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+.md-nav__title {
+  font-family: var(--font-display);
+  font-size: 0.65rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--md-default-fg-color--light);
+}
+.md-nav__link {
+  letter-spacing: 0.01em;
+  border-left: 2px solid transparent;
+  padding-left: 0.5em;
+  margin-left: -0.5em;
+  transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease;
+}
+.md-nav__link:hover {
+  color: var(--md-accent-fg-color);
+  border-left-color: var(--md-accent-fg-color);
+}
+.md-nav__link--active,
+.md-nav__item .md-nav__link--active {
+  color: var(--md-primary-fg-color);
+  border-left-color: var(--md-primary-fg-color);
+  font-weight: 700;
+}
+
+/* Search */
+.md-search__form {
+  background: var(--md-default-bg-color--lightest);
+  border: 2px solid var(--md-default-fg-color--lightest);
+  border-radius: 0;
+}
+.md-search__form:hover,
+[data-md-toggle="search"]:checked ~ .md-header .md-search__form {
+  background: var(--md-default-bg-color--lighter);
+  border-color: var(--md-primary-fg-color);
+}
+.md-search__input {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+.md-search__input::placeholder {
+  font-family: var(--font-terminal);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 1rem;
+}
+
+/* =========================================================================
+   CONTENT — code blocks
+   ========================================================================= */
+
+.md-typeset code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  padding: 0.1em 0.35em;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0;
+  background: var(--md-code-bg-color);
+}
+
+.md-typeset pre > code {
+  border: none;
+  padding: 1em 1.1em;
+  background: transparent;
+  font-size: 0.82em;
+  line-height: 1.55;
+}
+
+.md-typeset .highlight,
+.md-typeset pre {
+  border-radius: 0;
+  border: 2px solid var(--md-default-fg-color);
+  background: var(--md-code-bg-color);
+  position: relative;
+  box-shadow: 4px 4px 0 0 var(--md-default-fg-color--lightest);
+  margin: 1.4em 0;
+}
+
+[data-md-color-scheme="laila-crt"] .md-typeset .highlight,
+[data-md-color-scheme="laila-crt"] .md-typeset pre {
+  border-color: var(--atari-cyan);
+  box-shadow: 4px 4px 0 0 rgba(79, 227, 255, 0.20);
+}
+
+/* Pixelated "device" header strip on every code block */
+.md-typeset .highlight::before {
+  content: "▮▮▮  CODE";
+  display: block;
+  font-family: var(--font-display);
+  font-size: 0.55rem;
+  letter-spacing: 0.15em;
+  padding: 0.45em 0.9em;
+  background: var(--md-default-fg-color);
+  color: var(--md-default-bg-color);
+}
+[data-md-color-scheme="laila-crt"] .md-typeset .highlight::before {
+  background: var(--atari-cyan);
+  color: var(--atari-navy);
+}
+
+/* Language-specific labels via the pygments lang class */
+.md-typeset .highlight.language-python::before { content: "▮▮▮  PYTHON"; }
+.md-typeset .highlight.language-bash::before,
+.md-typeset .highlight.language-sh::before,
+.md-typeset .highlight.language-shell::before { content: "▮▮▮  SHELL  $"; }
+.md-typeset .highlight.language-yaml::before,
+.md-typeset .highlight.language-yml::before { content: "▮▮▮  YAML"; }
+.md-typeset .highlight.language-json::before { content: "▮▮▮  JSON"; }
+.md-typeset .highlight.language-toml::before { content: "▮▮▮  TOML"; }
+
+/* Copy button — pixelated */
+.md-clipboard {
+  color: var(--md-default-bg-color);
+  border-radius: 0;
+}
+.md-clipboard:hover {
+  color: var(--md-primary-fg-color);
+}
+
+/* Inline code: subtle pixel boundary */
+.md-typeset p code,
+.md-typeset li code,
+.md-typeset td code {
+  color: var(--md-primary-fg-color);
+}
+[data-md-color-scheme="laila-crt"] .md-typeset p code,
+[data-md-color-scheme="laila-crt"] .md-typeset li code,
+[data-md-color-scheme="laila-crt"] .md-typeset td code {
+  color: var(--atari-amber);
+}
+
+/* =========================================================================
+   ADMONITIONS — square-edged "system messages"
+   ========================================================================= */
+
+.md-typeset .admonition,
+.md-typeset details {
+  border-radius: 0;
+  border-left-width: 6px;
+  border-top: 1px solid var(--md-default-fg-color--lightest);
+  border-right: 1px solid var(--md-default-fg-color--lightest);
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+  box-shadow: 3px 3px 0 0 var(--md-default-fg-color--lightest);
+  font-size: 0.78rem;
+  padding: 0;
+  margin: 1.6em 0;
+  background: var(--md-default-bg-color--lighter);
+}
+
+.md-typeset .admonition-title,
+.md-typeset summary {
+  font-family: var(--font-terminal);
+  font-size: 1.05rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-radius: 0;
+  padding-top: 0.55em;
+  padding-bottom: 0.5em;
+}
+
+.md-typeset .admonition > :last-child,
+.md-typeset details > :last-child {
+  margin-bottom: 0.8em;
+}
+
+/* Make all admonition icons sit on a small pixel square */
+.md-typeset .admonition-title::before,
+.md-typeset summary::before {
+  border-radius: 0 !important;
+}
+
+/* =========================================================================
+   TABLES — academic, ledger-style
+   ========================================================================= */
+
+.md-typeset table:not([class]) {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  border-radius: 0;
+  border: 2px solid var(--md-default-fg-color);
+  box-shadow: 4px 4px 0 0 var(--md-default-fg-color--lightest);
+}
+.md-typeset table:not([class]) th {
+  background: var(--md-default-fg-color);
+  color: var(--md-default-bg-color);
+  font-family: var(--font-display);
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.9em 1em;
+}
+.md-typeset table:not([class]) td {
+  border-color: var(--md-default-fg-color--lightest);
+}
+
+/* =========================================================================
+   FOOTER — control-panel strip
+   ========================================================================= */
+
+.md-footer {
+  border-top: 4px solid var(--md-primary-fg-color);
+}
+.md-footer-meta {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+}
+.md-footer-meta .footer-tag {
+  font-family: var(--font-display);
+  font-size: 0.55rem;
+  letter-spacing: 0.12em;
+  color: var(--md-primary-fg-color);
+  margin-left: 0.5em;
+}
+.md-footer__inner {
+  background: var(--md-default-bg-color--lighter);
+}
+.md-footer__link {
+  font-family: var(--font-terminal);
+  font-size: 1rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* =========================================================================
+   MISC — blockquotes, hr, lists, kbd
+   ========================================================================= */
+
+.md-typeset blockquote {
+  font-style: italic;
+  border-left: 4px solid var(--md-accent-fg-color);
+  background: var(--md-default-bg-color--light);
+  padding: 0.6em 1em;
+  color: var(--md-default-fg-color--light);
+}
+
+.md-typeset hr {
+  border: none;
+  height: 0;
+  margin: 2.4em 0;
+  background: none;
+  text-align: center;
+  position: relative;
+}
+.md-typeset hr::after {
+  content: "▘ ▝ ▘ ▝ ▘ ▝ ▘ ▝ ▘ ▝ ▘ ▝";
+  font-family: var(--font-display);
+  font-size: 0.55rem;
+  letter-spacing: 0.3em;
+  color: var(--md-default-fg-color--lighter);
+}
+
+.md-typeset kbd {
+  font-family: var(--font-mono);
+  font-size: 0.75em;
+  border-radius: 0;
+  border: 2px solid var(--md-default-fg-color);
+  box-shadow: 2px 2px 0 0 var(--md-default-fg-color);
+  padding: 0.15em 0.5em;
+  background: var(--md-default-bg-color--lighter);
+}
+
+.md-typeset ul li::marker {
+  color: var(--md-primary-fg-color);
+  font-family: var(--font-display);
+  font-size: 0.7em;
+}
+
+/* Section permalink anchor — pixel paragraph mark */
+.md-typeset .headerlink {
+  font-family: var(--font-display);
+  font-size: 0.65em;
+  color: var(--md-default-fg-color--lighter);
+  margin-left: 0.4em;
+}
+.md-typeset .headerlink:hover {
+  color: var(--md-primary-fg-color);
+}
+
+/* Tooltips */
+.md-tooltip {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  border-radius: 0;
+  border: 2px solid var(--md-default-fg-color);
+}
+
+/* =========================================================================
+   ACADEMIC TOUCHES
+   ========================================================================= */
+
+/* Keep the article width comfortable for long-form reading */
+.md-grid {
+  max-width: 70rem;
+}
+
+/* Right-rail TOC: terminal-style */
+.md-sidebar--secondary .md-nav__title {
+  font-family: var(--font-display);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--md-primary-fg-color);
+}
+.md-sidebar--secondary .md-nav {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+}
+
+/* Definition lists — glossary feel */
+.md-typeset dl dt {
+  font-family: var(--font-terminal);
+  font-size: 1.05rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--md-primary-fg-color);
+}
+.md-typeset dl dd {
+  border-left: 2px solid var(--md-default-fg-color--lightest);
+  padding-left: 1em;
+  margin-left: 0.4em;
+}
+
+/* =========================================================================
+   CRT mode — subtle phosphor glow on the page background only
+   (kept faint so body text remains crisp & academic-readable)
+   ========================================================================= */
+
+[data-md-color-scheme="laila-crt"] body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse at 50% 30%, rgba(79, 227, 255, 0.05), transparent 60%),
+    repeating-linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.012) 0px,
+      rgba(255, 255, 255, 0.012) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+}
+[data-md-color-scheme="laila-crt"] .md-container {
+  position: relative;
+  z-index: 1;
+}
+
+/* =========================================================================
+   RESPONSIVE — tone the pixel font down on small screens
+   ========================================================================= */
+
+@media screen and (max-width: 600px) {
+  .md-typeset h1 {
+    font-size: 1.05rem;
+  }
+  .md-typeset h2 {
+    font-size: 1.4rem;
+  }
+  .md-header__title {
+    font-size: 0.65rem;
+  }
+}

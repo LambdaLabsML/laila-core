@@ -1,4 +1,20 @@
-"""Globally-atomic identifiable object with secret-gated locking."""
+"""Globally-atomic identifiable object with secret-gated locking.
+
+Extends :class:`_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT` with a
+*global* (policy-scoped) lock layered on top of the local one. The
+global lock is bound to a single ``policy_id`` while it is held; a
+secret token returned from :meth:`lock_global` is the only key that
+can release the lock or pass through the secret-gated attribute
+wrapper installed by :meth:`__getattribute__`.
+
+Use this for resources that need to be coordinated across policies
+in the same process (or, in the future, across hosts via the
+distributed lock manager). For the much more common per-instance,
+single-policy case, prefer
+:class:`_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT` -- the global
+machinery here adds overhead that is wasted unless multiple policies
+genuinely contend for the same object.
+"""
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -11,11 +27,26 @@ from .locally_atomic_identifiable_object import _LAILA_LOCALLY_ATOMIC_IDENTIFIAB
 
 
 class _LAILA_GLOBALLY_ATOMIC_IDENTIFIABLE_OBJECT(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
-    """Identifiable object with both local and global locking.
+    """Identifiable object that coordinates access via a policy-scoped global lock.
 
-    Global locks are policy-scoped: a caller must present a ``policy_id``
-    to acquire the global lock and receives a one-time *secret* token that
-    is required for subsequent mutations and for releasing the lock.
+    Adds three machinery pieces on top of the local-lock base:
+
+    - :meth:`lock_global` / :meth:`unlock_global` -- explicit global
+      acquire/release driven by a per-policy ``policy_id`` and a
+      one-time secret token returned at acquire-time.
+    - :meth:`atomic` (overridden) -- accepts ``scope="global"`` to
+      hold the global lock for a ``with`` block, raising
+      :class:`PermissionError` when another policy holds it.
+    - :meth:`__getattribute__` (overridden) -- wraps every callable
+      attribute so calls made while a global lock is held require a
+      ``secret=`` kwarg to pass through. This stops accidental
+      mutations by code that doesn't know the lock is in effect.
+
+    Global state (private):
+
+    - ``_global_lock`` -- whether the lock is currently held.
+    - ``_holder_policy_id`` -- which policy currently holds it.
+    - ``_holder_secret`` -- the token that proves you're the holder.
     """
 
     _global_lock: bool = PrivateAttr(default=False)

@@ -1,4 +1,10 @@
-"""``ComputationalData`` subclass for Python ``dict`` payloads."""
+""":class:`ComputationalData` subclass for Python ``dict`` payloads.
+
+Dicts are serialized with msgpack rather than pickle so the on-disk
+representation is language-neutral (other msgpack readers can decode
+laila-pooled dicts) and substantially smaller for the common
+shallow-string-keyed cases.
+"""
 
 from dataclasses import dataclass, field
 from typing import Dict, Any
@@ -11,9 +17,12 @@ from ..transformation.serialization import MsgpackSerializer
 
 @register_cdtype(dict)
 class CD_dict(ComputationalData):
-    """Computational data wrapper for ``dict`` objects.
+    """Computational-data wrapper for ``dict`` payloads.
 
-    Uses ``MsgpackSerializer`` by default.
+    Defaults to :class:`MsgpackSerializer`. ``len(self)`` reports the
+    number of keys; :attr:`shape` is intentionally undefined (dicts
+    have no canonical shape and silently returning a fake value would
+    mask bugs).
     """
 
     data: Dict[Any, Any]

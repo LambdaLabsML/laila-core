@@ -1,4 +1,27 @@
-"""Runtime argument loading from multiple file formats and the terminal."""
+"""Runtime argument loading from multiple file formats and the terminal.
+
+Defines :class:`ArgReader`, the loader behind :data:`laila.args`. The
+class accepts arguments from any of the following formats and merges
+them into a single attribute-accessible mapping (defaulting to
+``laila.args``, which is an :class:`AtomicDotMap`):
+
+- ``.json`` -- JSON object at the top level (:meth:`from_json`).
+- ``.toml`` -- TOML table at the top level (:meth:`from_toml`).
+- ``.env`` -- ``KEY=VALUE`` lines, ``#`` comments allowed
+  (:meth:`from_env`).
+- ``.xml`` -- one level of nesting allowed; siblings become nested
+  dicts (:meth:`from_xml`).
+- ``terminal`` -- ``key=value`` tokens parsed from ``sys.argv``
+  (:meth:`from_terminal`).
+- ``load(source)`` -- auto-detects format from the file suffix.
+
+Values are coerced from strings to the most specific Python scalar
+they fit (bool, None, int, float, JSON-shaped collection, quoted
+string, fall-back raw string) by :meth:`_coerce_scalar`. Nested
+dicts in JSON / TOML files are flattened *one level* with
+underscore-joined keys -- deeper nesting should be expressed via
+explicit dotted keys instead.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,10 +32,27 @@ import xml.etree.ElementTree as ET
 
 
 class ArgReader:
-    """
-    Load runtime args from simple key/value sources into the target mapping
-    (defaults to ``laila.args``). All ``load`` / ``from_*`` methods mutate
-    the target in place and return ``None``.
+    """Loader of runtime args into an attribute-accessible target mapping.
+
+    All ``load`` / ``from_*`` methods mutate the target in place and
+    return ``None``. The target defaults to ``laila.args`` (an
+    :class:`AtomicDotMap`) when not specified, so the typical usage
+    pattern is just::
+
+        reader = ArgReader()
+        reader.load("config.json")
+        reader.load("terminal")
+
+    A custom target lets test suites or library callers run with a
+    private DotMap-like object instead.
+
+    Notes
+    -----
+    The reader is intentionally tolerant: malformed lines in
+    ``.env``-style files are skipped, JSON-coerced collections that
+    fail to parse fall back to the original string, etc. The aim is
+    to never lose arguments to a strict parse error -- user-friendly
+    "best-effort" semantics.
     """
 
     # Supported sources: .env, .json, .toml, .xml, or ``terminal`` (``key=value`` tokens).

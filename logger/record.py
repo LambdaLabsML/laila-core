@@ -1,9 +1,28 @@
 """Structured log record builder for the LAILA Logger singleton.
 
-A LAILA log record is a JSON-trivial dict with a fixed schema of optional
-``*_id`` fields plus a free-form ``extra`` bag. Every record can be wrapped
-in an :class:`~laila.entry.entry.Entry` and memorized into a pool, since
-the dict is composed of strings, numbers, and small lists only.
+A laila log record is a JSON-trivial dict with a *fixed* schema of
+optional well-known fields (``policy_id``, ``pool_id``, ``future_id``,
+``status``, ...) plus a free-form ``extra`` bag for anything not
+covered by the schema. Records are always:
+
+- Composed of strings, numbers, lists, and dicts only -- so they
+  serialise cleanly with :func:`json.dumps` and round-trip safely
+  through any laila pool.
+- Time-stamped with both an ISO-8601 string (``ts``, UTC, with
+  ``Z`` suffix) and a Unix epoch float (``ts_unix``) -- the former
+  for humans, the latter for time-series analytics.
+- Equipped with a normalised string ``level`` (one of ``DEBUG``,
+  ``INFO``, ``WARNING``, ``ERROR``, ``CRITICAL``).
+
+This module exports two utilities:
+
+- :func:`normalize_level` / :func:`numeric_level` -- bidirectional
+  conversion between numeric :mod:`logging` levels and the canonical
+  string names used in records.
+- :func:`build_record` -- the structured-record factory called by the
+  :class:`Logger` itself for every event. Optional fields are omitted
+  from the result rather than written as ``None`` so records stay
+  compact on the wire.
 """
 
 from __future__ import annotations

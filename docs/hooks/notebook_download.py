@@ -9,7 +9,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-_NOTEBOOK_ROOTS = [Path("tutorials/01_basics"), Path("tutorials/02_intermediate")]
+_NOTEBOOK_ROOTS = [
+    Path("tutorials/01_basics"),
+    Path("tutorials/02_intermediate"),
+    Path("tutorials/03_advanced"),
+]
 
 _BUTTON_TEMPLATE = (
     '<a class="md-button md-button--primary notebook-download" '

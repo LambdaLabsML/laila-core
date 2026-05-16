@@ -1,7 +1,28 @@
-"""WebSocket connection management -- server listener, outbound connector, and bidirectional receive loop.
+"""WebSocket connection management for the TCP/IP protocol.
 
-All functions in this module are async and are expected to run inside the
-TCP/IP protocol instance's dedicated event loop.
+This module factors the websocket plumbing out of
+:class:`_LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL` so the protocol class
+itself can stay focused on lifecycle and the public RPC API. Three
+phases are implemented here:
+
+1. **Server bring-up** (:func:`start_server`) -- bind a websockets
+   server to ``proto.host:proto.port`` and stash the handle on
+   *proto*. The server's per-connection callback is
+   :func:`_handle_inbound`.
+2. **Handshake** (:func:`_handle_inbound` / :func:`connect_outbound`) --
+   the first frame on a freshly opened socket must be a
+   ``peer.connect`` JSON-RPC request carrying the originating policy's
+   ``global_id`` and the shared secret. On success both sides register
+   the peer with their local protocol/communication and enter the
+   shared receive loop.
+3. **Receive loop** (:func:`_receive_loop`) -- one-per-connection task
+   that decodes inbound frames and routes them to either the
+   request handler (:func:`_handle_rpc_request`) or the response
+   handler (:func:`_handle_rpc_response`).
+
+All functions are async and are expected to run inside the protocol
+instance's dedicated event loop (the daemon thread spun up by
+:meth:`_LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL.start`).
 """
 
 from __future__ import annotations

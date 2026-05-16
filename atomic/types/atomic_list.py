@@ -1,4 +1,23 @@
-"""Thread-safe generic list with snapshot iterators and atomic batching."""
+"""Thread-safe generic list with snapshot iterators and atomic batching.
+
+:class:`AtomicList` wraps a Python list with a
+:class:`threading.RLock` and provides:
+
+- The standard mutable-sequence API (``__getitem__``, ``__setitem__``,
+  ``append``, ``extend``, ``pop``, ``remove``, ``clear``, ...) -- all
+  guarded by the lock.
+- *Snapshot* iteration: ``__iter__`` returns an iterator over a copy
+  of the list taken under the lock, so external code can iterate
+  without holding the lock and without seeing the list mutate
+  mid-iteration.
+- An :meth:`atomic` context manager that yields a "view" object
+  capable of doing batch mutations under a single lock acquisition,
+  so a sequence of operations appears atomic to other threads.
+
+Use it where multiple threads need to share a mutable list (job
+queues, deferred-callback registries, observer lists) without
+playing whack-a-mole with manual locking.
+"""
 from __future__ import annotations
 from threading import RLock
 from typing import TypeVar, Generic, Iterable, Iterator, overload, Any, Optional

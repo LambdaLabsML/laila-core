@@ -1,4 +1,27 @@
-"""Zlib compression / decompression data transformation."""
+"""Zlib compression / decompression data transformation.
+
+The :class:`Zlib` transformation slots into a transformation
+pipeline as the compression step. It accepts a UTF-8 string,
+compresses it with :func:`zlib.compress`, and re-encodes the
+compressed bytes with base64 so the result is still a plain string
+(matching the contract assumed by downstream encoding /
+serialisation steps and by JSON-only pools).
+
+Two reasons for the integrated base64 wrap inside this single
+transformation:
+
+1. It keeps the output of every transformation in the pipeline a
+   string, so users can chain ``[Json, Zlib, Base64]`` -- or just
+   ``[Json, Zlib]`` -- without thinking about bytes/str mismatches.
+2. The recovery code that the transformation emits is therefore
+   self-contained: it only needs to import :mod:`zlib` and
+   :mod:`base64`, with no implicit dependency on the upstream pipe
+   step's output type.
+
+``forward_kwargs`` / ``backward_kwargs`` are forwarded to
+:func:`zlib.compress` / :func:`zlib.decompress` so callers can tune
+compression level, window bits, etc.
+"""
 
 import zlib
 import base64

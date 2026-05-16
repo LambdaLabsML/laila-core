@@ -1,4 +1,16 @@
-"""Thread-safe integer counter."""
+"""Thread-safe integer counter.
+
+:class:`AtomicInt` wraps an ``int`` with a :class:`threading.RLock`
+so that increment/decrement/add/set/get are race-free even under
+heavy contention. Use it for shared counters (active workers,
+in-flight jobs, total processed entries) where Python's atomicity
+of single-byte operations isn't enough because the operation reads,
+modifies, then writes (e.g. ``i += 1`` is *not* atomic on CPython).
+
+For a single-bit signal, use :class:`AtomicFlag`. For a more
+elaborate compute-and-set pattern, use :meth:`AtomicDict.compute`
+on a one-key dict (rare, but possible).
+"""
 from __future__ import annotations
 from threading import RLock
 from pydantic import BaseModel, Field, PrivateAttr, ConfigDict

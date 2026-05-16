@@ -1,4 +1,11 @@
-"""``ComputationalData`` subclass for ``list`` and ``tuple`` payloads."""
+""":class:`ComputationalData` subclass for ``list`` and ``tuple`` payloads.
+
+Both Python sequence types share one wrapper because their on-disk
+representation is identical (msgpack arrays). The original Python type
+(list vs tuple) is preserved on round-trip via the wrapper's
+``data`` field annotation, and copy semantics respect the source type
+(tuples are immutable so shallow-copy returns the same object).
+"""
 
 from typing import Any, Union
 from pydantic import PrivateAttr
@@ -10,9 +17,11 @@ from ..transformation.serialization import MsgpackSerializer
 
 @register_cdtype(list, tuple)
 class CD_list(ComputationalData):
-    """Computational data wrapper for ``list`` and ``tuple`` objects.
+    """Computational-data wrapper for ``list`` and ``tuple`` payloads.
 
-    Uses ``MsgpackSerializer`` by default.
+    Defaults to :class:`MsgpackSerializer`. :attr:`shape` returns a
+    1-D shape ``(len,)`` so callers that bridge between sequence-like
+    and array-like compdata can use a uniform interface.
     """
 
     data: Union[list[Any], tuple[Any, ...]]

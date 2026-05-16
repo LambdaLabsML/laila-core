@@ -1,4 +1,37 @@
-"""Default implementations and compile-time constants for Laila."""
+"""Default implementations and compile-time constants for laila.
+
+Single source of truth for the "what does laila ship with by
+default?" question. The aliases at the top of the module name the
+*concrete* class that backs each abstract role:
+
+==========================  ==================================================
+Default name                Concrete class
+==========================  ==================================================
+DefaultTaskForce            :class:`PythonAsyncThreadPoolTaskForce`
+DefaultCentralCommand       :class:`_LAILA_IDENTIFIABLE_CENTRAL_COMMAND`
+DefaultCentralCommunication :class:`_LAILA_IDENTIFIABLE_COMMUNICATION`
+DefaultTCPIPProtocol        :class:`_LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL`
+DefaultCentralMemory        :class:`_LAILA_IDENTIFIABLE_CENTRAL_MEMORY`
+DefaultPolicy               :class:`_LAILA_IDENTIFIABLE_POLICY`
+DefaultPool                 :class:`_LAILA_IDENTIFIABLE_POOL`
+DefaultPoolRouter           :class:`_LAILA_IDENTIFIABLE_POOL_ROUTER`
+==========================  ==================================================
+
+Other constants:
+
+- :data:`AUTO_INITIALIZE_POLICY` -- whether ``import laila`` should
+  spin up a default policy automatically. Toggling this off is
+  useful for unit-test rigs that want full control over policy
+  lifecycle.
+- :data:`LAILA_UNIVERSAL_NAMESPACE` -- the UUID-5 namespace used as
+  the *root* of laila's deterministic-id tree. Touch only if you
+  know exactly what you're doing -- changing it invalidates every
+  nickname-derived id ever produced.
+- :data:`LAILA_DEFAULT_DIRECTORIES` -- the on-disk layout under
+  ``~/.laila``: per-pool storage under ``pools/``, log files under
+  ``logs/``, key material under ``secrets/``. Each directory is
+  created at import time if missing.
+"""
 
 from ..policy.central.memory.schema.base import _LAILA_IDENTIFIABLE_CENTRAL_MEMORY
 from ..policy.central.command.taskforce.async_thread_pool_executor import PythonAsyncThreadPoolTaskForce

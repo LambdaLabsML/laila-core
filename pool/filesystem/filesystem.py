@@ -1,4 +1,21 @@
-"""Loopback-mounted ext4 filesystem pool implementation."""
+"""Loopback-mounted ext4 filesystem pool implementation.
+
+A :class:`FilesystemPool` writes each entry as a single JSON file
+inside a private, loopback-mounted ext4 image. The image is created
+on first use, mounted via ``mount -o loop``, and not unmounted by
+laila (so subsequent process runs can reuse it).
+
+Why an image-backed mount instead of a plain directory?
+
+- It bounds the pool's footprint to a fixed size (``_image_size_bytes``,
+  64 MiB by default) so a runaway producer can't fill the host disk.
+- It provides POSIX-level isolation -- the pool's contents share an
+  independent inode table from the host filesystem and can be
+  detached/relocated as a single ``.img`` file.
+
+The class is Linux-only (relies on ``mkfs.ext4`` and ``mount``) and
+needs root privileges or appropriate capabilities to mount.
+"""
 from __future__ import annotations
 
 from typing import Optional, Any, Iterable, Iterator
@@ -17,8 +34,27 @@ from ...entry import transformation_base64
 class FilesystemPool(_LAILA_IDENTIFIABLE_POOL):
     """Pool backed by JSON files on a loopback-mounted ext4 image.
 
-    Each entry is a ``.json`` file inside the mount directory.  The image
-    is created and mounted automatically during initialisation.
+    Each entry lives in a single ``<urlencoded-key>.json`` file inside
+    the pool's mount directory. Keys are URL-encoded so any character
+    is safe for use in a filename, and decoded on enumeration via
+    :meth:`_logical_key`.
+
+    The image is created with :meth:`_create_image_file`
+    (``truncate`` + ``mkfs.ext4``) and mounted via :meth:`_mount_image`
+    on first construction. Subsequent constructions detect the mount
+    via ``/proc/self/mountinfo`` and skip both steps.
+
+    The constructor refuses any explicit ``image_dir`` / ``image_path``
+    / ``mount_dir`` overrides because the pool computes those itself
+    from :data:`LAILA_DEFAULT_DIRECTORIES` and its own UUID -- letting
+    callers override them would silently break the
+    "one image file per pool, name derived from pool UUID" invariant.
+
+    Notes
+    -----
+    The default ``transformations`` is :data:`transformation_base64`,
+    which gives the JSON serialiser pure-ASCII payloads (avoiding
+    encoding surprises across mount platforms).
     """
 
     transformations: Optional[TransformationSequence] = Field(default=transformation_base64)

@@ -1,8 +1,29 @@
 """JSON-RPC 2.0 message helpers and LAILA-aware JSON encoding.
 
 All inter-policy communication uses the JSON-RPC 2.0 wire format.
-This module provides thin builders for requests, results, and errors,
-plus a custom JSON encoder that handles LAILA-specific types.
+Two RPC methods are defined by laila on top of that:
+
+- ``peer.connect`` -- the inbound side of an outbound peering
+  handshake. Carries the initiating policy's ``global_id`` and the
+  shared secret.
+- ``rpc.call`` -- a remote attribute-chain invocation. Carries
+  ``path`` (list[str]), ``args`` (list), ``kwargs`` (dict).
+
+This module provides:
+
+- Thin constructors for requests / success responses / error responses
+  (:func:`make_request`, :func:`make_result`, :func:`make_error`).
+- A custom JSON encoder (:class:`LailaJSONEncoder`) that handles
+  laila-specific types -- in particular, futures get marked with
+  ``__laila_future__`` so the receiving side can promote them back
+  into :class:`RemoteFuture` proxies.
+- Convenience predicates (:func:`is_request`, :func:`is_response`)
+  for the inbound dispatcher.
+
+The error-code constants follow JSON-RPC 2.0 conventions:
+``-32600`` for "invalid request", ``-32601`` for "method not found",
+plus laila-specific ``-32001`` (auth failed) and ``-32002`` (execution
+error).
 """
 
 from __future__ import annotations
@@ -23,13 +44,22 @@ ERR_EXECUTION = -32002
 class LailaJSONEncoder(json.JSONEncoder):
     """JSON encoder that serialises LAILA objects via their existing hooks.
 
-    Futures and GroupFutures are serialized with a ``__laila_future__``
-    marker so the receiving side can detect them and wrap in a
-    ``RemoteFuture``.  Falls back to ``str(obj)`` for otherwise
-    unserializable objects so that RPC payloads never raise on encoding.
+    Resolution order for non-standard objects:
+
+    1. :class:`GroupFuture` -- emit a future-shaped envelope with
+       ``__laila_future__=True`` and ``__is_group__=True``, plus the
+       child future ids needed to reconstruct the proxy.
+    2. :class:`_LAILA_IDENTIFIABLE_FUTURE` -- emit a future-shaped
+       envelope with ``__is_group__=False``.
+    3. Pydantic v2 models -- delegate to ``model_dump()``.
+    4. Anything providing ``as_dict`` -- delegate to that.
+    5. Anything providing ``identity`` -- delegate to that.
+    6. Final fallback: ``str(o)`` so RPC payloads never raise on
+       encoding even for opaque objects.
     """
 
     def default(self, o: Any) -> Any:
+        """Encode *o* using the resolution order documented on the class."""
         from ..command.schema.future.future.group_future import GroupFuture
         from ..command.schema.future.future.future_identity import (
             _LAILA_IDENTIFIABLE_FUTURE,
@@ -177,10 +207,18 @@ def make_error(request_id: Optional[str], code: int, message: str, data: Any = N
 
 
 def is_request(msg: Dict[str, Any]) -> bool:
-    """Return ``True`` if *msg* is a JSON-RPC request (has ``method`` key)."""
+    """Return ``True`` if *msg* is a JSON-RPC request.
+
+    Distinguishing requests from responses uses the JSON-RPC 2.0
+    convention: requests carry a ``method`` field, responses do not.
+    """
     return "method" in msg
 
 
 def is_response(msg: Dict[str, Any]) -> bool:
-    """Return ``True`` if *msg* is a JSON-RPC response (has ``result`` or ``error``)."""
+    """Return ``True`` if *msg* is a JSON-RPC response.
+
+    Per JSON-RPC 2.0, responses are identified by the presence of
+    either a ``result`` key (success) or an ``error`` key (failure).
+    """
     return "result" in msg or "error" in msg

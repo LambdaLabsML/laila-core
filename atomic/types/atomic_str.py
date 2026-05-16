@@ -1,4 +1,16 @@
-"""Thread-safe mutable string."""
+"""Thread-safe mutable string.
+
+:class:`AtomicStr` wraps a Python string with a
+:class:`threading.RLock` so set / append / clear / get operations are
+race-free between threads. Useful for shared status text (e.g. "what
+is the worker doing right now") where multiple producers update a
+human-readable label and consumers read it without locking themselves.
+
+Strings in Python are immutable, so every "mutation" is really a
+re-bind of the underlying ``value`` field; the lock ensures readers
+always see a consistent snapshot rather than a partially-updated
+intermediate.
+"""
 from __future__ import annotations
 from threading import RLock
 from pydantic import BaseModel, Field, PrivateAttr, ConfigDict

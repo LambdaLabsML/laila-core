@@ -1,4 +1,31 @@
-"""Guarantee context managers that block until tracked futures complete."""
+"""Guarantee context managers that block until tracked futures complete.
+
+The "guarantee" pattern is laila's lexical answer to "I want to be
+sure every async operation kicked off in *this block* has finished
+before the block returns". Two mirror implementations live here:
+
+- :class:`_Guarantee` -- synchronous version. Use as
+  ``with laila.guarantee: ...``. On exit, every future created
+  *inside* the block is awaited via :meth:`Future.wait`. The first
+  exception observed is re-raised so the caller never silently
+  outlives a failed background task.
+- :class:`_AsyncGuarantee` -- asynchronous version. Use as
+  ``async with laila.guarantee_async: ...``. Same idea, but with
+  ``await`` instead of ``wait``, plus a background watcher task
+  that *immediately* cancels the parent task if any in-scope
+  future errors -- so a hanging coroutine does not have to wait
+  for ``__aexit__`` to learn about a failure.
+
+Both classes co-operate with :class:`_LAILA_IDENTIFIABLE_CENTRAL_COMMAND`'s
+``_guarantee_stack`` / ``_guarantee_enter`` / ``_guarantee_exit``
+helpers, which keep a thread-local stack of "active scopes" and
+register every newly-submitted future with whichever scope is on
+top.
+
+Module-level singletons :data:`guarantee` and :data:`guarantee_async`
+are the user-facing handles -- the classes themselves are private
+because there's no point in instantiating more than one.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -7,19 +34,37 @@ import laila
 
 
 class _Guarantee:
-    """Synchronous context manager that waits for futures created inside its scope.
+    """Synchronous context manager that waits for futures created in its scope.
 
-    On exit, every future registered while the context was active is waited
-    on.  If any future raised, the first exception is re-raised.
+    Pushes a new guarantee scope on the active policy's command stack
+    on entry; on exit, blocks until every future registered while the
+    scope was active has terminated. If any of those futures errored,
+    the first observed exception is re-raised after the wait
+    completes -- but only if the body of the ``with`` block did not
+    itself raise (in which case the original exception propagates).
+
+    Use as ``with laila.guarantee: ...``. Multiple nested guarantee
+    blocks compose: each scope only waits for the futures created
+    *between its own __enter__ and __exit__*.
     """
 
     def __enter__(self):
-        """Enter the guarantee scope, pushing a new frame onto the stack."""
+        """Push a fresh frame onto the active policy's guarantee stack.
+
+        Newly-submitted futures will register with this frame until
+        :meth:`__exit__` pops it.
+        """
         laila.get_active_policy().central.command._guarantee_enter()
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        """Exit the guarantee scope and wait for all enclosed futures."""
+        """Pop the frame and synchronously wait for every registered future.
+
+        Returns ``False`` so the caller's exception (if any)
+        continues to propagate. When the body did not raise but one
+        of the in-scope futures did, the first wait-error is raised
+        instead.
+        """
         created_inside = laila.get_active_policy().central.command._guarantee_exit()
 
         wait_errors = []
@@ -39,14 +84,31 @@ class _Guarantee:
 
 
 class _AsyncGuarantee:
-    """Asynchronous context manager that awaits futures created inside its scope.
+    """Asynchronous context manager that awaits futures created in its scope.
 
-    A background watcher task monitors child futures and propagates the first
-    exception by cancelling the parent task.
+    Same lexical guarantee as :class:`_Guarantee`, but for
+    coroutine code:
+
+    - Inside the ``async with`` block, a *background watcher* task
+      polls the in-scope future list and immediately cancels the
+      parent task on the first observed exception. This keeps a
+      hung coroutine from sitting forever on a dead future.
+    - On exit, every still-pending in-scope future is awaited
+      (proper ``await`` for awaitable futures, ``asyncio.to_thread``
+      for sync-only ones), then -- if no original exception -- the
+      first wait-error or background-error is re-raised.
+
+    Use as ``async with laila.guarantee_async: ...``. Like
+    :class:`_Guarantee`, multiple nested scopes compose cleanly.
     """
 
     def __init__(self) -> None:
-        """Initialise internal tracking state."""
+        """Initialise empty tracking state.
+
+        All real work happens in :meth:`__aenter__`. This constructor
+        exists only so the singleton :data:`guarantee_async` can be
+        built at import time.
+        """
         self._command = None
         self._scope = None
         self._parent_task = None

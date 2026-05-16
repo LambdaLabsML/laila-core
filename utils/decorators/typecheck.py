@@ -1,20 +1,46 @@
-"""Decorators for lightweight runtime type coercion."""
+"""Decorators for lightweight runtime type coercion.
+
+Currently exports only :func:`ensure_list`, which removes the
+boilerplate at the top of every "accept either a single item or an
+iterable" function. The decorator inspects the wrapped function's
+signature, finds the named parameter, and -- if its bound value is
+not a :class:`list` / :class:`set` / :class:`frozenset` -- wraps it
+in a single-element list before forwarding the call.
+"""
 from functools import wraps
 from inspect import signature
 
 
 def ensure_list(arg_name: str):
-    """Decorator that wraps a single value in a list if it is not already one.
+    """Wrap a single value in a list when *arg_name* is not iterable.
+
+    Useful for relaxing function signatures so callers can pass
+    either ``f(x)`` or ``f([x, y, z])`` without the function having
+    to special-case the scalar form.
+
+    Sets and frozensets are *passed through unchanged* (they are
+    already iterable collections); everything else -- including
+    plain strings, which are iterable but rarely intended as a
+    sequence in this context -- is wrapped in a single-element list.
 
     Parameters
     ----------
     arg_name : str
-        Name of the parameter to coerce.
+        The name of the parameter on the wrapped function whose
+        value should be coerced. Must be a real parameter of the
+        wrapped function (raises :class:`TypeError` at call time
+        if not).
 
     Returns
     -------
     callable
-        Decorator that wraps the target function.
+        A decorator. Apply to the target function.
+
+    Raises
+    ------
+    TypeError
+        At call time, if *arg_name* is not bound by the call (e.g.
+        the parameter is missing from the function's signature).
     """
     def decorator(fn):
         sig = signature(fn)

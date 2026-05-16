@@ -1,12 +1,41 @@
 """CLI-capable base class with 4-tier parameter resolution.
 
-Provides automatic parameter injection from ``laila.args`` for any Pydantic
-model that inherits from ``_LAILA_CLI_CAPABLE_CLASS``.  Resolution order:
+Implements the *configurability* contract that every "first-class"
+laila object (policies, taskforces, pools, comm protocols, the
+logger) opts into by inheriting from :class:`_LAILA_CLI_CAPABLE_CLASS`.
+The class hooks into Pydantic's ``model_validator`` machinery so that,
+during construction, missing constructor arguments are auto-filled
+from :data:`laila.args` according to the following resolution order:
 
-1. Explicitly passed in code (``param=value``)
-2. Found at the matching path in ``laila.args``
-3. Pydantic ``Field(default=...)`` or ``default_factory``
-4. ``RuntimeError`` if still uninitialized
+1. **Explicit kwarg** -- ``MyClass(param=value)`` always wins.
+2. **laila.args lookup** -- a value found at the corresponding
+   ``laila.args.policy.central.command.taskforces.<gid>.<param>``-style
+   path is used. Paths are derived automatically from the class's
+   ``_scopes`` PrivateAttr; see :data:`_SCOPE_TO_ARGS_PATH` for the
+   mapping.
+3. **Pydantic default** -- the field's ``default=`` / ``default_factory``
+   is used if neither of the above produced a value.
+4. **Required-field check** -- fields listed in ``_cli_required_fields``
+   that are still ``None`` after the above raise :class:`RuntimeError`.
+
+Exemptions
+----------
+Mark a field as :func:`CLIExempt` to keep it out of both the
+``laila.args`` injection step and the environment mirror produced by
+:func:`build_environment`. Use this for private bookkeeping, runtime
+caches, or any state that should not appear on a CLI surface.
+
+Environment mirror
+------------------
+This module also exposes :func:`build_environment` and
+:func:`_load_environment` -- the round-trip used by
+:func:`laila.environment_to_s3` to snapshot a live policy graph,
+ship it elsewhere, and reconstruct the same hierarchy on the
+receiving side. The mirror lives at
+``laila.args.environment.policies[<gid>]`` and is refreshed on
+every successful CLI-capable construction via
+:func:`_refresh_args_environment` (see :class:`model_validator`
+hook in :class:`_LAILA_CLI_CAPABLE_CLASS`).
 """
 
 from __future__ import annotations
@@ -17,10 +46,19 @@ from pydantic import BaseModel, Field, model_validator
 
 
 def CLIExempt(*args: Any, **kwargs: Any) -> Any:
-    """Drop-in replacement for ``Field()`` that marks a field as CLI-exempt.
+    """Drop-in replacement for :func:`pydantic.Field` that marks a field CLI-exempt.
 
-    Exempt fields are never injected from ``laila.args`` and are excluded
-    from the ``laila.args.environment`` mirror.
+    Exempt fields are skipped by both the ``laila.args`` auto-injection
+    step in :meth:`_LAILA_CLI_CAPABLE_CLASS._resolve_from_cli_args`
+    and the environment mirror produced by
+    :func:`build_environment`. Use this for fields that should never
+    end up on a command-line surface or in a serialised environment
+    dump -- typically internal caches, mutable runtime state, or
+    fields whose values are derived rather than configured.
+
+    Implementation detail: marks the field by stashing
+    ``cli_exempt=True`` inside ``json_schema_extra``, which is the
+    Pydantic-blessed extension point and survives JSON-schema dumps.
     """
     extra = kwargs.get("json_schema_extra") or {}
     extra["cli_exempt"] = True
@@ -29,6 +67,11 @@ def CLIExempt(*args: Any, **kwargs: Any) -> Any:
 
 
 def _is_cli_exempt(field_info: Any) -> bool:
+    """Return ``True`` if a ``FieldInfo`` carries the CLI-exempt marker.
+
+    Reads the ``cli_exempt`` flag stashed by :func:`CLIExempt` on the
+    field's ``json_schema_extra`` dict.
+    """
     extra = field_info.json_schema_extra
     if isinstance(extra, dict):
         return extra.get("cli_exempt", False)
@@ -302,17 +345,32 @@ def build_environment(policy: Any) -> dict:
 class _LAILA_CLI_CAPABLE_CLASS(BaseModel):
     """Base class enabling 4-tier parameter resolution from ``laila.args``.
 
-    Inherit from this alongside ``_LAILA_IDENTIFIABLE_OBJECT`` (or its
-    subclasses).  No configuration is needed in the child class — the
-    resolution path is derived automatically from the child's ``_scopes``
-    private attribute.
+    Inherit from this alongside :class:`_LAILA_IDENTIFIABLE_OBJECT`
+    (or one of its subclasses) to opt into:
 
-    Resolution order
-    ----------------
-    1. Explicitly passed ``param=value`` in code
-    2. Value found at the matching ``laila.args`` path
-    3. Pydantic ``Field(default=...)`` / ``default_factory``
-    4. ``RuntimeError`` for required fields still unset
+    - Auto-population of constructor kwargs from a matching subtree
+      of :data:`laila.args` (see module docstring for the exact
+      resolution order).
+    - Auto-refresh of the corresponding entry under
+      ``laila.args.environment.policies[<gid>]`` after every successful
+      construction, so the live policy graph and the CLI mirror stay
+      in sync.
+    - Mandatory-field enforcement via :attr:`_cli_required_fields` --
+      fields named here that remain ``None`` after the four-tier
+      resolution raise :class:`RuntimeError`.
+
+    No additional configuration is needed in the subclass: the args
+    path is derived automatically from the class's ``_scopes``
+    PrivateAttr (see :data:`_SCOPE_TO_ARGS_PATH`). Only the rare
+    cases where a field must always come from somewhere need to set
+    ``_cli_required_fields``.
+
+    Attributes
+    ----------
+    _cli_required_fields : ClassVar[set[str]]
+        Names of fields that are mandatory after resolution. Override
+        in subclasses that need to fail loudly instead of carrying a
+        ``None`` default through to runtime.
     """
 
     _cli_required_fields: ClassVar[Set[str]] = set()
@@ -320,6 +378,17 @@ class _LAILA_CLI_CAPABLE_CLASS(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _resolve_from_cli_args(cls, data: Any) -> Any:
+        """Pydantic before-validator that injects values from ``laila.args``.
+
+        Skipped silently when *data* is not a dict (e.g. when Pydantic
+        is round-tripping an existing model). When the class's
+        ``_scopes`` does not map to a known args path, also a no-op.
+        Otherwise: walk the eligible model fields, and for any that
+        the caller did not pass explicitly, pull the matching value
+        out of the args subtree (treating empty :class:`DotMap` nodes
+        as "absent" so user code can write ``laila.args.foo = {}``
+        without unintentionally clearing defaults).
+        """
         if not isinstance(data, dict):
             return data
 
@@ -344,6 +413,20 @@ class _LAILA_CLI_CAPABLE_CLASS(BaseModel):
         return data
 
     def model_post_init(self, __context: Any) -> None:
+        """Pydantic post-init hook that backfills property setters and enforces required fields.
+
+        Runs after :meth:`_resolve_from_cli_args`. Two responsibilities:
+
+        - For each property on the class that has a setter (so users
+          can reasonably configure it via ``laila.args``), look up
+          and assign the matching value from the same args subtree
+          used during field resolution. Failures are swallowed so a
+          mis-typed property name does not break construction.
+        - Re-check :attr:`_cli_required_fields`: any name that is
+          still ``None`` after both passes triggers a
+          :class:`RuntimeError` with a message pointing the user at
+          the explicit / args / default escape hatches.
+        """
         super().model_post_init(__context)
 
         path = _resolve_path_for_class(type(self), {})

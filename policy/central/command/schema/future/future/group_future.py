@@ -1,4 +1,17 @@
-"""GroupFuture — an aggregate future that tracks a set of child futures."""
+""":class:`GroupFuture` -- aggregate future tracking a fixed set of children.
+
+A group future is the natural return type of any "submit N tasks
+together" operation (see :meth:`CentralCommand.submit` with multiple
+tasks, :meth:`CentralMemory.memorize` with multiple entries, the
+manifest-level helpers, etc.). It owns no execution itself; instead it
+references the children by ``global_id`` and delegates ``status``,
+``result``, ``wait``, and ``__await__`` to them.
+
+Children are looked up through the active local policy's future bank
+on every access; this means the group keeps working even if the local
+references to the children are dropped, as long as they remain in the
+bank.
+"""
 
 from __future__ import annotations
 from typing import Dict, List, Optional, Callable, Any
@@ -22,7 +35,15 @@ def _get_future_bank():
 
 
 class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
-    """Aggregate future that groups multiple child futures under one handle."""
+    """Aggregate future grouping multiple child futures under one handle.
+
+    The aggregate's status is a *percentage breakdown* of its children
+    (see :attr:`status`) rather than a single :class:`FutureStatus`,
+    because aggregating heterogeneous outcomes into a single state
+    quickly becomes lossy. Use :meth:`wait` (or ``await``) to block
+    until every child completes; :attr:`result` then collects the
+    children's results in registration order.
+    """
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_GROUP_FUTURE_SCOPE]))
 
@@ -52,7 +73,26 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
     # ---------- computed status ----------
     @property
     def status(self) -> Dict[str, Any]:
-        """Return percentage breakdown of child statuses."""
+        """Return a percentage breakdown of child statuses.
+
+        The returned dict has shape::
+
+            {
+                "total": float,
+                "percentages": {
+                    "finished":    float,
+                    "running":     float,
+                    "not_started": float,
+                    "error":       float,
+                    "cancelled":   float,
+                }
+            }
+
+        The percentages always sum to 100 except in the empty-group
+        edge case (everything is reported as 100% ``not_started`` for a
+        group with no children, so callers can rely on the same dict
+        shape regardless of population).
+        """
         if not self.future_ids:
             return {
                 "total": 0.0,
@@ -102,17 +142,26 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
 
 
     def wait(self, timeout: Optional[float] = None) -> Any:
-        """Wait for all children to complete.
+        """Block until every child future completes; return their results.
 
-        ``timeout`` is forwarded to each child in seconds so local
-        ``ConcurrentPackageFuture`` and ``RemoteFuture`` children share a
-        consistent unit (the previous implementation incorrectly passed
-        milliseconds).
+        Children are waited *sequentially*. The same ``timeout`` value
+        is passed to each child individually (in seconds), so the total
+        wall time can be up to ``timeout * len(children)`` -- callers
+        that need a hard total budget should compute it themselves and
+        pass smaller per-child timeouts.
+
+        Returns
+        -------
+        list
+            One entry per child, in the order ``self.future_ids``.
 
         Raises
         ------
         LoopBlockingWaitError
             If called from a thread that owns an async event loop.
+            Use ``await group_future`` from coroutines instead.
+        RuntimeError
+            If a child does not expose a ``wait`` method.
         """
         from ...exceptions import _check_not_loop_thread
         _check_not_loop_thread()

@@ -1,4 +1,30 @@
-"""Thread-safe, insertion-ordered dictionary with atomic context support."""
+"""Thread-safe, insertion-ordered dictionary with atomic context support.
+
+:class:`AtomicDict` is a drop-in :class:`MutableMapping` whose every
+mutation is guarded by an internal :class:`threading.RLock`. On top
+of the standard mapping API it adds:
+
+- *Insertion-ordered* iteration backed by a separate ``_order`` list
+  that is auto-synced whenever it diverges from the underlying dict
+  (:meth:`_ensure_order_synced`). Useful when callers need to act on
+  "the next item to come in" without scanning.
+- Positional accessors (:meth:`item_at`, :meth:`key_at`,
+  :meth:`value_at`) and an in-place slice (:meth:`trim`) that work
+  against the insertion order.
+- An :meth:`atomic` context manager that yields a "view" object
+  capable of doing batch mutations *under the lock* (so the whole
+  batch appears atomic to other threads). Combined with the
+  context-local :meth:`AtomicDict.current` accessor, code inside the
+  block can also reach the dict without re-receiving it as a
+  parameter.
+- Atomic compute-and-set (:meth:`compute`) and increment
+  (:meth:`increment`) helpers for common read-modify-write patterns.
+
+Used heavily inside laila for things like the active-policy registry,
+future-bank tables, taskforce queues, and the central memory hint /
+record indexes -- anywhere a plain dict would be a race-condition
+waiting to happen.
+"""
 from __future__ import annotations
 from collections.abc import MutableMapping, Iterable, Mapping
 from threading import RLock

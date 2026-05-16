@@ -1,4 +1,21 @@
-"""Identity model for a Laila future — lightweight metadata without result state."""
+"""Identity model for a Laila future -- lightweight metadata without result state.
+
+A :class:`_LAILA_IDENTIFIABLE_FUTURE` carries only the *identity* of a
+future: the gid of the task-force and policy that own it, optional
+group / precedence / purpose annotations, and the inherited UUID +
+scopes. It does NOT carry the result, exception, or status -- those
+live in the concrete :class:`Future` registered in the owning policy's
+``future_bank``. The identity object instead resolves all status /
+result / exception accessors *through* the bank, so any process that
+holds an identity can introspect the live future as long as the owning
+policy is reachable in :data:`_local_policies`.
+
+The split exists so that taskforce-level submission can return a
+lightweight identity to user code without forcing the production of a
+full :class:`Future` instance per submission, and so that
+:class:`RemoteFuture` can present the same identity-like API on the
+remote side.
+"""
 
 from ast import Str
 from pydantic import BaseModel, Field, PrivateAttr
@@ -15,23 +32,27 @@ from .......macros.strings import _FUTURE_SCOPE
 
 
 class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
-    """
-    Identity metadata for a Future.
+    """Lightweight identity record for a Future.
+
+    Carries only the metadata needed to *find* the live future in some
+    policy's ``future_bank``; the result, exception, and status are
+    properties that resolve through the bank on demand.
 
     Parameters
     ----------
-    task_id
-        Unique ID for this Future instance.
-    taskforce_id
-        Unique ID for the taskforce that owns this Future.
-    policy_id
-        Unique ID for the policy instance that created this Future.
-    task_group_id
-        Optional group identifier used by GroupFuture.
-    precedence
-        Optional precedence list for execution ordering.
-    purpose
-        Optional human-readable purpose string.
+    taskforce_id : _LAILA_IDENTIFIABLE_OBJECT or str
+        gid of the task-force that owns this Future.
+    policy_id : _LAILA_IDENTIFIABLE_OBJECT or str
+        gid of the policy instance that created this Future.
+    future_group_id : _LAILA_IDENTIFIABLE_OBJECT or str, optional
+        gid of the parent :class:`GroupFuture`, when this future is a
+        member of one.
+    precedence : _LAILA_IDENTIFIABLE_OBJECT or str, optional
+        gid of a future this one depends on. Reserved for future
+        explicit-dependency scheduling; currently informational only.
+    purpose : str, optional
+        Human-readable label that surfaces in logs and diagnostics
+        (e.g. ``"memorize:42"``, ``"build:my_model"``).
     """
 
 

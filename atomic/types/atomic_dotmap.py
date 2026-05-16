@@ -1,4 +1,17 @@
-"""Thread-safe dot-notation attribute map."""
+"""Thread-safe dot-notation attribute map.
+
+:class:`AtomicDotMap` is the threaded sibling of :class:`dotmap.DotMap`.
+It exposes attribute access (``m.a.b.c = 1``) over an underlying
+nested-dict structure, but every read and write goes through a
+:class:`threading.RLock` so concurrent producers and consumers never
+observe a half-written tree.
+
+Used by laila for live, nested configuration that may be mutated at
+runtime -- the prototypical example is :data:`laila.args`, which is
+read by every CLI-capable class during construction and may be
+written by environment-load workflows or by user code rebinding
+``laila.args.foo.bar = ...``.
+"""
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 import threading
 import uuid

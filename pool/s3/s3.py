@@ -1,4 +1,11 @@
-"""AWS S3 pool implementation."""
+"""AWS S3 pool implementation.
+
+Thin specialisation of :class:`BotoPool` that points at the AWS S3
+endpoint with AWS-style v4 signatures. The bulk of the read/write/
+delete logic lives in the parent class -- this file just plugs in
+the right :func:`boto3.client` factory and the matching
+:class:`aioboto3.Session` for the async path.
+"""
 from __future__ import annotations
 
 from typing import Optional
@@ -20,12 +27,26 @@ except ImportError:
 
 
 class S3Pool(BotoPool):
-    """
-    AWS S3-backed pool. Uploads and downloads key-value data from S3.
+    """AWS S3-backed pool.
 
-    Uses boto3 S3 API for sync paths and ``aioboto3`` for async paths
-    (true non-blocking I/O via aiohttp under the hood). Objects are
-    keyed by entry global_id directly. Use one bucket per pool.
+    Uploads and downloads serialised entries against a single S3
+    bucket -- one bucket per pool, objects keyed by entry
+    ``global_id``. Sync paths use the standard :mod:`boto3` client;
+    async paths (``_read_async`` / ``_write_async`` / ...) use
+    :mod:`aioboto3` for true non-blocking I/O via ``aiohttp``.
+
+    Parameters
+    ----------
+    access_key_id : str, optional
+        AWS access key id. Falls back to the standard boto3 credential
+        provider chain (env vars, ``~/.aws/credentials``, IAM role
+        metadata, ...) when omitted.
+    secret_access_key : str, optional
+        AWS secret access key. See :attr:`access_key_id` for the
+        fallback rules.
+    region_name : str, optional
+        AWS region for the bucket. When omitted, boto3 picks the
+        region from its standard configuration sources.
     """
 
     access_key_id: Optional[str] = Field(default=None)
@@ -33,7 +54,13 @@ class S3Pool(BotoPool):
     region_name: Optional[str] = Field(default=None)
 
     def _get_client(self):
-        """Return a boto3 S3 client configured for AWS S3."""
+        """Return a cached :class:`boto3.client` instance for AWS S3.
+
+        Configured with SigV4 signing, a three-attempt standard retry
+        policy, and a connection pool sized by
+        :attr:`max_pool_connections`. Subsequent calls return the
+        cached client.
+        """
         if self._client is not None:
             return self._client
         if boto3 is None or BotocoreConfig is None:
@@ -55,7 +82,12 @@ class S3Pool(BotoPool):
         return self._client
 
     def _get_aio_session(self):
-        """Return an :class:`aioboto3.Session` carrying this pool's AWS credentials."""
+        """Return a cached :class:`aioboto3.Session` carrying this pool's AWS credentials.
+
+        Used by the async path. Lazy-imports :mod:`aioboto3` and
+        raises :class:`ImportError` with an actionable hint if the
+        optional dependency is missing.
+        """
         if aioboto3 is None:
             raise ImportError(
                 "aioboto3 is required for the async S3 path; install with `pip install aioboto3`"

@@ -1,4 +1,11 @@
-"""``ComputationalData`` catch-all subclass for arbitrary Python objects."""
+""":class:`ComputationalData` catch-all subclass for arbitrary Python objects.
+
+Registered against :class:`object` so the MRO walk in
+``ComputationalData.__new__`` always finds at least this class for
+otherwise-unknown payload types. Uses :class:`PickleSerializer` -- the
+broadest-compatibility option, at the cost of being Python-specific
+on the wire.
+"""
 
 import copy
 from .compdata import ComputationalData, register_cdtype, _scalar_len
@@ -8,7 +15,14 @@ from pydantic import PrivateAttr
 
 @register_cdtype(object)  # final catch-all
 class CD_generic(ComputationalData):
-    """Catch-all computational data type for arbitrary Python objects."""
+    """Catch-all computational-data wrapper for arbitrary Python objects.
+
+    Selected by :meth:`ComputationalData.__new__` when no more specific
+    wrapper is registered for the payload's type. Pickles the value to
+    bytes for serialization. ``len()`` defers to the payload's own
+    ``__len__`` when present and otherwise raises (per
+    :func:`_scalar_len`).
+    """
 
     _serializer: PickleSerializer = PrivateAttr(default_factory=PickleSerializer)
 

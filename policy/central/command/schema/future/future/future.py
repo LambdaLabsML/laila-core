@@ -1,4 +1,32 @@
-"""Abstract ``Future`` base class with identity, callbacks, and status lifecycle."""
+"""Abstract :class:`Future` base class -- identity, status, callbacks, lifecycle.
+
+A :class:`Future` is the laila-side analogue of
+:class:`concurrent.futures.Future` / :class:`asyncio.Future`, but
+extended with three things the standard library doesn't provide:
+
+- **Identity.** A future has a stable ``global_id`` (UUID + scope)
+  so it can be referenced across processes (see
+  :class:`RemoteFuture`) and looked up in the owning policy's
+  ``future_bank`` after the local handle has gone out of scope.
+- **Result-as-Entry.** Setting ``future.result = value`` automatically
+  wraps non-:class:`Entry` values in :meth:`Entry.constant`, so
+  every future ultimately resolves to an addressable entry that can
+  be ``laila.remember``'d on a peer.
+- **Status callbacks.** Multiple callbacks can be registered against
+  any :class:`FutureStatus` transition via :meth:`add_status_callback`;
+  late registrations on already-fired statuses fire immediately to
+  close the obvious race.
+
+Concrete subclasses provide the actual ``wait`` / ``__await__`` /
+producer-side completion logic:
+
+- :class:`ConcurrentPackageFuture` -- backed by a
+  ``concurrent.futures.Future`` from a thread or process pool.
+- :class:`ComplexFuture` -- chains of dependent futures; deprecated
+  in favor of pure async coroutines on the async-thread-pool taskforce.
+- :class:`GroupFuture` -- aggregates multiple child futures.
+- :class:`RemoteFuture` -- proxies a future that lives on a peer.
+"""
 
 from __future__ import annotations
 from typing import Optional, Callable, Any, Dict, List
@@ -11,13 +39,27 @@ from .......utils.decorators.synchronized import synchronized
 
 
 class Future(_LAILA_IDENTIFIABLE_FUTURE):
-    """
-    Abstract Future base class with identity, outcome, and callbacks.
+    """Abstract base class for all in-process laila futures.
 
-    Parameters
-    ----------
-    future_identity
-        Identity metadata for this Future instance.
+    Inherits identity (``taskforce_id``, ``policy_id``,
+    ``future_group_id``, ``precedence``, ``purpose`` and the usual
+    ``uuid`` / ``scopes``) from :class:`_LAILA_IDENTIFIABLE_FUTURE`,
+    and adds:
+
+    - ``status`` (:class:`FutureStatus`) -- the lifecycle marker.
+    - ``result`` -- the (possibly auto-wrapped) :class:`Entry` outcome.
+    - ``exception`` -- the failure outcome.
+    - ``_result_global_id`` -- the gid of the result entry (handy for
+      cross-policy remembering).
+    - ``callbacks`` / ``_status_callbacks`` -- per-status hook lists.
+
+    On construction the future self-registers into the active local
+    policy's ``future_bank`` and into every open guarantee scope on
+    the calling thread. That is what makes ``with laila.guarantee:``
+    work without any explicit registration on the caller's part.
+
+    Subclasses must override :meth:`wait` (and typically ``__await__``)
+    to hook into their concrete completion mechanism.
     """
 
     _status: FutureStatus = PrivateAttr(default=FutureStatus.NOT_STARTED)
@@ -34,7 +76,23 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
     callbacks: Dict[FutureStatus, Callable[..., Any]] = Field(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
-        """Wire default callbacks and register this future with the active local policy."""
+        """Wire default per-status callbacks and self-register with the
+        active local policy.
+
+        Performs three things:
+
+        1. Populate :attr:`_default_callbacks` with the no-op
+           "set my status to X when callback X fires" entries.
+        2. Resolve the active *local* policy (``_get_active_local_policy``
+           lazily activates a ``DefaultPolicy`` if needed).
+        3. Register ``self`` in every currently-open guarantee scope
+           on this thread, then drop a reference into
+           ``policy.future_bank`` so the future can be looked up by
+           gid even after the local handle goes out of scope.
+
+        Logging the creation event is best-effort -- failures here
+        never block construction.
+        """
         self._setup_default_callbacks()
         from ....... import _get_active_local_policy
         policy = _get_active_local_policy()
@@ -116,9 +174,18 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
     
     @property
     def result(self) -> Any:
-        """
-        Return the current result value. Releases the lock before waiting to
-        avoid deadlock with the done callback that sets the result.
+        """The future's result, blocking until completion if necessary.
+
+        Behavior:
+
+        - If the future has already finished successfully, returns the
+          recorded result without blocking.
+        - If the future ended in error or was cancelled, the recorded
+          exception is re-raised.
+        - Otherwise, the lock is released and we ``wait(timeout=None)``
+          for completion -- releasing the lock first is critical
+          because the producer thread that ultimately sets the result
+          will need to re-acquire the same atomic lock to do so.
         """
         with self.atomic():
             if self._status in [FutureStatus.ERROR, FutureStatus.CANCELLED]:
@@ -135,7 +202,14 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
     @result.setter
     @synchronized
     def result(self, result: Any) -> None:
-        """Set the result value, auto-wrapping non-Entry values into an Entry."""
+        """Record the future's result, auto-wrapping non-Entry values.
+
+        - ``None`` clears both the value and the result-id slot.
+        - A live :class:`Entry` is stored as-is and its ``global_id``
+          is captured into ``_result_global_id``.
+        - Anything else is wrapped via :meth:`Entry.constant` so the
+          outcome is always addressable across processes.
+        """
         from .......entry import Entry
 
         if result is None:
@@ -151,12 +225,19 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
 
     @property
     def data(self) -> Any:
-        """Return the unwrapped payload of the result Entry.
+        """Return ``self.result.data`` -- the unwrapped payload value.
+
+        Convenience accessor for the common case of "I just want the
+        Python value the task produced". Blocks until the future
+        finishes (via the underlying ``result`` getter) and then
+        unwraps the entry.
 
         Raises
         ------
         RuntimeError
-            If the result is not an Entry instance.
+            If the result is not an :class:`Entry` instance (which can
+            happen for futures that explicitly set ``None`` results,
+            or for raw non-Entry results from legacy code paths).
         """
         from .......entry import Entry
         result = self.result
@@ -230,7 +311,19 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
         )
 
     def wait(self, timeout: Optional[float] = None) -> Any:
-        """Block until the future completes.  Subclasses must override."""
+        """Block until the future completes. Subclasses must override.
+
+        Concrete subclasses must implement this and additionally guard
+        against being invoked from an async loop thread (call
+        :func:`_check_not_loop_thread` first) -- waiting synchronously
+        on a future from within the same loop that is supposed to
+        complete it is a hang.
+
+        Raises
+        ------
+        NotImplementedError
+            Always, on the abstract base.
+        """
         raise NotImplementedError(
             f"{type(self).__name__} does not implement wait(); "
             "use a concrete subclass such as ConcurrentPackageFuture."

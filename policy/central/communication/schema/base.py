@@ -1,8 +1,32 @@
 """Core communication sub-system for inter-policy peer-to-peer RPC.
 
-Manages a registry of transport protocols (TCP/IP, shared memory, etc.)
-and a protocol-agnostic peer registry.  Delegates all transport-level
-work to the protocol instances stored in ``connections``.
+The :class:`_LAILA_IDENTIFIABLE_COMMUNICATION` class is the *central
+communication* subsystem of every laila :class:`Policy`. Its job is to
+mediate calls between local and remote policies without any of the
+upstream code having to know which transport is in play. Concretely it
+owns three things:
+
+- A *protocol registry* (``connections``): one or more transport-level
+  drivers (TCP/IP today, shared memory or queues in the future). Each
+  protocol implements its own listener loop, peer-handshake, and wire
+  encoding. The communication object only ever asks "do you handle
+  this URI?" or "do you have this peer connected?" -- everything else
+  is delegated.
+- A *peer registry* (``peers``): a map from remote-policy ``global_id``
+  to a :class:`RemotePolicyProxy`. Proxies look like local policies
+  to the rest of the codebase but route every method call through
+  :meth:`_send_rpc`.
+- An *inbound dispatcher* (:meth:`_execute_rpc`): when a protocol
+  finishes deserializing an incoming RPC frame it hands the dotted
+  attribute path + args/kwargs back to the communication object,
+  which walks the path on the local policy and invokes the resolved
+  method.
+
+The class is also responsible for *future virtualisation*: when a
+remote call returns a future-shaped envelope (as marked by the
+``__laila_future__`` key) it transparently wraps the envelope in a
+:class:`RemoteFuture` that proxies status / wait / result calls back
+to the originating peer (see :meth:`_maybe_wrap_remote_future`).
 """
 
 from __future__ import annotations
@@ -22,12 +46,37 @@ log = logging.getLogger(__name__)
 
 
 class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
-    """Central communication that owns transport protocols and a peer registry.
+    """Central-communication hub for a policy.
+
+    Owns transport protocols, the peer registry, and an inbound RPC
+    dispatcher. The full interaction loop is::
+
+        local user code
+            -> RemotePolicyProxy.foo()
+            -> Communication._send_rpc(...)
+            -> Protocol.send_rpc(...)
+            ~~ wire ~~
+            -> remote Protocol receives, decodes
+            -> remote Communication._execute_rpc(["foo"], args, kwargs)
+            -> result returned along the same path in reverse
 
     Parameters
     ----------
     policy_id : str, optional
-        ``global_id`` of the owning policy (set automatically during wiring).
+        ``global_id`` of the owning policy. Wired automatically by the
+        policy during construction; only set manually in tests or
+        when a communication object lives outside a policy.
+
+    Attributes
+    ----------
+    peers : dict[str, RemotePolicyProxy]
+        Remote-policy ``global_id`` -> proxy. Populated by
+        :meth:`_register_peer` after a successful handshake.
+    connections : dict[str, _LAILA_IDENTIFIABLE_COMM_PROTOCOL]
+        Protocol ``global_id`` -> protocol instance. Each protocol
+        manages its own connections, listeners and peer set; this
+        map is just a registry that lets the communication layer
+        find the right transport for a URI or peer.
     """
 
     _scopes: list[str] = PrivateAttr(
@@ -89,7 +138,19 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         protocol._communication = None
 
     def _resolve_protocol_for_uri(self, uri: str) -> _LAILA_IDENTIFIABLE_COMM_PROTOCOL:
-        """Find a protocol that can handle *uri*, or fall back to the first one."""
+        """Find a registered protocol that can handle *uri*.
+
+        Each protocol class implements a ``can_handle_uri`` classmethod
+        (e.g. TCP/IP returns ``True`` for ``ws://`` and ``tcp://`` URIs).
+        The first registered protocol that claims the URI is returned;
+        if none claims it, the first registered protocol is returned
+        as a best-effort fallback (the protocol may still error out).
+
+        Raises
+        ------
+        ConnectionError
+            If no protocols are registered.
+        """
         if not self.connections:
             raise ConnectionError(
                 "No communication protocols configured. "
@@ -105,13 +166,24 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        """Start all registered protocols."""
+        """Start every registered protocol's listener loop.
+
+        Idempotent at the protocol level -- calling :meth:`start` on an
+        already-started protocol is a no-op. Logged at INFO so the
+        policy lifecycle is auditable.
+        """
         for proto in self.connections.values():
             proto.start()
         log.info("Communication started for policy %s", self.policy_id)
 
     def stop(self) -> None:
-        """Stop all registered protocols and clear peers."""
+        """Stop every registered protocol and drop all peer proxies.
+
+        Note that the protocols are responsible for breaking their
+        own connections; this method just clears the in-memory peer
+        registry afterwards so subsequent code does not try to talk
+        to detached proxies.
+        """
         for proto in self.connections.values():
             proto.stop()
         self.peers.clear()
@@ -270,11 +342,23 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         raise ConnectionError(f"No connection to peer {peer_id}")
 
     def _maybe_wrap_remote_future(self, result: Any, peer_id: str) -> Any:
-        """Wrap a future-shaped dict in a ``RemoteFuture`` pydantic handle.
+        """Promote a future-shaped envelope into a real :class:`RemoteFuture`.
 
-        ``RemoteFuture.model_post_init`` self-registers into the active
-        policy's ``future_bank`` and guarantee stack, so this helper only
-        builds the instance and binds the communication channel.
+        Detected by the ``__laila_future__`` flag on the deserialized
+        result. The envelope carries enough identity information
+        (uuid, evolution, scopes, taskforce/policy ids) to reconstruct
+        a stable identity-only :class:`RemoteFuture` on the local side
+        without round-tripping the underlying value. The new future
+        is then bound to *self* so subsequent ``status``/``wait``/
+        ``result`` calls route back to *peer_id*.
+
+        :class:`RemoteFuture.model_post_init` self-registers into the
+        active local policy's ``future_bank`` and guarantee stack, so
+        this helper only has to build the instance and call
+        :meth:`RemoteFuture.bind` to attach the communication channel.
+
+        Group futures (``__is_group__``) are flagged so the bound
+        proxy uses the GroupFuture-shaped status payload.
         """
         if not isinstance(result, dict) or not result.get("__laila_future__"):
             return result

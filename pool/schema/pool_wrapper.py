@@ -1,11 +1,33 @@
-"""PoolWrapper — lightweight proxy binding a pool to a manifest for scoped copies.
+"""PoolWrapper -- lightweight proxy binding a pool to a manifest for scoped copies.
 
-Returned by ``pool[manifest]`` to enable the syntax::
+Returned by :meth:`_LAILA_IDENTIFIABLE_POOL.__getitem__` when the key
+is a :class:`Manifest`. The wrapper exists so that the ``<=``
+operator can copy *only the entries listed by the manifest* between
+two pools, instead of copying everything::
 
     my_future = pool_dest[manifest] <= pool_src[manifest]
 
-which copies only the manifest's referenced entries from *pool_src* to
-*pool_dest*.
+How the copy works
+------------------
+The right-hand side selects the source: ``pool_src[manifest]``
+returns a :class:`PoolWrapper` over ``pool_src``. The left-hand side
+selects the destination the same way. ``__le__`` then walks the
+manifest's leaf entries, fetching each one from the source pool via
+:meth:`memory.remember` (which handles serialisation and proxy chains
+for us), then storing it in the destination pool via
+:meth:`memory.memorize`. The whole copy runs concurrently with a
+4-way semaphore on a daemon thread, returning a
+:class:`GroupFuture` whose children correspond to per-entry copy
+operations.
+
+Concurrency model
+-----------------
+:class:`PoolWrapper` itself holds no lock -- all I/O is delegated to
+the wrapped pool's existing public methods, which already take care
+of their own atomic-lock coverage. The ``<=`` runner builds a
+``GroupFuture`` of per-entry ``ConcurrentPackageFuture`` children
+that the active policy's future bank can observe like any other
+group future.
 """
 
 from __future__ import annotations
@@ -19,18 +41,27 @@ if TYPE_CHECKING:
 
 
 class PoolWrapper:
-    """Binds a pool to a manifest for manifest-scoped ``<=`` copy operations.
+    """Manifest-scoped view over a pool, used as the LHS / RHS of ``<=`` copies.
 
-    This is a **plain Python class** with no lock of its own.  All pool I/O
-    is delegated through the pool's existing methods which already acquire the
-    pool's ``RLock`` internally.
+    A wrapper is conceptually "this pool, but only the entries listed
+    by *manifest*". The class itself is intentionally minimal: just
+    two slots (``pool`` and ``manifest``) and one operator (``<=``)
+    that performs the actual cross-pool copy.
 
     Parameters
     ----------
     pool : _LAILA_IDENTIFIABLE_POOL
-        The bound pool instance.
+        The bound pool instance. Must be reachable from the active
+        local policy's central memory.
     manifest : Manifest
-        The manifest whose ``global_id`` leaves define the scope.
+        The manifest whose ``global_id`` leaves define the entries
+        in scope. Both the source and destination wrapper are
+        expected to use the same manifest in a copy operation.
+
+    Notes
+    -----
+    No internal locking; every pool method called from inside ``<=``
+    already takes the pool's own lock.
     """
 
     __slots__ = ("pool", "manifest")
@@ -40,18 +71,38 @@ class PoolWrapper:
         self.manifest = manifest
 
     def __le__(self, other: Any) -> Any:
-        """Copy manifest entries from *other*'s pool into this wrapper's pool.
+        """``self <= other`` -- copy *other*'s manifest entries into this wrapper's pool.
+
+        Spawns a daemon thread running an asyncio loop that, for each
+        entry id in the manifest, ``remember``s the entry from the
+        source pool and ``memorize``s it into the destination pool.
+        A four-way semaphore caps the in-flight copy concurrency.
+
+        Each per-entry copy populates a corresponding
+        :class:`ConcurrentPackageFuture` in a parent
+        :class:`GroupFuture` so callers can wait on the whole batch
+        with the usual future API.
 
         Parameters
         ----------
         other : PoolWrapper
-            Source pool+manifest binding.  The manifest on both sides is used
-            to determine which ``global_id`` entries to copy.
+            Source pool + manifest binding. The manifest is read from
+            *self* (both wrappers should carry the same manifest in a
+            normal copy).
 
         Returns
         -------
         GroupFuture
-            A future that resolves when all entries have been copied.
+            Aggregate future whose children resolve as each entry
+            finishes copying.
+
+        Raises
+        ------
+        RuntimeError
+            If the source pool's ``remember`` returns ``None`` (which
+            happens when the active policy's *default* pool is used as
+            the source -- manifest copies require a non-default
+            source).
         """
         if not isinstance(other, PoolWrapper):
             return NotImplemented

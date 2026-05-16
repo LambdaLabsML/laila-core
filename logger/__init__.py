@@ -1,13 +1,32 @@
 """LAILA Logger subsystem.
 
-A top-level singleton (sibling to :mod:`laila.policy`, :mod:`laila.pool`,
-:mod:`laila.entry`) that emits structured log records both to the
-standard library ``logging`` hierarchy and, optionally, into a LAILA
-pool through :func:`laila.memorize`.
+A top-level singleton (sibling to :mod:`laila.policy`,
+:mod:`laila.pool`, :mod:`laila.entry`) that fans structured log
+records out to two independent sinks:
 
-See :class:`Logger` for the configurable fields and :mod:`record` for
-the record schema. The convenience helpers below mirror the ones
-re-exported on the ``laila`` package.
+- The standard-library :mod:`logging` hierarchy under the
+  :data:`_LAILA_LOGGER_NAME` channel, with optional stderr
+  streaming via the ``display=True`` flag.
+- A laila pool, by ``memorize``-ing each record as a JSON-shaped
+  entry. The pool can be selected by nickname or global id; missing
+  pool configuration triggers an automatic fall-back to ``display=True``
+  so records are never silently dropped.
+
+The two sinks are independent and can both be active at once -- a
+typical setup is "always display, also persist into Postgres" so an
+operator can watch the live stream while history accumulates in a
+pool.
+
+This module re-exports:
+
+- :class:`Logger` -- the singleton class itself, with all the
+  configurable fields and lifecycle methods (``start``, ``stop``,
+  ``set_level``, ...).
+- :mod:`record` helpers (:func:`build_record`, :func:`normalize_level`,
+  :func:`numeric_level`).
+- The convenience top-level functions :func:`get_logger`,
+  :func:`enable_logging`, :func:`disable_logging`, :func:`set_log_level`
+  -- the same names re-exported on the :mod:`laila` package.
 """
 
 from __future__ import annotations
@@ -19,7 +38,13 @@ from .record import build_record, normalize_level, numeric_level
 
 
 def get_logger() -> Logger:
-    """Return the process-wide :class:`Logger` singleton, creating it lazily."""
+    """Return the process-wide :class:`Logger` singleton, creating it lazily.
+
+    The first call constructs the singleton with default settings
+    (silent: no display, no pool). Subsequent calls return the same
+    instance. Use :func:`enable_logging` to actually start emitting
+    records.
+    """
     existing = Logger.__dict__.get("_singleton")
     if existing is not None:
         return existing
@@ -76,14 +101,26 @@ def enable_logging(
 
 
 def disable_logging() -> None:
-    """Stop the singleton logger if one is alive."""
+    """Stop the singleton logger if one is alive.
+
+    Idempotent: if no logger has been constructed yet (no
+    :func:`get_logger` / :func:`enable_logging` calls), this is a
+    no-op. Closes both sinks and stops the background drain thread.
+    """
     existing = Logger.__dict__.get("_singleton")
     if existing is not None:
         existing.stop()
 
 
 def set_log_level(level: str) -> None:
-    """Set the singleton logger's level (creating it lazily if needed)."""
+    """Set the singleton logger's minimum level.
+
+    Creates the singleton lazily if needed. Accepts any of the
+    standard string level names recognised by :mod:`logging`
+    (``"DEBUG"``, ``"INFO"``, ``"WARNING"``, ``"ERROR"``,
+    ``"CRITICAL"``). Records below the configured level are
+    discarded *before* being shipped to either sink.
+    """
     get_logger().set_level(level)
 
 

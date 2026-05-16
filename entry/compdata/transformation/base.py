@@ -1,4 +1,29 @@
-"""Abstract base classes for data transformations and the ``TransformationSequence`` pipeline."""
+"""Abstract base classes for data transformations and the pipeline that chains them.
+
+A *transformation* is a reversible function on opaque data: an
+encoding (base64), a compression (zlib), an encryption (AES), a
+serialisation step (msgpack, pickle, numpy, torch), or a wrapper
+into a JSON-friendly string. They are the building blocks that
+:class:`SimpleConstitution` strings together to recover an entry's
+payload from its serialised form.
+
+Two layers live in this module:
+
+- :class:`_data_transformation` -- the base class every concrete
+  transformation inherits from. Subclasses register themselves in
+  :data:`_data_transformation.REGISTRY` keyed by their ``name``
+  field, so the constitution machinery can look up a transformation
+  by name when reconstructing it from a serialised dict.
+- :class:`TransformationSequence` -- an ordered pipeline of
+  transformations. ``forward`` applies them in order on the way
+  out (when serialising into a pool); ``backward`` is invoked
+  *implicitly* by the constitution by replaying the inverse code
+  snippets that ``forward`` collects.
+
+An empty pipeline is an explicit identity, which lets pools default
+their ``transformations`` field to ``None`` / ``[]`` without any
+special-casing on the call sites.
+"""
 
 from __future__ import annotations
 from typing import Any, Dict, ClassVar, Type, List
@@ -9,8 +34,23 @@ from pydantic import BaseModel, Field, ConfigDict
 class _data_transformation(BaseModel, ABC):
     """Abstract base for a single reversible data transformation.
 
-    Subclasses are auto-registered in ``REGISTRY`` keyed by their ``name``
-    field.  Every subclass must implement ``forward`` and ``backward``.
+    Concrete subclasses must:
+
+    - Set a stable, unique ``name`` field. The registry uses this
+      name as its key, so renaming a transformation is a wire-format
+      breaking change.
+    - Implement :meth:`forward` (apply on the way out) and
+      :meth:`backward` (apply on the way back in). The two must be
+      mathematical inverses on the data shape they're declared for.
+    - Optionally provide ``backward_code``: a string snippet that
+      can be evaluated by the constitution to reconstruct the
+      backward step at recovery time without needing to import the
+      original transformation class. Used by
+      :class:`SimpleConstitution`.
+
+    Subclasses with a non-empty ``name`` are auto-registered in
+    :attr:`REGISTRY` via ``__init_subclass__`` so look-up by name
+    Just Works without any explicit registration call.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -37,12 +77,25 @@ class _data_transformation(BaseModel, ABC):
 
 
 class TransformationSequence(BaseModel):
-    """
-    Pydantic v2 sequential transformation pipeline.
+    """Sequential transformation pipeline.
 
-    - forward(): applies transformations in order
-    - backward(): applies transformations in reverse order
-    - empty pipeline = identity (no-op)
+    Holds an ordered list of :class:`_data_transformation` instances.
+
+    - :meth:`forward` -- applies the transformations left-to-right
+      and returns ``(transformed_data, inverse_codes_in_reverse)``.
+      The inverse-code list is what the constitution will replay at
+      recovery time, so it is built in reverse order on the spot.
+    - :meth:`append` -- mutate the pipeline (append one or many),
+      returning ``self`` for chaining.
+    - Iteration / repr -- standard niceties.
+    - An empty pipeline is the identity: ``forward(x)`` returns
+      ``(x, [])`` and the constitution simply returns ``x`` on the
+      way back.
+
+    Pre-built sequences are exported from :mod:`laila.entry`
+    (``transformation_base64``, ``transformation_base64_compression``,
+    ``transformation_base64_compression_encryption``,
+    ``transformation_encryption``) for the common pool defaults.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -50,18 +103,29 @@ class TransformationSequence(BaseModel):
     transformations: List[_data_transformation] = Field(default_factory=list)
 
     def forward(self, data: Any) -> Any:
-        """Apply all transformations in order and collect inverse codes.
+        """Apply every contained transformation in order and collect their inverses.
+
+        For each transformation ``t`` in :attr:`transformations` (in
+        declaration order):
+
+        1. Replace ``current`` with ``t.forward(current)``.
+        2. Append ``t.backward_code`` to the inverse-code list.
+
+        At the end, the inverse-code list is reversed so that
+        recovery at the constitution layer can simply replay the
+        codes top-to-bottom.
 
         Parameters
         ----------
         data : Any
-            Input data to transform.
+            Input value -- whatever shape the first transformation
+            in the pipeline expects.
 
         Returns
         -------
         tuple[Any, list[str]]
-            Transformed data and the list of inverse code snippets in
-            reverse order.
+            ``(transformed_value, inverse_code_snippets)`` where the
+            second element is already reversed for replay.
         """
         current = data
         inverse_codes: List[str] = []

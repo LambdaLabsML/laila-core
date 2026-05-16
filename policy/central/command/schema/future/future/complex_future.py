@@ -1,27 +1,45 @@
-"""ComplexFuture — sequential composition of futures (Mode A: declarative pipeline).
+"""ComplexFuture -- sequential composition of futures (Mode A: declarative pipeline).
 
 A :class:`ComplexFuture` represents a pipeline of stages, executed one at a
 time in declared order. The number of stages and the function that produces
 each stage's :class:`Future` (given the prior stage's result) is fixed at
 construction time. The actual stage :class:`Future` instances are built
-lazily — stage ``k`` is constructed when stage ``k-1`` flips to
+lazily -- stage ``k`` is constructed when stage ``k-1`` flips to
 ``FutureStatus.FINISHED``.
 
 This is "Mode A" composition (immutable ``stage_fns``, lazy stage
 construction). Dynamic-shape pipelines are expressed via composition:
 
 - A ``stage_fn`` may return another :class:`ComplexFuture` or
-  :class:`GroupFuture` — pipelines nest to arbitrary depth.
-- A ``stage_fn`` may branch — pick one of several Futures based on the
+  :class:`GroupFuture` -- pipelines nest to arbitrary depth.
+- A ``stage_fn`` may branch -- pick one of several futures based on the
   prior stage's result.
-- A ``stage_fn`` may return a :class:`GroupFuture` — fan out parallel work
+- A ``stage_fn`` may return a :class:`GroupFuture` -- fan out parallel work
   whose aggregated result feeds the next stage.
 
-Failure semantics: if any stage flips to ``ERROR`` or ``CANCELLED``, the
-parent ``ComplexFuture`` propagates that status (and exception) and no
-further stages are constructed. Empty ``stage_fns`` is rejected at
-construction. A ``stage_fn`` that returns a non-Future, or that raises
-synchronously when invoked, transitions the parent to ``ERROR``.
+Failure semantics
+-----------------
+- If any stage flips to ``ERROR`` or ``CANCELLED``, the parent
+  ``ComplexFuture`` propagates that status (and exception) and no
+  further stages are constructed.
+- Empty ``stage_fns`` is rejected at construction with
+  :class:`ValueError`.
+- A ``stage_fn`` that returns a non-future or raises synchronously
+  when invoked transitions the parent to ``ERROR``.
+
+Implementation notes
+--------------------
+- Stage callbacks are wired through :meth:`Future.add_status_callback`
+  for leaf futures. Group-future stages are polled on a daemon thread
+  (see :meth:`_watch_group_future`) because :class:`GroupFuture` exposes
+  its status as a percentage breakdown rather than a single
+  :class:`FutureStatus` enum member.
+- Re-entrant locking via ``_stage_lock`` keeps the stage state-machine
+  consistent under concurrent callback delivery from worker threads.
+- Pydantic v2's ``validate_python`` wipes any private-attribute writes
+  done before ``super().__init__`` returns, so the raw ``stage_fns``
+  argument is shuttled across the boundary via the thread-local
+  :data:`_PARK` dict and re-attached in :meth:`model_post_init`.
 """
 
 from __future__ import annotations
@@ -100,7 +118,14 @@ class ComplexFuture(Future):
             _PARK.pop(threading.get_ident(), None)
 
     def model_post_init(self, __context: Any) -> None:
-        """Register with the active policy's future bank, then kick off stage 0."""
+        """Register with the active policy's future bank, then kick off stage 0.
+
+        Picks up the parked ``stage_fns`` list from :data:`_PARK` (set
+        by :meth:`__init__`), reattaches it as a private attribute,
+        then synchronously triggers construction of the first stage
+        with ``prior_result=None``. Subsequent stages are constructed
+        lazily inside the per-stage completion callbacks.
+        """
         super().model_post_init(__context)
         parked = _PARK.get(threading.get_ident())
         if parked is not None:
@@ -109,12 +134,15 @@ class ComplexFuture(Future):
 
     @property
     def current_stage_index(self) -> int:
-        """Return the 0-based index of the most recently constructed stage."""
+        """0-based index of the most recently constructed stage.
+
+        Returns ``-1`` before the first stage has been kicked off.
+        """
         return self._current_idx
 
     @property
     def num_stages(self) -> int:
-        """Return the total number of stages declared at construction."""
+        """Total number of stages declared at construction."""
         return len(self._stage_fns)
 
     def stage_futures(self) -> List[Future]:

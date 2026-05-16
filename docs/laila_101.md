@@ -20,7 +20,7 @@ c = laila.constant(data={"model": "v1", "accuracy": 0.93})
 print(c.global_id)  # deterministic, unique identifier
 
 v = laila.variable(data=[1, 2, 3])
-v.evolve([1, 2, 3, 4])  # new version, same lineage
+v = v.evolve([1, 2, 3, 4])  # new entry, same uuid, evolution += 1
 ```
 
 Every entry, regardless of what it holds, passes through the same `memorize` / `remember` / `forget` interface.

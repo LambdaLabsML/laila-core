@@ -1,13 +1,29 @@
 """Pydantic-backed proxy for a future that lives on a remote policy.
 
-``RemoteFuture`` is the client-side handle returned whenever an RPC
-call on a peer yields a serialized future payload.  It inherits the
-identity fields (``global_id``, ``policy_id``, ``taskforce_id``, ...)
-from :class:`_LAILA_IDENTIFIABLE_FUTURE` so the guarantee stack,
-``future_bank``, and ``laila.runtime`` helpers can treat it like any
-other Laila future; all concrete state queries (``status``, ``result``,
-``exception``, ``wait``) transparently dispatch over the owning
-:class:`_LAILA_IDENTIFIABLE_COMMUNICATION` channel.
+:class:`RemoteFuture` is the client-side handle returned whenever an
+RPC call on a peer yields a serialized future payload (the peer's
+:class:`Future` ``model_dump`` includes a ``__laila_future__`` marker
+that :meth:`Communication._maybe_wrap_remote_future` rehydrates into
+a :class:`RemoteFuture` on this side).
+
+Why it inherits from :class:`_LAILA_IDENTIFIABLE_FUTURE`
+--------------------------------------------------------
+The identity base class gives a remote future the *same* gid /
+``future_bank`` / guarantee-scope behaviour as a local future, so
+existing helpers (``laila.runtime.wait``, ``with laila.guarantee:``,
+remote-fetch chains) can treat both flavors uniformly. Only the
+status / result / exception / wait accessors override the base to
+forward over the owning :class:`Communication` channel instead of
+reading local state.
+
+Result handling
+---------------
+``RemoteFuture.result`` returns the *global_id* of the result entry
+on the peer rather than the entry itself -- the caller typically
+hands that gid to :func:`laila.remember` to materialize the payload
+through a shared pool. Returning the gid keeps RPC frames small and
+defers the (potentially expensive) payload transfer to the explicit
+remember.
 """
 
 from __future__ import annotations
@@ -55,12 +71,24 @@ class RemoteFuture(_LAILA_IDENTIFIABLE_FUTURE):
         *,
         is_group: bool = False,
     ) -> None:
-        """Attach the communication channel and group flag after construction."""
+        """Attach the communication channel and group-flag after construction.
+
+        Called by :meth:`Communication._maybe_wrap_remote_future` once
+        the proxy has been built. Uses ``object.__setattr__`` to bypass
+        Pydantic's validation (the channel reference is a
+        :class:`PrivateAttr` so this is safe).
+        """
         object.__setattr__(self, "_comm", communication)
         object.__setattr__(self, "_is_group", is_group)
 
     def model_post_init(self, __context: Any) -> None:
-        """Apply staged identity fields and register with the local policy."""
+        """Apply staged identity fields and self-register with the active local policy.
+
+        Mirrors :meth:`Future.model_post_init` so a remote future
+        participates in guarantee scopes and the future bank just like
+        a local one. The communication channel is bound separately via
+        :meth:`bind` after construction completes.
+        """
         super().model_post_init(__context)
         from ....... import _get_active_local_policy
 
@@ -137,7 +165,12 @@ class RemoteFuture(_LAILA_IDENTIFIABLE_FUTURE):
         )
 
     def __await__(self):
-        """Await the remote future without blocking the event loop."""
+        """Await the remote future without blocking the calling event loop.
+
+        The blocking RPC :meth:`wait` is offloaded to a worker thread
+        via :func:`asyncio.to_thread`, so the event loop stays free to
+        service other coroutines while the wait is in flight.
+        """
 
         async def _run():
             return await asyncio.to_thread(self.wait, None)
