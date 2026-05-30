@@ -14,7 +14,10 @@ operate on the same set of objects from different threads.
 """
 
 from contextlib import ExitStack
-from ...atomic.definitions.locally_atomic_identifiable_object import _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
+
+from ...atomic.definitions.locally_atomic_identifiable_object import (
+    _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT,
+)
 
 
 def synchronized(method, *, scope: str = "local"):
@@ -47,6 +50,7 @@ def synchronized(method, *, scope: str = "local"):
     callable
         The wrapped method.
     """
+
     def wrapper(self, *args, **kwargs):
         if scope != "local":
             raise NotImplementedError("Global synchronization is not implemented.")
@@ -62,4 +66,5 @@ def synchronized(method, *, scope: str = "local"):
             for obj in sorted(lock_targets, key=id):
                 stack.enter_context(obj.atomic(scope=scope))
             return method(self, *args, **kwargs)
+
     return wrapper

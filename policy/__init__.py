@@ -18,6 +18,3 @@ any moment (see :func:`laila.activate_policy`). Policies are themselves
 addressable by their ``global_id``, which is what enables peer-to-peer
 RPC: a remote process sees a local policy as a proxy keyed by that gid.
 """
-
-
-

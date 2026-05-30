@@ -31,24 +31,23 @@ attributes set before ``super().__init__`` returns -- the staging
 trick lets the values be picked up safely in
 :meth:`model_post_init`.
 """
+
 from __future__ import annotations
-import string
-import secrets
+
+import json
+import re
 import threading
+import uuid
+from typing import Any
 
 from pydantic import BaseModel, PrivateAttr
-from typing import Optional, Any
 
-import re
-import uuid
-import json
-
-from ...macros.strings import _TOPMOST_SCOPE, _OBJECT_SCOPE, _GLOBAL_ID_SCOPE
+from ...macros.strings import _GLOBAL_ID_SCOPE, _OBJECT_SCOPE, _TOPMOST_SCOPE
 
 GLOBAL_ID_REGEX_PATTERN = re.compile(
-    r'^(?P<scopes>(?:[A-Za-z0-9_]+:)+)'
-    r'(?P<uuid>[0-9a-fA-F-]{36})'
-    r'(?:-(?P<evolution>\d+))?$'
+    r"^(?P<scopes>(?:[A-Za-z0-9_]+:)+)"
+    r"(?P<uuid>[0-9a-fA-F-]{36})"
+    r"(?:-(?P<evolution>\d+))?$"
 )
 
 _INIT_PENDING = threading.local()
@@ -97,7 +96,7 @@ class _LAILA_IDENTIFIABLE_OBJECT(BaseModel):
 
     _uuid: str = PrivateAttr(default_factory=lambda: str(uuid.uuid4()))
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list(["OBJECT"]))
-    _evolution: Optional[int] = PrivateAttr(default=None)
+    _evolution: int | None = PrivateAttr(default=None)
 
     def __init__(self, **data: Any):
         """Stash identity fields in thread-local storage and delegate to Pydantic.
@@ -113,7 +112,9 @@ class _LAILA_IDENTIFIABLE_OBJECT(BaseModel):
         nickname_input = data.pop("nickname", None)
 
         if nickname_input is not None:
-            _INIT_PENDING.uuid = _LAILA_IDENTIFIABLE_OBJECT.generate_uuid_from_nickname(nickname_input)
+            _INIT_PENDING.uuid = _LAILA_IDENTIFIABLE_OBJECT.generate_uuid_from_nickname(
+                nickname_input
+            )
         elif uuid_input is not None:
             _INIT_PENDING.uuid = str(uuid_input)
         else:
@@ -146,7 +147,6 @@ class _LAILA_IDENTIFIABLE_OBJECT(BaseModel):
         if pending_evolution is not None:
             self._evolution = pending_evolution
 
-
     @classmethod
     def from_global_id(cls, global_id: str) -> _LAILA_IDENTIFIABLE_OBJECT:
         """Construct an instance from an encoded global ID string.
@@ -171,13 +171,12 @@ class _LAILA_IDENTIFIABLE_OBJECT(BaseModel):
         identity_data = _LAILA_IDENTIFIABLE_OBJECT.process_global_id(global_id)
         return cls(**identity_data)
 
-
     @staticmethod
     def to_global_id(
-        uuid = None,
-        scopes: Optional[list[str]] = None,
-        evolution = None,
-        nickname: Optional[str] = None
+        uuid=None,
+        scopes: list[str] | None = None,
+        evolution=None,
+        nickname: str | None = None,
     ) -> str:
         """Build a global ID string from its constituent parts.
 
@@ -200,17 +199,16 @@ class _LAILA_IDENTIFIABLE_OBJECT(BaseModel):
         if nickname is not None:
             uuid = _LAILA_IDENTIFIABLE_OBJECT.generate_uuid_from_nickname(nickname)
 
-        if scopes is None or len(scopes)==0:
+        if scopes is None or len(scopes) == 0:
             scopes = [_OBJECT_SCOPE]
 
         scopes = [_TOPMOST_SCOPE, *scopes, _GLOBAL_ID_SCOPE]
-        scopes_str = ":".join(scopes) 
+        scopes_str = ":".join(scopes)
         prefix = f"{scopes_str}:"
         base = f"{prefix}{uuid}"
         if evolution is None:
             return base
         return f"{base}-{evolution}"
-        
 
     @staticmethod
     def is_laila_resource(global_id: str) -> bool:
@@ -233,11 +231,8 @@ class _LAILA_IDENTIFIABLE_OBJECT(BaseModel):
         rebinding, e.g. while restoring from disk).
         """
         return _LAILA_IDENTIFIABLE_OBJECT.to_global_id(
-            uuid=self._uuid, 
-            scopes=self._scopes, 
-            evolution=self._evolution
+            uuid=self._uuid, scopes=self._scopes, evolution=self._evolution
         )
-
 
     @global_id.setter
     def global_id(self, value: str) -> None:
@@ -265,7 +260,7 @@ class _LAILA_IDENTIFIABLE_OBJECT(BaseModel):
         self._scopes = value
 
     @property
-    def evolution(self) -> Optional[int]:
+    def evolution(self) -> int | None:
         """Evolution counter, or ``None`` for constant (unversioned) identities.
 
         See :meth:`Entry.variable` and :meth:`Entry.constant` for the
@@ -274,7 +269,7 @@ class _LAILA_IDENTIFIABLE_OBJECT(BaseModel):
         return self._evolution
 
     @evolution.setter
-    def evolution(self, value: Optional[int]) -> None:
+    def evolution(self, value: int | None) -> None:
         self._evolution = value
 
     @staticmethod
@@ -288,7 +283,7 @@ class _LAILA_IDENTIFIABLE_OBJECT(BaseModel):
         return _LAILA_IDENTIFIABLE_OBJECT.process_global_id(global_id)["uuid"]
 
     @staticmethod
-    def get_evolution_from_global_id(global_id: str) -> Optional[int]:
+    def get_evolution_from_global_id(global_id: str) -> int | None:
         """Extract the evolution counter from a global-id string without instantiating.
 
         Returns ``None`` for global ids without an evolution suffix.
@@ -302,7 +297,7 @@ class _LAILA_IDENTIFIABLE_OBJECT(BaseModel):
         equivalent to "is this a *variable* (versioned) identity?"
         """
         return self._evolution is not None
-    
+
     @staticmethod
     def process_global_id(global_id: str) -> dict[str, Any]:
         """Parse a global ID into its ``uuid``, ``scopes``, and ``evolution`` parts.
@@ -331,7 +326,9 @@ class _LAILA_IDENTIFIABLE_OBJECT(BaseModel):
         return {
             "uuid": match.group("uuid"),
             "scopes": match.group("scopes").split(":")[1:-1],
-            "evolution": int(match.group("evolution")) if match.group("evolution") is not None else None,
+            "evolution": int(match.group("evolution"))
+            if match.group("evolution") is not None
+            else None,
         }
 
     @staticmethod
@@ -401,4 +398,5 @@ class _LAILA_IDENTIFIABLE_OBJECT(BaseModel):
         accidentally clobbering each other's named resources.
         """
         from ... import get_active_namespace
+
         return str(uuid.uuid5(get_active_namespace(), nickname))

@@ -62,7 +62,7 @@ The `<<` operator reads as "is a cache for". After this line:
 laila.alpha_pool << hdf5_pool << s3_pool
 ```
 
-Reads cascade right: alpha → HDF5 → S3. Writes, deletes, and existence checks are **local only** — they never propagate.
+Reads cascade along the chain: alpha ← HDF5 ← S3 (each tier pulls from the one on its right, matching the `<<` operator). Writes, deletes, and existence checks are **local only** — they never propagate.
 
 ## Step 1: Store an entry directly in S3
 

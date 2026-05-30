@@ -1,9 +1,11 @@
 """PyTorch tensor serialisation / deserialisation transformation."""
 
 import io
-import torch
 import textwrap
 from typing import Any
+
+import torch
+
 from ..base import _data_transformation
 
 

@@ -23,15 +23,14 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, ClassVar
 
 from pydantic import ConfigDict, Field, PrivateAttr
 
-from ..basics.definitions.cli_capable import CLIExempt, _LAILA_CLI_CAPABLE_CLASS
+from ..basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS
 from ..basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from ..macros.strings import _LOGGER_SCOPE
 from .record import build_record, normalize_level, numeric_level
-
 
 _LAILA_LOGGER_NAME = "laila"
 
@@ -101,23 +100,23 @@ class Logger(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
         default="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
     display: bool = Field(default=False)
-    pool_nickname: Optional[str] = Field(default=None)
-    pool_id: Optional[str] = Field(default=None)
+    pool_nickname: str | None = Field(default=None)
+    pool_id: str | None = Field(default=None)
     capture_traceback: bool = Field(default=False)
 
     _stdlib_root: Any = PrivateAttr(default=None)
-    _installed_handlers: List[Any] = PrivateAttr(default_factory=list)
+    _installed_handlers: list[Any] = PrivateAttr(default_factory=list)
     _in_sink: Any = PrivateAttr(default_factory=threading.local)
     _initialized: bool = PrivateAttr(default=False)
-    _last_pool_sink_error: Optional[str] = PrivateAttr(default=None)
+    _last_pool_sink_error: str | None = PrivateAttr(default=None)
 
-    _singleton: ClassVar[Optional["Logger"]] = None
+    _singleton: ClassVar[Logger | None] = None
 
     # ------------------------------------------------------------------
     # Singleton enforcement
     # ------------------------------------------------------------------
 
-    def __new__(cls, **data: Any) -> "Logger":
+    def __new__(cls, **data: Any) -> Logger:
         existing = cls.__dict__.get("_singleton")
         if existing is not None:
             return existing
@@ -218,7 +217,7 @@ class Logger(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
     # Emission
     # ------------------------------------------------------------------
 
-    def emit(self, record: Dict[str, Any]) -> None:
+    def emit(self, record: dict[str, Any]) -> None:
         """Send *record* to both sinks, honoring the recursion guard.
 
         Parameters
@@ -257,15 +256,13 @@ class Logger(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
         except Exception as exc:
             self._last_pool_sink_error = repr(exc)
             try:
-                self._stdlib_root.warning(
-                    "laila.logger pool sink failed: %r", exc
-                )
+                self._stdlib_root.warning("laila.logger pool sink failed: %r", exc)
             except Exception:
                 pass
         finally:
             self._in_sink.active = False
 
-    def _memorize_record(self, record: Dict[str, Any]) -> None:
+    def _memorize_record(self, record: dict[str, Any]) -> None:
         """Wrap *record* in an Entry and persist it into the configured pool.
 
         The entry is serialized through the same :class:`Record` /
@@ -297,6 +294,7 @@ class Logger(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
             )
 
         from ..policy.central.memory.record.record import Record
+
         record_wrapper = Record(
             entry=entry,
             recorder=policy.global_id,
@@ -346,16 +344,18 @@ class Logger(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
             entry_nick = getattr(getattr(entry, "_constitution", None), "nickname", None)
             policy_id = getattr(policy, "global_id", None)
             pool_id = getattr(pool, "global_id", None)
-            self.emit(build_record(
-                "memory.memorize",
-                level="INFO",
-                policy_id=policy_id,
-                pool_id=pool_id,
-                pool_nickname=pool_nick,
-                entry_id=entry_id,
-                entry_nickname=entry_nick,
-                message=f"memorize {entry_id} -> {pool_id}",
-            ))
+            self.emit(
+                build_record(
+                    "memory.memorize",
+                    level="INFO",
+                    policy_id=policy_id,
+                    pool_id=pool_id,
+                    pool_nickname=pool_nick,
+                    entry_id=entry_id,
+                    entry_nickname=entry_nick,
+                    message=f"memorize {entry_id} -> {pool_id}",
+                )
+            )
 
     def record_remember(self, *, entry_ids: Any, pool: Any, policy: Any) -> None:
         """Emit one record per entry id being remembered."""
@@ -368,15 +368,17 @@ class Logger(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
         pool_id = getattr(pool, "global_id", None)
         for entry_id in entry_ids:
             eid = entry_id.global_id if hasattr(entry_id, "global_id") else entry_id
-            self.emit(build_record(
-                "memory.remember",
-                level="INFO",
-                policy_id=policy_id,
-                pool_id=pool_id,
-                pool_nickname=pool_nick,
-                entry_id=eid,
-                message=f"remember {eid} <- {pool_id}",
-            ))
+            self.emit(
+                build_record(
+                    "memory.remember",
+                    level="INFO",
+                    policy_id=policy_id,
+                    pool_id=pool_id,
+                    pool_nickname=pool_nick,
+                    entry_id=eid,
+                    message=f"remember {eid} <- {pool_id}",
+                )
+            )
 
     def record_forget(self, *, entry_ids: Any, pool: Any, policy: Any) -> None:
         """Emit one record per entry id being forgotten."""
@@ -389,32 +391,36 @@ class Logger(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
         pool_id = getattr(pool, "global_id", None)
         for entry_id in entry_ids:
             eid = entry_id.global_id if hasattr(entry_id, "global_id") else entry_id
-            self.emit(build_record(
-                "memory.forget",
-                level="INFO",
-                policy_id=policy_id,
-                pool_id=pool_id,
-                pool_nickname=pool_nick,
-                entry_id=eid,
-                message=f"forget {eid} -- {pool_id}",
-            ))
+            self.emit(
+                build_record(
+                    "memory.forget",
+                    level="INFO",
+                    policy_id=policy_id,
+                    pool_id=pool_id,
+                    pool_nickname=pool_nick,
+                    entry_id=eid,
+                    message=f"forget {eid} -- {pool_id}",
+                )
+            )
 
     def record_future_created(self, future: Any) -> None:
         """Emit one ``future.created`` record on future construction."""
         if not self.enabled:
             return
-        self.emit(build_record(
-            "future.created",
-            level="INFO",
-            future_id=getattr(future, "global_id", None),
-            policy_id=getattr(future, "policy_id", None),
-            taskforce_id=getattr(future, "taskforce_id", None),
-            future_group_id=getattr(future, "future_group_id", None),
-            precedence=getattr(future, "precedence", None),
-            purpose=getattr(future, "purpose", None),
-            status=str(getattr(future, "status", "not_started")),
-            message=f"future created (purpose={getattr(future, 'purpose', None)})",
-        ))
+        self.emit(
+            build_record(
+                "future.created",
+                level="INFO",
+                future_id=getattr(future, "global_id", None),
+                policy_id=getattr(future, "policy_id", None),
+                taskforce_id=getattr(future, "taskforce_id", None),
+                future_group_id=getattr(future, "future_group_id", None),
+                precedence=getattr(future, "precedence", None),
+                purpose=getattr(future, "purpose", None),
+                status=str(getattr(future, "status", "not_started")),
+                message=f"future created (purpose={getattr(future, 'purpose', None)})",
+            )
+        )
 
     def record_future_transition(
         self,
@@ -427,61 +433,64 @@ class Logger(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
             return
         new_value = getattr(new_status, "value", str(new_status))
         prev_value = (
-            getattr(prev_status, "value", str(prev_status))
-            if prev_status is not None
-            else None
+            getattr(prev_status, "value", str(prev_status)) if prev_status is not None else None
         )
         level = "ERROR" if new_value in ("error", "cancelled") else "INFO"
 
-        extra: Dict[str, Any] = {}
+        extra: dict[str, Any] = {}
         exc = getattr(future, "_exception", None)
         if exc is not None:
             extra["exc_type"] = type(exc).__name__
             extra["exc_repr"] = repr(exc)
             if self.capture_traceback:
                 import traceback
+
                 extra["traceback"] = "".join(
                     traceback.format_exception(type(exc), exc, exc.__traceback__)
                 )
 
         result_id = getattr(future, "_result_global_id", None)
 
-        self.emit(build_record(
-            "future.status",
-            level=level,
-            future_id=getattr(future, "global_id", None),
-            policy_id=getattr(future, "policy_id", None),
-            taskforce_id=getattr(future, "taskforce_id", None),
-            future_group_id=getattr(future, "future_group_id", None),
-            precedence=getattr(future, "precedence", None),
-            purpose=getattr(future, "purpose", None),
-            status=new_value,
-            prev_status=prev_value,
-            result_id=result_id,
-            message=f"future {getattr(future, 'global_id', None)} -> {new_value}",
-            extra=extra,
-        ))
+        self.emit(
+            build_record(
+                "future.status",
+                level=level,
+                future_id=getattr(future, "global_id", None),
+                policy_id=getattr(future, "policy_id", None),
+                taskforce_id=getattr(future, "taskforce_id", None),
+                future_group_id=getattr(future, "future_group_id", None),
+                precedence=getattr(future, "precedence", None),
+                purpose=getattr(future, "purpose", None),
+                status=new_value,
+                prev_status=prev_value,
+                result_id=result_id,
+                message=f"future {getattr(future, 'global_id', None)} -> {new_value}",
+                extra=extra,
+            )
+        )
 
     def record_group_future_created(self, group: Any) -> None:
         """Emit one ``future.group_created`` record."""
         if not self.enabled:
             return
         children = list(getattr(group, "future_ids", []) or [])
-        self.emit(build_record(
-            "future.group_created",
-            level="INFO",
-            future_id=getattr(group, "global_id", None),
-            policy_id=getattr(group, "policy_id", None),
-            taskforce_id=getattr(group, "taskforce_id", None),
-            child_future_ids=children,
-            message=f"group future created with {len(children)} children",
-        ))
+        self.emit(
+            build_record(
+                "future.group_created",
+                level="INFO",
+                future_id=getattr(group, "global_id", None),
+                policy_id=getattr(group, "policy_id", None),
+                taskforce_id=getattr(group, "taskforce_id", None),
+                child_future_ids=children,
+                message=f"group future created with {len(children)} children",
+            )
+        )
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
-    def _pool_nickname_of(self, pool: Any, policy: Any) -> Optional[str]:
+    def _pool_nickname_of(self, pool: Any, policy: Any) -> str | None:
         """Reverse-lookup the nickname registered for *pool* under *policy*."""
         if pool is None or policy is None:
             return None

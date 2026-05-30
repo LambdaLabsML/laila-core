@@ -23,6 +23,7 @@ class EntryState(Enum):
         meaningless (e.g. ``Manifest``). Only ``Entry`` may hold non-``NA``
         states.
     """
+
     READY = auto()
     POOLED = auto()
     POOLING = auto()

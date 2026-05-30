@@ -40,7 +40,7 @@ hook in :class:`_LAILA_CLI_CAPABLE_CLASS`).
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Optional, Set
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -79,15 +79,15 @@ def _is_cli_exempt(field_info: Any) -> bool:
 
 
 _SCOPE_TO_ARGS_PATH: dict[str, str] = {
-    "POLICY":                "policy",
-    "CENTRAL_COMMAND":       "policy.central.command",
-    "CENTRAL_MEMORY":        "policy.central.memory",
+    "POLICY": "policy",
+    "CENTRAL_COMMAND": "policy.central.command",
+    "CENTRAL_MEMORY": "policy.central.memory",
     "CENTRAL_COMMUNICATION": "policy.central.communication",
-    "POOL":                  "policy.central.memory.pools.{global_id}",
-    "POOL_ROUTER":           "policy.central.memory.pool_router",
-    "TASK_FORCE":            "policy.central.command.taskforces.{global_id}",
-    "COMM_PROTOCOL":         "policy.central.communication.connections.{global_id}",
-    "LOGGER":                "logger",
+    "POOL": "policy.central.memory.pools.{global_id}",
+    "POOL_ROUTER": "policy.central.memory.pool_router",
+    "TASK_FORCE": "policy.central.command.taskforces.{global_id}",
+    "COMM_PROTOCOL": "policy.central.communication.connections.{global_id}",
+    "LOGGER": "logger",
 }
 
 
@@ -95,6 +95,7 @@ def _get_args_subtree(path: str) -> Any:
     """Traverse ``laila.args`` using ``.get()`` to avoid DotMap auto-creation."""
     try:
         import laila
+
         subtree: Any = laila.args
         for part in path.split("."):
             if subtree is None:
@@ -107,7 +108,7 @@ def _get_args_subtree(path: str) -> Any:
         return None
 
 
-def _resolve_global_id_for_path(cls: type, data: dict) -> Optional[str]:
+def _resolve_global_id_for_path(cls: type, data: dict) -> str | None:
     """Compute a global_id from constructor data for ``{global_id}`` path templates.
 
     Checks explicit ``data`` first, then falls back to the thread-local
@@ -121,6 +122,7 @@ def _resolve_global_id_for_path(cls: type, data: dict) -> Optional[str]:
     if uuid_val is None:
         try:
             from .identifiable_object import _INIT_PENDING
+
             uuid_val = getattr(_INIT_PENDING, "uuid", None)
         except ImportError:
             pass
@@ -133,10 +135,11 @@ def _resolve_global_id_for_path(cls: type, data: dict) -> Optional[str]:
     scopes = scopes_attr.default_factory() if scopes_attr.default_factory else ["OBJECT"]
 
     from .identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+
     return _LAILA_IDENTIFIABLE_OBJECT.to_global_id(uuid=uuid_val, scopes=scopes)
 
 
-def _scope_for_class(cls: type) -> Optional[str]:
+def _scope_for_class(cls: type) -> str | None:
     """Read the first scope from a class's ``_scopes`` PrivateAttr default."""
     scopes_attr = cls.__private_attributes__.get("_scopes")
     if scopes_attr is None:
@@ -147,7 +150,7 @@ def _scope_for_class(cls: type) -> Optional[str]:
     return None
 
 
-def _resolve_path_for_class(cls: type, data: dict) -> Optional[str]:
+def _resolve_path_for_class(cls: type, data: dict) -> str | None:
     """Determine the ``laila.args`` path for a CLI-capable class instance."""
     scope = _scope_for_class(cls)
     if scope is None:
@@ -210,10 +213,7 @@ def _resolve_class(token: str, root: type) -> type:
     classes = _all_subclasses(root)
     if token not in classes:
         known = ", ".join(sorted(classes))
-        raise ValueError(
-            f"unknown {root.__name__} subclass token: {token!r} "
-            f"(known: {known})"
-        )
+        raise ValueError(f"unknown {root.__name__} subclass token: {token!r} (known: {known})")
     return classes[token]
 
 
@@ -224,6 +224,7 @@ def build_environment(policy: Any) -> dict:
     non-exempt, non-private).  This is the same structure ``laila.args``
     accepts.
     """
+
     def _dump_obj(obj: Any) -> dict:
         result: dict[str, Any] = {}
         cls = type(obj)
@@ -373,7 +374,7 @@ class _LAILA_CLI_CAPABLE_CLASS(BaseModel):
         ``None`` default through to runtime.
     """
 
-    _cli_required_fields: ClassVar[Set[str]] = set()
+    _cli_required_fields: ClassVar[set[str]] = set()
 
     @model_validator(mode="before")
     @classmethod
@@ -406,6 +407,7 @@ class _LAILA_CLI_CAPABLE_CLASS(BaseModel):
             val = subtree.get(field_name) if hasattr(subtree, "get") else None
             if val is not None:
                 from dotmap import DotMap
+
                 if isinstance(val, DotMap) and len(val) == 0:
                     continue
                 data[field_name] = val
@@ -439,6 +441,7 @@ class _LAILA_CLI_CAPABLE_CLASS(BaseModel):
                 val = subtree.get(prop_name) if hasattr(subtree, "get") else None
                 if val is not None:
                     from dotmap import DotMap
+
                     if isinstance(val, DotMap) and len(val) == 0:
                         continue
                     try:
@@ -478,6 +481,7 @@ def _find_owning_policy(instance: Any) -> Any:
     """
     try:
         import laila
+
         from ..definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
     except Exception:
         return None
@@ -556,6 +560,7 @@ def _load_environment(env: Any) -> None:
     callers must call ``protocol.start()`` themselves.
     """
     import laila
+
     from .identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 
     env = _coerce_to_plain_dict(env)
@@ -567,20 +572,17 @@ def _load_environment(env: Any) -> None:
 
     policies_dump = env.get("policies") or {}
     if not isinstance(policies_dump, dict):
-        raise ValueError(
-            f"environment.policies must be a dict, got {type(policies_dump).__name__}"
-        )
+        raise ValueError(f"environment.policies must be a dict, got {type(policies_dump).__name__}")
 
     active_gid = env.get("active_gid")
     if active_gid is not None and len(policies_dump) == 0:
-        raise ValueError(
-            "active_gid is set but environment.policies is empty"
-        )
+        raise ValueError("active_gid is set but environment.policies is empty")
 
     laila.terminate(wait=True, cancel_pending=False)
 
     if len(policies_dump) == 0:
         from ...macros.defaults import DefaultPolicy
+
         new_policy = DefaultPolicy()
         laila.activate_policy(new_policy)
         return
@@ -601,15 +603,11 @@ def _load_environment(env: Any) -> None:
             try:
                 ident = _LAILA_IDENTIFIABLE_OBJECT.process_global_id(policy_gid)
             except ValueError as e:
-                raise ValueError(
-                    f"invalid policy gid {policy_gid!r}: {e}"
-                ) from e
+                raise ValueError(f"invalid policy gid {policy_gid!r}: {e}") from e
 
             policy_uuid = ident["uuid"]
             if policy_uuid in seen_uuids:
-                raise ValueError(
-                    f"duplicate policy uuid {policy_uuid!r} in environment.policies"
-                )
+                raise ValueError(f"duplicate policy uuid {policy_uuid!r} in environment.policies")
             seen_uuids.add(policy_uuid)
 
             policy = _build_policy_from_dump(
@@ -639,16 +637,12 @@ def _load_environment(env: Any) -> None:
     if active_gid is not None:
         active_gid = str(active_gid)
         if active_gid not in policies_dump:
-            raise ValueError(
-                f"active_gid {active_gid!r} not present in environment.policies"
-            )
+            raise ValueError(f"active_gid {active_gid!r} not present in environment.policies")
         chosen = laila._local_policies[active_gid]
     elif len(built_policies) == 1:
         chosen = built_policies[0]
     else:
-        raise ValueError(
-            "active_gid required when env contains multiple policies"
-        )
+        raise ValueError("active_gid required when env contains multiple policies")
 
     laila.activate_policy(chosen)
 
@@ -706,12 +700,12 @@ def _build_policy_from_dump(
     registered without calling ``start()``.
     """
     from ...macros.defaults import DefaultPolicy
-    from ..definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
-    from ...pool.schema.base import _LAILA_IDENTIFIABLE_POOL
     from ...policy.central.command.taskforce.base import _LAILA_IDENTIFIABLE_TASK_FORCE
     from ...policy.central.communication.protocols.base import (
         _LAILA_IDENTIFIABLE_COMM_PROTOCOL,
     )
+    from ...pool.schema.base import _LAILA_IDENTIFIABLE_POOL
+    from ..definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 
     policy = DefaultPolicy()
     if policy_uuid != policy.uuid:
@@ -765,14 +759,10 @@ def _build_policy_from_dump(
         for tf_gid, tf_data in tf_dump.items():
             tf_data_plain = _coerce_to_plain_dict(tf_data)
             if not isinstance(tf_data_plain, dict):
-                raise ValueError(
-                    f"taskforce entry {tf_gid!r} must be a dict"
-                )
+                raise ValueError(f"taskforce entry {tf_gid!r} must be a dict")
             token = tf_data_plain.get("class_token")
             if token is None:
-                raise ValueError(
-                    f"taskforce entry {tf_gid!r} is missing 'class_token'"
-                )
+                raise ValueError(f"taskforce entry {tf_gid!r} is missing 'class_token'")
             cls = _resolve_class(token, _LAILA_IDENTIFIABLE_TASK_FORCE)
             tf_kwargs = _strip_class_token(tf_data_plain)
             tf_kwargs.pop("status", None)
@@ -792,9 +782,7 @@ def _build_policy_from_dump(
         if alpha_tf is not None and str(alpha_tf) in policy.central.command.taskforces:
             policy.central.command.alpha_taskforce = str(alpha_tf)
         else:
-            policy.central.command.alpha_taskforce = next(
-                iter(policy.central.command.taskforces)
-            )
+            policy.central.command.alpha_taskforce = next(iter(policy.central.command.taskforces))
 
     mem_data = central_data.get("memory") or {}
     if hasattr(mem_data, "toDict"):
@@ -825,6 +813,7 @@ def _build_policy_from_dump(
         policy.central.memory.pool_router.pools.clear()
         try:
             from queue import PriorityQueue
+
             policy.central.memory.pool_router.pools_pq = PriorityQueue()
         except Exception:
             pass
@@ -832,21 +821,17 @@ def _build_policy_from_dump(
         if hasattr(nicks_in, "toDict"):
             nicks_in = nicks_in.toDict()
         nicks_in = nicks_in if isinstance(nicks_in, dict) else {}
-        gid_to_nick: dict[str, str] = {
-            str(gid): nick for nick, gid in nicks_in.items()
-        }
+        gid_to_nick: dict[str, str] = {str(gid): nick for nick, gid in nicks_in.items()}
         policy.central.memory.pool_router.pools_nicknames.clear()
 
-        first_pool_gid: Optional[str] = None
+        first_pool_gid: str | None = None
         for pool_gid, pool_data in pool_dump.items():
             pool_data_plain = _coerce_to_plain_dict(pool_data)
             if not isinstance(pool_data_plain, dict):
                 raise ValueError(f"pool entry {pool_gid!r} must be a dict")
             token = pool_data_plain.get("class_token")
             if token is None:
-                raise ValueError(
-                    f"pool entry {pool_gid!r} is missing 'class_token'"
-                )
+                raise ValueError(f"pool entry {pool_gid!r} is missing 'class_token'")
             cls = _resolve_class(token, _LAILA_IDENTIFIABLE_POOL)
             pool_kwargs = _strip_class_token(pool_data_plain)
             pool_kwargs.pop("pool_id", None)
@@ -859,9 +844,7 @@ def _build_policy_from_dump(
             if pool.uuid != pool_uuid:
                 pool._uuid = pool_uuid
             nickname = gid_to_nick.get(str(pool.global_id))
-            policy.central.memory.pool_router.extend(
-                pool, affinity=None, pool_nickname=nickname
-            )
+            policy.central.memory.pool_router.extend(pool, affinity=None, pool_nickname=nickname)
             if first_pool_gid is None:
                 first_pool_gid = str(pool.global_id)
 
@@ -884,31 +867,23 @@ def _build_policy_from_dump(
         for proto_gid, proto_data in conn_dump.items():
             proto_data_plain = _coerce_to_plain_dict(proto_data)
             if not isinstance(proto_data_plain, dict):
-                raise ValueError(
-                    f"protocol entry {proto_gid!r} must be a dict"
-                )
+                raise ValueError(f"protocol entry {proto_gid!r} must be a dict")
             token = proto_data_plain.get("class_token")
             if token is None:
-                raise ValueError(
-                    f"protocol entry {proto_gid!r} is missing 'class_token'"
-                )
+                raise ValueError(f"protocol entry {proto_gid!r} is missing 'class_token'")
             cls = _resolve_class(token, _LAILA_IDENTIFIABLE_COMM_PROTOCOL)
             proto_kwargs = _strip_class_token(proto_data_plain)
             try:
                 proto_uuid = _LAILA_IDENTIFIABLE_OBJECT.process_global_id(proto_gid)["uuid"]
             except ValueError as e:
-                raise ValueError(
-                    f"invalid protocol gid {proto_gid!r}: {e}"
-                ) from e
+                raise ValueError(f"invalid protocol gid {proto_gid!r}: {e}") from e
             proto_kwargs["uuid"] = proto_uuid
             proto = cls(**proto_kwargs)
             if proto.uuid != proto_uuid:
                 proto._uuid = proto_uuid
             full_gid = str(proto.global_id)
             if full_gid in seen_proto_gids:
-                raise ValueError(
-                    f"duplicate protocol gid {full_gid!r} across policies"
-                )
+                raise ValueError(f"duplicate protocol gid {full_gid!r} across policies")
             seen_proto_gids.add(full_gid)
             proto._communication = policy.central.communication
             policy.central.communication.connections[full_gid] = proto
@@ -924,8 +899,9 @@ def _refresh_args_environment(instance: Any) -> None:
     has no owning policy, the dump is written under
     ``laila.args.environment.logger`` instead.
     """
-    import laila
     from dotmap import DotMap
+
+    import laila
 
     if _scope_for_class(type(instance)) == "LOGGER":
         args = laila.args

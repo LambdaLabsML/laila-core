@@ -11,13 +11,14 @@ returns a nested dict of ``Entry`` objects mirroring the blueprint.
 from __future__ import annotations
 
 import copy
-from typing import Any, Iterator, Optional
+from collections.abc import Iterator
+from typing import Any
 
 from pydantic import PrivateAttr
 
 from .....entry import Entry
-from .....entry.entry_state import EntryState
 from .....entry.compdata import ComputationalData
+from .....entry.entry_state import EntryState
 from .....macros.strings import _MANIFEST_SCOPE
 
 
@@ -53,13 +54,13 @@ class Manifest(Entry):
     """
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: [_MANIFEST_SCOPE])
-    _pending_entries: Optional[list] = PrivateAttr(default=None)
+    _pending_entries: list | None = PrivateAttr(default=None)
 
     def __init__(self, **data: Any):
         raw_data = data.pop("data", None)
         blueprint_kwarg = data.pop("blueprint", None)
 
-        blueprint: Optional[dict] = None
+        blueprint: dict | None = None
         pending = None
 
         source = raw_data if raw_data is not None else blueprint_kwarg
@@ -94,7 +95,7 @@ class Manifest(Entry):
     # ------------------------------------------------------------------
 
     @property
-    def blueprint(self) -> Optional[dict]:
+    def blueprint(self) -> dict | None:
         """The nested dict with ``global_id`` strings as leaf values.
 
         Equivalent to ``manifest.data``.
@@ -134,9 +135,7 @@ class Manifest(Entry):
             results = [results]
 
         if len(results) != len(all_gids) or any(r is None for r in results):
-            raise KeyError(
-                "Manifest.realized: one or more referenced entries failed to resolve."
-            )
+            raise KeyError("Manifest.realized: one or more referenced entries failed to resolve.")
 
         resolved_map = dict(zip(all_gids, results))
         return Manifest._rebuild_with_entries(bp, resolved_map)
@@ -157,6 +156,7 @@ class Manifest(Entry):
         KeyError
             If any referenced entry is missing from the routed pool.
         """
+
         async def _resolve():
             import laila
 
@@ -191,8 +191,8 @@ class Manifest(Entry):
     def memorize(
         self,
         *,
-        pool_nickname: Optional[str] = None,
-        pool_id: Optional[str] = None,
+        pool_nickname: str | None = None,
+        pool_id: str | None = None,
         batch_size: int = 128,
     ):
         """Upload all referenced entries and store the manifest itself.
@@ -202,6 +202,7 @@ class Manifest(Entry):
         payload is the blueprint dict).
         """
         import laila
+
         from ...command.schema.future.future.group_future import GroupFuture
 
         if self.data is None:
@@ -230,12 +231,13 @@ class Manifest(Entry):
     def remember(
         self,
         *,
-        pool_nickname: Optional[str] = None,
-        pool_id: Optional[str] = None,
+        pool_nickname: str | None = None,
+        pool_id: str | None = None,
         batch_size: int = 128,
     ):
         """Recall all referenced entries from the pool."""
         import laila
+
         from ...command.schema.future.future.group_future import GroupFuture
 
         if self.data is None:
@@ -260,12 +262,13 @@ class Manifest(Entry):
     def forget(
         self,
         *,
-        pool_nickname: Optional[str] = None,
-        pool_id: Optional[str] = None,
+        pool_nickname: str | None = None,
+        pool_id: str | None = None,
         batch_size: int = 128,
     ):
         """Delete all referenced entries and the manifest itself from the pool."""
         import laila
+
         from ...command.schema.future.future.group_future import GroupFuture
 
         if self.data is None:
@@ -315,7 +318,7 @@ class Manifest(Entry):
             return {}.items()
         return bp.items()
 
-    def sub_manifest(self, keys: list[str]) -> "Manifest":
+    def sub_manifest(self, keys: list[str]) -> Manifest:
         """Return a new ``Manifest`` containing only the specified top-level keys."""
         bp = self.data
         if bp is None:
@@ -326,12 +329,10 @@ class Manifest(Entry):
         subset = {k: copy.deepcopy(bp[k]) for k in keys}
         return Manifest(blueprint=subset)
 
-    def extend(self, other: "Manifest", *, overwrite: bool = False) -> None:
+    def extend(self, other: Manifest, *, overwrite: bool = False) -> None:
         """Merge another manifest's blueprint into this one in-place."""
         if not isinstance(other, Manifest):
-            raise TypeError(
-                f"extend() requires a Manifest, got {type(other).__name__}"
-            )
+            raise TypeError(f"extend() requires a Manifest, got {type(other).__name__}")
         other_bp = other.data
         if other_bp is None:
             return
@@ -343,9 +344,7 @@ class Manifest(Entry):
             if not overwrite:
                 overlap = set(bp) & set(other_bp)
                 if overlap:
-                    raise KeyError(
-                        f"Duplicate top-level keys: {sorted(overlap)}"
-                    )
+                    raise KeyError(f"Duplicate top-level keys: {sorted(overlap)}")
             new_bp = dict(bp)
             new_bp.update(copy.deepcopy(other_bp))
 
@@ -357,14 +356,14 @@ class Manifest(Entry):
             else:
                 self._pending_entries.extend(other._pending_entries)
 
-    def __iadd__(self, other: Any) -> "Manifest":
+    def __iadd__(self, other: Any) -> Manifest:
         """``manifest += other`` — merge *other* in-place and return self."""
         if not isinstance(other, Manifest):
             return NotImplemented
         self.extend(other)
         return self
 
-    def __add__(self, other: Any) -> "Manifest":
+    def __add__(self, other: Any) -> Manifest:
         """``manifest + other`` — return a new manifest with merged blueprints."""
         if not isinstance(other, Manifest):
             return NotImplemented
@@ -374,9 +373,7 @@ class Manifest(Entry):
         if bp is not None and other_bp is not None:
             overlap = set(bp) & set(other_bp)
             if overlap:
-                raise KeyError(
-                    f"Duplicate top-level keys: {sorted(overlap)}"
-                )
+                raise KeyError(f"Duplicate top-level keys: {sorted(overlap)}")
 
         merged: dict = {}
         if bp is not None:
@@ -459,8 +456,8 @@ class Manifest(Entry):
 
     @staticmethod
     def _build_pool_kwargs(
-        pool_nickname: Optional[str] = None,
-        pool_id: Optional[str] = None,
+        pool_nickname: str | None = None,
+        pool_id: str | None = None,
     ) -> dict[str, str]:
         """Build keyword arguments for pool routing."""
         kwargs: dict[str, str] = {}
@@ -546,10 +543,7 @@ class Manifest(Entry):
             elif isinstance(val, str):
                 result[key] = val
             elif isinstance(val, list):
-                result[key] = [
-                    item.global_id if isinstance(item, _Entry) else item
-                    for item in val
-                ]
+                result[key] = [item.global_id if isinstance(item, _Entry) else item for item in val]
             elif isinstance(val, dict):
                 result[key] = Manifest._extract_blueprint(val)
             else:
@@ -585,6 +579,7 @@ class Manifest(Entry):
 
 
 from .....entry.constitution.build_maps import register_builder
+
 register_builder(
     _MANIFEST_SCOPE,
     Manifest._build_from_dict_sync,

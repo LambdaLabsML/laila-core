@@ -17,11 +17,13 @@ serialized :class:`Record`. On read, :meth:`Record._build_async` /
 inner entry via the registered scope-specific builder.
 """
 
-from typing import Any, Optional, Mapping
-from datetime import datetime
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 import json
-from .....entry import Entry
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
 from .....entry.compdata.transformation import TransformationSequence
 
 
@@ -37,9 +39,11 @@ class Record(BaseModel):
     """
 
     entry: Any
-    recorder: Optional[str] = None
-    borrower: Optional[str] = None
-    record_timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat(timespec='milliseconds'))
+    recorder: str | None = None
+    borrower: str | None = None
+    record_timestamp: str = Field(
+        default_factory=lambda: datetime.now(UTC).isoformat(timespec="milliseconds")
+    )
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -53,13 +57,9 @@ class Record(BaseModel):
 
         if self.recorder is None:
             self.recorder = active_policy.global_id
-            self.borrower = None #for now, we don't want to record the borrower
+            self.borrower = None  # for now, we don't want to record the borrower
 
-
-    def serialize(
-        self,
-        transformations: TransformationSequence
-    ) -> str:
+    def serialize(self, transformations: TransformationSequence) -> str:
         """Serialize the record into a pool-storable dict.
 
         The wrapped entry is run through :meth:`Entry.serialize` with
@@ -80,11 +80,10 @@ class Record(BaseModel):
             serialized form.
         """
         record_as_dict = self.as_dict
-        record_as_dict["entry"] = self.entry.serialize(transformations = transformations)
+        record_as_dict["entry"] = self.entry.serialize(transformations=transformations)
 
         return record_as_dict
 
-    
     @property
     def entry_id(self) -> str:
         """Return the global ID of the wrapped entry."""
@@ -95,23 +94,20 @@ class Record(BaseModel):
             return self.entry["_global_id"]
 
         raise
-        
+
     @property
     def as_dict(
         self,
     ) -> dict:
         """Return a plain dict representation, preserving the raw entry object."""
         data = self.model_dump()
-        
-        #Since it model_dumps entry in a weird way
+
+        # Since it model_dumps entry in a weird way
         data["entry"] = self.entry
         return data
 
     @classmethod
-    def from_dict(
-        cls,
-        in_dict: dict
-    ):
+    def from_dict(cls, in_dict: dict):
         """Construct a Record from a dict (not yet implemented)."""
         raise
 
@@ -134,6 +130,7 @@ class Record(BaseModel):
             record = json.loads(record)
 
         from .....entry.constitution.build_maps import build_by_scope
+
         record["entry"] = build_by_scope(record["entry"], asynchronous=False)
         return record
 
@@ -149,6 +146,7 @@ class Record(BaseModel):
             record = json.loads(record)
 
         from .....entry.constitution.build_maps import build_by_scope
+
         record["entry"] = await build_by_scope(record["entry"], asynchronous=True)
         return record
 

@@ -18,13 +18,19 @@ Use it where multiple threads need to share a mutable list (job
 queues, deferred-callback registries, observer lists) without
 playing whack-a-mole with manual locking.
 """
+
 from __future__ import annotations
+
+from collections.abc import Iterable, Iterator
 from threading import RLock
-from typing import TypeVar, Generic, Iterable, Iterator, overload, Any, Optional
-from pydantic import BaseModel, Field, PrivateAttr, ConfigDict
+from typing import Generic, TypeVar, overload
+
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+
 from ..definitions.locally_atomic_object import _LAILA_LOCALLY_ATOMIC_OBJECT
 
 T = TypeVar("T")
+
 
 class AtomicList(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, Generic[T]):
     """
@@ -33,6 +39,7 @@ class AtomicList(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, Generic[T]):
     - Reads that return iterators/slices produce *snapshots* to avoid surprises.
     - Use `with lst.atomic():` to batch multiple mutations under one lock.
     """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     value: list[T] = Field(default_factory=list)
@@ -61,7 +68,7 @@ class AtomicList(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, Generic[T]):
         """Return the element at *idx*, or a snapshot slice."""
         with self._lock:
             if isinstance(idx, slice):
-                return self.value[idx.start:idx.stop:idx.step]  # snapshot slice
+                return self.value[idx.start : idx.stop : idx.step]  # snapshot slice
             return self.value[idx]
 
     @overload
@@ -117,7 +124,7 @@ class AtomicList(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, Generic[T]):
         with self._lock:
             return self.value.count(item)
 
-    def index(self, item: T, start: int = 0, stop: Optional[int] = None) -> int:
+    def index(self, item: T, start: int = 0, stop: int | None = None) -> int:
         """Return the index of the first occurrence of *item*."""
         with self._lock:
             if stop is None:
@@ -139,12 +146,12 @@ class AtomicList(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, Generic[T]):
         with self._lock:
             return self.value[index]
 
-    def slice(self, start: Optional[int], stop: Optional[int], step: Optional[int] = None) -> list[T]:
+    def slice(self, start: int | None, stop: int | None, step: int | None = None) -> list[T]:
         """Snapshot slice, equivalent to self.value[start:stop:step]."""
         with self._lock:
             return self.value[slice(start, stop, step)]
 
-    def trim(self, start: Optional[int], stop: Optional[int]) -> None:
+    def trim(self, start: int | None, stop: int | None) -> None:
         """
         In-place: keep only items in [start:stop], like list slicing, shrink the list.
         Supports negative indices.
@@ -163,9 +170,10 @@ class AtomicList(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, Generic[T]):
     class _Atomic:
         """Context manager that exposes the underlying list while the lock is held."""
 
-        def __init__(self, parent: "AtomicList[T]"):
+        def __init__(self, parent: AtomicList[T]):
             """Initialize with the parent list."""
             self._p = parent
+
         def __enter__(self) -> list[T]:
             """Acquire the lock and return the raw list."""
             self._p._lock.acquire()
@@ -175,7 +183,7 @@ class AtomicList(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, Generic[T]):
             """Release the lock."""
             self._p._lock.release()
 
-    def atomic(self) -> "_Atomic":
+    def atomic(self) -> _Atomic:
         """
         Use:
             with lst.atomic() as L:

@@ -27,20 +27,24 @@ Lifecycle invariants
 """
 
 from __future__ import annotations
+
 import threading
-from typing import Callable, Any, Iterable, List, Union, Tuple, Optional
-from pydantic import Field, PrivateAttr, ConfigDict
-from .....basics.definitions.cli_capable import CLIExempt, _LAILA_CLI_CAPABLE_CLASS
+from collections.abc import Callable, Iterable
+from typing import Any
+
+from pydantic import ConfigDict, PrivateAttr
 
 from .....atomic import AtomicDict
+from .....atomic.definitions.locally_atomic_identifiable_object import (
+    _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT,
+)
+from .....basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS, CLIExempt
+from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+from .....macros.strings import _TASK_FORCE_SCOPE
 from ..schema.future.future import Future
 from .status import TaskForceStatus
-from .....macros.strings import _TASK_FORCE_SCOPE
-from .....atomic.definitions.locally_atomic_identifiable_object import _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
-from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 
-
-_LIVE_TASKFORCES: "set[Any]" = set()
+_LIVE_TASKFORCES: set[Any] = set()
 _LIVE_TASKFORCES_LOCK = threading.Lock()
 
 
@@ -68,7 +72,7 @@ def _unregister_live_taskforce(tf: Any) -> None:
         _LIVE_TASKFORCES.discard(tf)
 
 
-def _live_taskforces_snapshot() -> List[Any]:
+def _live_taskforces_snapshot() -> list[Any]:
     """Return a snapshot list of currently-registered live task-forces.
 
     The snapshot is detached from the live set, so callers can iterate
@@ -79,7 +83,9 @@ def _live_taskforces_snapshot() -> List[Any]:
         return list(_LIVE_TASKFORCES)
 
 
-class _LAILA_IDENTIFIABLE_TASK_FORCE(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
+class _LAILA_IDENTIFIABLE_TASK_FORCE(
+    _LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
+):
     """Abstract base for task-forces -- worker-pool registries with a uniform
     submit / shutdown contract.
 
@@ -94,7 +100,7 @@ class _LAILA_IDENTIFIABLE_TASK_FORCE(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_AT
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    policy_id: Optional[_LAILA_IDENTIFIABLE_OBJECT | str] = CLIExempt(default=None)
+    policy_id: _LAILA_IDENTIFIABLE_OBJECT | str | None = CLIExempt(default=None)
 
     status: TaskForceStatus = CLIExempt(
         default=TaskForceStatus.NOT_STARTED,
@@ -102,10 +108,9 @@ class _LAILA_IDENTIFIABLE_TASK_FORCE(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_AT
     )
 
     # ---- Shared runtime state (available to subclasses) ----
-    _q: AtomicDict[str, Tuple[Callable[..., Any], tuple, dict]] = PrivateAttr(
+    _q: AtomicDict[str, tuple[Callable[..., Any], tuple, dict]] = PrivateAttr(
         default_factory=AtomicDict
     )
-
 
     def model_post_init(self, __context: Any) -> None:
         """Auto-start the task-force when constructed in ``NOT_STARTED``.
@@ -239,7 +244,7 @@ class _LAILA_IDENTIFIABLE_TASK_FORCE(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_AT
         self,
         funcs: Iterable[Callable[[], Any]],
         wait: bool = False,
-    ) -> Union[Future, List[Any], Any]:
+    ) -> Future | list[Any] | Any:
         """Batch-submit an iterable of zero-arg callables.
 
         Subclasses must accept *funcs* of any length and obey the

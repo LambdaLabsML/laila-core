@@ -27,8 +27,10 @@ this class. That means the recovery code itself must be considered
 """
 
 import textwrap
-from typing import Any, Union
+from typing import Any
+
 from pydantic import field_validator
+
 from ..base import _data_transformation  # renamed base
 
 
@@ -42,12 +44,12 @@ class FernetEncryption(_data_transformation):
     """
 
     name: str = "fernet"
-    key: Union[str, bytes]
+    key: str | bytes
     _fernet: Any = None
 
     @field_validator("key")
     @classmethod
-    def _coerce_key(cls, v: Union[str, bytes]) -> bytes:
+    def _coerce_key(cls, v: str | bytes) -> bytes:
         """Coerce string keys to bytes."""
         if isinstance(v, str):
             v = v.encode("utf-8")
@@ -58,6 +60,7 @@ class FernetEncryption(_data_transformation):
     def model_post_init(self, __context: Any) -> None:
         """Initialise the Fernet encryptor and build backward recovery code."""
         from cryptography.fernet import Fernet
+
         self._fernet = Fernet(self.key)
 
         # build standalone recovery code (uses optional ttl from backward_kwargs)
@@ -123,6 +126,7 @@ class FernetEncryption(_data_transformation):
             raise TypeError("Encryption.backward expects a Fernet token string (str)")
         ttl = self.backward_kwargs.get("ttl", None)
         from cryptography.fernet import InvalidToken
+
         try:
             return self._fernet.decrypt(data.encode("utf-8"), ttl=ttl).decode("utf-8")
         except InvalidToken as e:

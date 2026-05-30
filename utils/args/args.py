@@ -22,13 +22,15 @@ dicts in JSON / TOML files are flattened *one level* with
 underscore-joined keys -- deeper nesting should be expressed via
 explicit dotted keys instead.
 """
+
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
 import json
 import sys
 import xml.etree.ElementTree as ET
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any
 
 
 class ArgReader:
@@ -57,7 +59,7 @@ class ArgReader:
 
     # Supported sources: .env, .json, .toml, .xml, or ``terminal`` (``key=value`` tokens).
 
-    def __init__(self, target: Optional[Any] = None):
+    def __init__(self, target: Any | None = None):
         """Initialise the reader.
 
         Parameters
@@ -115,9 +117,9 @@ class ArgReader:
         return value
 
     @classmethod
-    def _flatten_one_level(cls, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _flatten_one_level(cls, payload: dict[str, Any]) -> dict[str, Any]:
         """Flatten nested dicts one level, joining keys with ``_``."""
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         for key, value in payload.items():
             if isinstance(value, dict):
                 for sub_key, sub_value in value.items():
@@ -126,7 +128,7 @@ class ArgReader:
                 out[key] = cls._coerce_scalar(value)
         return out
 
-    def _apply(self, payload: Dict[str, Any]) -> None:
+    def _apply(self, payload: dict[str, Any]) -> None:
         """Flatten and set each key/value pair on the target."""
         flat = self._flatten_one_level(payload)
         target = self._target_map()
@@ -151,7 +153,7 @@ class ArgReader:
         path : str or Path
             Path to the ``.json`` file.
         """
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, dict):
             raise ValueError("JSON args file must be a key/value object.")
@@ -184,8 +186,8 @@ class ArgReader:
         path : str or Path
             Path to the ``.env`` file.
         """
-        parsed: Dict[str, Any] = {}
-        with open(path, "r", encoding="utf-8") as f:
+        parsed: dict[str, Any] = {}
+        with open(path, encoding="utf-8") as f:
             for raw in f:
                 line = raw.strip()
                 if not line or line.startswith("#"):
@@ -206,7 +208,7 @@ class ArgReader:
         """
         tree = ET.parse(path)
         root = tree.getroot()
-        parsed: Dict[str, Any] = {}
+        parsed: dict[str, Any] = {}
         for child in root:
             children = list(child)
             if children:
@@ -215,7 +217,7 @@ class ArgReader:
                 parsed[child.tag] = child.text or ""
         self._apply(parsed)
 
-    def from_terminal(self, args: Optional[Iterable[str]] = None) -> None:
+    def from_terminal(self, args: Iterable[str] | None = None) -> None:
         """Load arguments from ``key=value`` command-line tokens.
 
         Parameters
@@ -224,7 +226,7 @@ class ArgReader:
             Tokens to parse.  Defaults to ``sys.argv[1:]``.
         """
         tokens = list(sys.argv[1:] if args is None else args)
-        parsed: Dict[str, Any] = {}
+        parsed: dict[str, Any] = {}
         for token in tokens:
             if "=" not in token:
                 continue
@@ -235,7 +237,7 @@ class ArgReader:
             parsed[key] = self._coerce_scalar(v.strip())
         self._apply(parsed)
 
-    def load(self, source: str | Path, *, terminal_args: Optional[Iterable[str]] = None) -> None:
+    def load(self, source: str | Path, *, terminal_args: Iterable[str] | None = None) -> None:
         """Auto-detect format and load arguments.
 
         Parameters

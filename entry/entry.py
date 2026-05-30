@@ -47,42 +47,24 @@ fetches).
 
 from __future__ import annotations
 
-import copy
-from types import NoneType
-from typing import Any, ClassVar, Dict, Hashable, List, Sequence, Tuple, Union
-
-import numpy as np
-from pydantic import BaseModel, ConfigDict, model_validator
-from pydantic import BaseModel, Field, PrivateAttr
-from typing import Optional, Any, Callable
-import uuid
-import inspect
-import threading
 import json
-import base64
-from collections import deque
-import re
-from multiprocessing.shared_memory import SharedMemory
-from uuid import uuid4
-from typing import Dict, Any, Optional
-import hashlib, time, os
-import time
+from typing import Any, ClassVar
 
-from .compdata import ComputationalData as ComputationalData
-from .entry_state import EntryState
-from .entry_metadata import EntryIdentityView, EntryHolisticView
-from .constitution import Constitution, SimpleConstitution, ComplexConstitution
+from pydantic import ConfigDict, PrivateAttr
 
-from ..macros.strings import _ENTRY_SCOPE
+from ..atomic.definitions.locally_atomic_identifiable_object import (
+    _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT,
+)
 from ..basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
-from ..atomic.definitions.locally_atomic_identifiable_object import _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
+from ..macros.strings import _ENTRY_SCOPE
 from ..utils.decorators.synchronized import synchronized
+from .compdata import ComputationalData as ComputationalData
 from .compdata.transformation import TransformationSequence
+from .constitution import ComplexConstitution, Constitution, SimpleConstitution
+from .entry_state import EntryState
 
 
-class Entry( 
-    _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
-):
+class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
     """The fundamental unit of data in LAILA.
 
     An ``Entry`` wraps arbitrary Python data (tensors, images, dicts,
@@ -127,17 +109,14 @@ class Entry(
     locking.
     """
 
-    model_config = ConfigDict(
-        private_attributes=True,
-        use_enum_values=True
-    )
+    model_config = ConfigDict(private_attributes=True, use_enum_values=True)
 
     _ALLOWS_NON_NA_STATE: ClassVar[bool] = True
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_ENTRY_SCOPE]))
     _state: EntryState = PrivateAttr(default=EntryState.STAGED)
-    _constitution: Optional[Constitution] = PrivateAttr(default = None)
-    _payload: Optional[ComputationalData] = PrivateAttr(default=None)
+    _constitution: Constitution | None = PrivateAttr(default=None)
+    _payload: ComputationalData | None = PrivateAttr(default=None)
 
     def __init__(self, **data: dict):
         """Initialise an Entry from keyword arguments.
@@ -200,7 +179,6 @@ class Entry(
         self._initialize_payload(data)
         self._initialize_constitution(data)
         self._initialize_state(data)
-        
 
     def _initialize_identity(self, data: dict) -> None:
         """Parse identity fields from *data* and initialise the parent identity.
@@ -215,11 +193,11 @@ class Entry(
         """
         identity_data = {}
 
-        global_id = data.get("global_id", None)
-        uuid = data.get("uuid", None)
-        evolution = data.get("evolution", None)
-        nickname = data.get("nickname", None)
-        scopes = data.get("scopes", None)
+        global_id = data.get("global_id")
+        uuid = data.get("uuid")
+        evolution = data.get("evolution")
+        nickname = data.get("nickname")
+        scopes = data.get("scopes")
 
         if global_id is not None:
             identity_data = _LAILA_IDENTIFIABLE_OBJECT.process_global_id(global_id)
@@ -228,7 +206,7 @@ class Entry(
 
         if uuid is not None:
             identity_data["uuid"] = uuid
-        
+
         if evolution is not None:
             identity_data["evolution"] = evolution
 
@@ -237,7 +215,7 @@ class Entry(
 
         if scopes is not None:
             identity_data["scopes"] = scopes
-        
+
         _LAILA_IDENTIFIABLE_OBJECT.__init__(self, **identity_data)
 
     def _initialize_payload(self, data: dict) -> None:
@@ -249,7 +227,7 @@ class Entry(
         in a :class:`ComputationalData` of the appropriate subclass via
         ``ComputationalData.__new__``'s type-dispatch.
         """
-        self.data = data.get("payload", data.get("data", None))
+        self.data = data.get("payload", data.get("data"))
 
     def _initialize_constitution(self, data: dict) -> None:
         """Set up a :class:`Constitution` if one was provided.
@@ -278,8 +256,8 @@ class Entry(
             If ``constitution`` is not a :class:`Constitution`,
             ``list[str]``, or ``str``.
         """
-        constitution = data.get("constitution", None)
-        manifest = data.get("manifest", None)
+        constitution = data.get("constitution")
+        manifest = data.get("manifest")
         if constitution is None:
             return
         if isinstance(constitution, Constitution):
@@ -297,10 +275,7 @@ class Entry(
                 kwargs["manifest"] = manifest
             self.constitution = ComplexConstitution(**kwargs)
             return
-        raise TypeError(
-            "constitution must be a Constitution, list[str], or str"
-        )
-
+        raise TypeError("constitution must be a Constitution, list[str], or str")
 
     def _initialize_state(self, data: dict) -> None:
         """Determine the initial :class:`EntryState` from *data*.
@@ -322,21 +297,18 @@ class Entry(
             self.state = EntryState.NA
             return
 
-        constitution = data.get("constitution", None)
+        constitution = data.get("constitution")
         if constitution is not None:
             self.state = EntryState.STAGED
         else:
             self.state = data.get("state", EntryState.STAGED)
 
-
-
     ###################################################
     # Properties
     ###################################################
 
-
     @property
-    def data(self) -> Optional[Any]:
+    def data(self) -> Any | None:
         """Return the unwrapped payload value (or ``None`` if unset).
 
         This getter is **read-only** -- it never triggers an implicit
@@ -369,6 +341,7 @@ class Entry(
                 return self._payload.data
             if self._constitution is not None:
                 from .exceptions import EntryNotBuiltError
+
                 raise EntryNotBuiltError(
                     f"Entry {self.global_id} is not built. "
                     "Use `laila.build(entry).wait()` (or "
@@ -377,10 +350,9 @@ class Entry(
                 )
             return None
 
-
     @data.setter
     @synchronized
-    def data(self, new_data: Optional[Any]) -> None:
+    def data(self, new_data: Any | None) -> None:
         """Replace the payload value.
 
         Raw Python values (``np.ndarray``, ``dict``, ``list``, ``bytes``,
@@ -397,7 +369,6 @@ class Entry(
             new_data = ComputationalData(new_data)
         self._payload = new_data
 
-
     @property
     @synchronized
     def constitution(self):
@@ -410,10 +381,9 @@ class Entry(
         """
         return self._constitution
 
-
     @constitution.setter
     @synchronized
-    def constitution(self, new_constitution: Optional[Constitution]) -> None:
+    def constitution(self, new_constitution: Constitution | None) -> None:
         """Attach or clear the entry's :class:`Constitution`.
 
         Pass ``None`` to detach (typically only the build pipeline does
@@ -431,7 +401,6 @@ class Entry(
             raise TypeError("constitution must be a Constitution or None")
         self._constitution = new_constitution
 
-
     @property
     @synchronized
     def state(self) -> EntryState:
@@ -441,7 +410,6 @@ class Entry(
         Outside callers should rarely need to assign it directly.
         """
         return self._state
-
 
     @state.setter
     @synchronized
@@ -462,11 +430,8 @@ class Entry(
         if not isinstance(new_state, EntryState):
             raise ValueError("state must be an EntryState")
         if not type(self)._ALLOWS_NON_NA_STATE and new_state is not EntryState.NA:
-            raise ValueError(
-                f"{type(self).__name__} only accepts EntryState.NA"
-            )
+            raise ValueError(f"{type(self).__name__} only accepts EntryState.NA")
         self._state = new_state
-
 
     @property
     @synchronized
@@ -631,23 +596,22 @@ class Entry(
         """
         self.data = result
 
-
     ###################################################
     # Variable
     ###################################################
 
     @classmethod
     def variable(
-        cls, 
+        cls,
         data=None,
-        *, 
-        uuid = None,
+        *,
+        uuid=None,
         evolution=None,
-        state = None,
+        state=None,
         constitution=None,
         manifest=None,
-        global_id = None,
-        nickname = None
+        global_id=None,
+        nickname=None,
     ):
         """Create a *mutable* (evolvable) Entry.
 
@@ -744,9 +708,7 @@ class Entry(
             raise RuntimeError("Cannot set both constitution and data.")
 
         if (constitution is None) != (manifest is None):
-            raise ValueError(
-                "`constitution` and `manifest` must both be provided together."
-            )
+            raise ValueError("`constitution` and `manifest` must both be provided together.")
 
         if global_id is not None:
             identity_data = _LAILA_IDENTIFIABLE_OBJECT.process_global_id(global_id)
@@ -769,13 +731,7 @@ class Entry(
         if state is None:
             state = EntryState.READY
 
-        return Entry(
-            data = data,
-            evolution = evolution,
-            state = state,
-            uuid = uuid
-        )
-        
+        return Entry(data=data, evolution=evolution, state=state, uuid=uuid)
 
     def evolve(self, data=None):
         """Return a new Entry representing the next evolution.
@@ -846,21 +802,12 @@ class Entry(
             state=EntryState.READY,
         )
 
-
-
     ###################################################
     # Constant
     ###################################################
-    
+
     @classmethod
-    def constant(
-        cls, 
-        data, 
-        *,
-        global_id = None,
-        uuid = None,
-        nickname = None
-    ):
+    def constant(cls, data, *, global_id=None, uuid=None, nickname=None):
         """Create an *immutable* Entry whose ``evolution`` is :data:`None`.
 
         Constants do not support :meth:`evolve` and therefore do not
@@ -916,17 +863,10 @@ class Entry(
 
         if nickname is not None:
             uuid = cls.generate_uuid_from_nickname(nickname)
-            
-        new_entry = Entry(
-            uuid = uuid,
-            data = data,
-            state=EntryState.READY,
-            evolution=None 
-        )
-        
+
+        new_entry = Entry(uuid=uuid, data=data, state=EntryState.READY, evolution=None)
+
         return new_entry
-
-
 
     ###################################################
     # Contingent
@@ -957,7 +897,6 @@ class Entry(
         """
         return Entry(**kwargs)
 
-
     ###################################################
     # Serialize and Recovery
     ###################################################
@@ -987,9 +926,7 @@ class Entry(
             Plain Python dict suitable for JSON serialization (assuming
             the payload itself is JSON-friendly).
         """
-        constitution_dict = (
-            self._constitution.as_dict() if self._constitution is not None else None
-        )
+        constitution_dict = self._constitution.as_dict() if self._constitution is not None else None
         payload_value = None
         if self._payload is not None:
             payload_value = self._payload.data
@@ -1082,7 +1019,7 @@ class Entry(
         }
 
     @classmethod
-    def from_dict(cls, in_dict: dict) -> "Entry":
+    def from_dict(cls, in_dict: dict) -> Entry:
         """Hydrate an Entry from a serialized dict *without* running its constitution.
 
         This is the "raw" deserialization step -- it reconstructs
@@ -1106,18 +1043,21 @@ class Entry(
             re-attached, and state taken from the dict.
         """
         entry = cls.__new__(cls)
-        Entry._initialize_identity(entry, {
-            "uuid": in_dict["_uuid"],
-            "evolution": in_dict.get("_evolution"),
-            "scopes": in_dict.get("_scopes"),
-        })
+        Entry._initialize_identity(
+            entry,
+            {
+                "uuid": in_dict["_uuid"],
+                "evolution": in_dict.get("_evolution"),
+                "scopes": in_dict.get("_scopes"),
+            },
+        )
         entry.data = in_dict.get("payload")
         entry.state = EntryState[in_dict.get("_state", "STAGED")]
         entry.constitution = Constitution.from_dict(in_dict.get("constitution"))
         return entry
 
     @classmethod
-    def _build_from_dict_sync(cls, in_dict) -> "Entry":
+    def _build_from_dict_sync(cls, in_dict) -> Entry:
         """Synchronously hydrate an entry from a serialized dict.
 
         Combines :meth:`from_dict` (raw rebuild) with
@@ -1169,7 +1109,7 @@ class Entry(
         return entry
 
     @classmethod
-    async def _build_from_dict_async(cls, in_dict) -> "Entry":
+    async def _build_from_dict_async(cls, in_dict) -> Entry:
         """Async variant of :meth:`_build_from_dict_sync`.
 
         Used inside the per-entry coroutines submitted by
@@ -1221,13 +1161,14 @@ class Entry(
     def __str__(self):
         """Return the global identifier string."""
         return self.global_id
-    
+
     def __repr__(self):
         """Return the global identifier string."""
         return self.global_id
 
 
 from .constitution.build_maps import register_builder
+
 register_builder(
     _ENTRY_SCOPE,
     Entry._build_from_dict_sync,

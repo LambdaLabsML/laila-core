@@ -1,19 +1,22 @@
 """MongoDB-backed pool implementation with optional managed local server."""
+
 from __future__ import annotations
 
-from typing import Optional, Any, Iterable, Iterator
-from contextlib import suppress
-from pydantic import Field, PrivateAttr
 import atexit
+import hashlib
 import json
 import os
 import subprocess
 import time
-import hashlib
+from collections.abc import Iterable, Iterator
+from contextlib import suppress
+from typing import Any
 
-from ..schema.base import _LAILA_IDENTIFIABLE_POOL
-from ...entry.compdata.transformation import TransformationSequence
+from pydantic import ConfigDict, Field, PrivateAttr
+
 from ...entry import transformation_base64
+from ...entry.compdata.transformation import TransformationSequence
+from ..schema.base import _LAILA_IDENTIFIABLE_POOL
 
 try:
     from pymongo import MongoClient
@@ -30,22 +33,19 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
     or automatically start and manage a local ``mongod`` process.
     """
 
-    uri: Optional[str] = Field(default=None)
-    host: Optional[str] = Field(default=None)
+    uri: str | None = Field(default=None)
+    host: str | None = Field(default=None)
     port: int = Field(default=27017)
     dbname: str = Field(default="laila")
     server_start_timeout_s: float = Field(default=5.0)
-    transformations: Optional[TransformationSequence] = Field(default=transformation_base64)
+    transformations: TransformationSequence | None = Field(default=transformation_base64)
 
     _client: Any = PrivateAttr(default=None)
-    _mongo_proc: Optional[subprocess.Popen] = PrivateAttr(default=None)
+    _mongo_proc: subprocess.Popen | None = PrivateAttr(default=None)
     _owns_local_server: bool = PrivateAttr(default=False)
-    _mongo_dir: Optional[str] = PrivateAttr(default=None)
+    _mongo_dir: str | None = PrivateAttr(default=None)
 
-    class Config:
-        """Pydantic model configuration."""
-
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def model_post_init(self, __context: Any) -> None:
         """Connect to MongoDB and ensure the entries collection is indexed."""
@@ -75,10 +75,13 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
         if self._mongo_dir is not None:
             return
         from ...macros.defaults import LAILA_DEFAULT_DIRECTORIES
+
         pool_dir = os.path.join(LAILA_DEFAULT_DIRECTORIES["pools"], self.uuid)
         self._mongo_dir = pool_dir
         os.makedirs(self._mongo_dir, exist_ok=True)
-        self.port = 30000 + (int(hashlib.sha1(self.pool_id.encode("utf-8")).hexdigest()[:8], 16) % 20000)
+        self.port = 30000 + (
+            int(hashlib.sha1(self.pool_id.encode("utf-8")).hexdigest()[:8], 16) % 20000
+        )
         self.host = "127.0.0.1"
 
     @property
@@ -141,7 +144,7 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
         self._owns_local_server = True
 
         deadline = time.time() + self.server_start_timeout_s
-        last_err: Optional[Exception] = None
+        last_err: Exception | None = None
         while time.time() < deadline:
             if self._mongo_proc.poll() is not None:
                 exit_code = self._mongo_proc.poll()
@@ -204,7 +207,7 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
                     proc.wait(timeout=2.0)
         self._owns_local_server = False
 
-    def _read(self, key: str) -> Optional[Any]:
+    def _read(self, key: str) -> Any | None:
         """Retrieve the JSON value for *key*, or ``None`` if absent."""
         with self.atomic():
             doc = self._collection().find_one({"key": key}, {"_id": 0, "value": 1})
@@ -257,11 +260,16 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
         Iterable[str]
             Pool keys.
         """
+
         def _iter_keys() -> Iterator[str]:
-            cursor = self._collection().find(
-                {},
-                {"_id": 0, "key": 1},
-            ).sort("key", 1)
+            cursor = (
+                self._collection()
+                .find(
+                    {},
+                    {"_id": 0, "key": 1},
+                )
+                .sort("key", 1)
+            )
             for doc in cursor:
                 yield doc["key"]
 

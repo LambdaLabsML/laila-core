@@ -6,11 +6,11 @@ language-neutral binary format -- much more compact than pickle for
 numeric data and readable from any process with NumPy installed.
 """
 
-from .compdata import ComputationalData, register_cdtype, _scalar_len
 import numpy as np
-from ..transformation.serialization import NumpySerializer
 from pydantic import PrivateAttr
-import copy
+
+from ..transformation.serialization import NumpySerializer
+from .compdata import ComputationalData, _scalar_len, register_cdtype
 
 
 @register_cdtype(np.ndarray)
@@ -37,9 +37,7 @@ class CD_numpyarray(ComputationalData):
     def serializer(self, value: NumpySerializer):
         """Set a new serializer instance."""
         if not isinstance(value, NumpySerializer):
-            raise TypeError(
-                f"serializer must be a NumpySerializer, got {type(value).__name__}"
-            )
+            raise TypeError(f"serializer must be a NumpySerializer, got {type(value).__name__}")
         self._serializer = value
 
     def __len__(self):

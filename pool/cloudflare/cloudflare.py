@@ -1,4 +1,5 @@
 """Cloudflare R2 pool implementation."""
+
 from __future__ import annotations
 
 from pydantic import Field

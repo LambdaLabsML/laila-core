@@ -45,15 +45,18 @@ This lets users compose layered caches like
 
 so that hot reads never leave the in-memory tier.
 """
-from typing import Optional, Any, Dict, Iterable, Iterator, Mapping
-from pydantic import BaseModel, Field, PrivateAttr
-from ...basics.definitions.cli_capable import CLIExempt, _LAILA_CLI_CAPABLE_CLASS
-from ...entry import Entry
-from contextlib import suppress, contextmanager
-import threading
-from ...atomic.definitions.locally_atomic_identifiable_object import _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
-from ...macros.strings import _POOL_SCOPE
+
+from collections.abc import Iterable, Iterator
+from typing import Any
+
+from pydantic import ConfigDict, Field, PrivateAttr
+
+from ...atomic.definitions.locally_atomic_identifiable_object import (
+    _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT,
+)
+from ...basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS, CLIExempt
 from ...entry.compdata.transformation import TransformationSequence
+from ...macros.strings import _POOL_SCOPE
 
 
 class _LAILA_IDENTIFIABLE_POOL(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
@@ -84,14 +87,12 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_ATOMIC_I
     """
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_POOL_SCOPE]))
-    _proxy_to: Optional[Any] = PrivateAttr(default=None)
-    resource: Dict[str, Any] = CLIExempt(default_factory=dict)
+    _proxy_to: Any | None = PrivateAttr(default=None)
+    resource: dict[str, Any] = CLIExempt(default_factory=dict)
     batch_accelerated: bool = Field(default=False)
-    transformations: Optional[TransformationSequence] = CLIExempt(default=None)
+    transformations: TransformationSequence | None = CLIExempt(default=None)
 
-
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @property
     def pool_id(self) -> str:
@@ -148,7 +149,7 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_ATOMIC_I
         return other
 
     # -------- Internal storage hooks (override in subclasses) --------
-    def _read(self, key: str) -> Optional[Any]:
+    def _read(self, key: str) -> Any | None:
         """Read *key* from this pool's own storage. Override in subclasses.
 
         The default implementation reads from the in-memory
@@ -212,10 +213,12 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_ATOMIC_I
             with self.atomic():
                 return list(self.resource.keys())
         else:
+
             def _gen() -> Iterator[str]:
                 with self.atomic():
                     for k in self.resource.keys():
                         yield k
+
             return _gen()
 
     def _empty(self) -> None:
@@ -228,7 +231,7 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_ATOMIC_I
             self.resource.clear()
 
     # -------- Default async hooks (override in async-capable pools) --------
-    async def _read_async(self, key: str) -> Optional[Any]:
+    async def _read_async(self, key: str) -> Any | None:
         """Async read; default just delegates to the sync :meth:`_read` inline.
 
         Subclasses backed by a native-async client (e.g. ``aioboto3``,
@@ -253,7 +256,7 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_ATOMIC_I
         return self._exists(key)
 
     # -------- Proxy-aware public API --------
-    def __getitem__(self, key) -> Optional[Any]:
+    def __getitem__(self, key) -> Any | None:
         """Retrieve the blob for *key*, with proxy fall-through and write-back.
 
         Two special cases:
@@ -268,8 +271,10 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_ATOMIC_I
           being returned, so subsequent reads bypass the upstream.
         """
         from ...policy.central.memory.schema.manifest import Manifest
+
         if isinstance(key, Manifest):
             from .pool_wrapper import PoolWrapper
+
             return PoolWrapper(pool=self, manifest=key)
 
         value = self._read(key)
@@ -339,7 +344,9 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_ATOMIC_I
         NotImplementedError
             If the pool is cacheless and operates directly on storage.
         """
-        raise NotImplementedError("Sync is not implemented for this pool, the pool is cacheless, i.e. operations are immediately executed on the underlying storage.")
+        raise NotImplementedError(
+            "Sync is not implemented for this pool, the pool is cacheless, i.e. operations are immediately executed on the underlying storage."
+        )
 
     def __le__(self, other: Any):
         """``self <= other`` -- bulk-copy ``other`` pool's contents into this one.

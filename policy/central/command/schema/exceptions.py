@@ -21,15 +21,12 @@ Provides:
 
 from __future__ import annotations
 
-import asyncio
 import functools
 import inspect
 import threading
 from contextvars import ContextVar
-from typing import Optional, Set
 
-
-_ASYNC_LOOP_THREAD_IDS: Set[int] = set()
+_ASYNC_LOOP_THREAD_IDS: set[int] = set()
 _ASYNC_LOOP_THREAD_IDS_LOCK = threading.Lock()
 
 
@@ -63,9 +60,7 @@ def _check_not_loop_thread() -> None:
         )
 
 
-_NO_SUBMIT_OWNER: ContextVar[Optional[str]] = ContextVar(
-    "_no_submit_owner", default=None
-)
+_NO_SUBMIT_OWNER: ContextVar[str | None] = ContextVar("_no_submit_owner", default=None)
 
 
 class NestedCommandSubmitError(RuntimeError):

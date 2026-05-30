@@ -40,6 +40,7 @@ class TaskForceStatus(str, Enum):
         Terminal: an unrecoverable backend error was observed. Set by
         the subclass on observed worker failures.
     """
+
     NOT_STARTED = "not_started"
     RUNNING = "running"
     PAUSED = "paused"

@@ -1,25 +1,22 @@
 """Lightweight read-only views over Entry identity and state."""
 
-from pydantic import BaseModel, ConfigDict, model_validator
-from pydantic import BaseModel, Field, PrivateAttr
-from typing import Optional, Any, Callable
+from pydantic import PrivateAttr
 
 from ..basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
-from .entry_state import EntryState
 from .constitution import Constitution
+from .entry_state import EntryState
 
 
 class EntryIdentityView(_LAILA_IDENTIFIABLE_OBJECT):
     """Read-only projection exposing only the identity and state of an Entry."""
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list(["ENTRY"]))
-    _state: EntryState 
+    _state: EntryState
 
 
 class EntryHolisticView(_LAILA_IDENTIFIABLE_OBJECT):
     """Read-only projection exposing identity, state, and constitution of an Entry."""
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list(["ENTRY"]))
-    _state: EntryState 
+    _state: EntryState
     _constitution: Constitution
-

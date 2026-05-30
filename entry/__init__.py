@@ -30,24 +30,14 @@ Available presets
   framing (e.g. a SQL ``BYTEA`` column).
 """
 
-from .entry import Entry as Entry
-from .entry import EntryIdentityView as EntryIdentityView
-from .entry_state import EntryState
 from .compdata.transformation import *
+from .entry import Entry as Entry
+from .entry_metadata import EntryIdentityView as EntryIdentityView
+from .entry_state import EntryState
 
+transformation_base64 = TransformationSequence(transformations=[Base64()])
 
-transformation_base64 = TransformationSequence (
-    transformations = [
-        Base64()
-    ]
-)
-
-transformation_base64_compression = TransformationSequence (
-    transformations = [
-        Base64(),
-        Zlib()
-    ]
-)
+transformation_base64_compression = TransformationSequence(transformations=[Base64(), Zlib()])
 
 transformation_base64_compression_encryption = lambda key: TransformationSequence(
     transformations=[

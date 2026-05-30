@@ -17,6 +17,7 @@ binary representations of JSON-shaped data, prefer
 import json
 import textwrap
 from typing import Any
+
 from ..base import _data_transformation
 
 
@@ -32,7 +33,7 @@ class JsonString(_data_transformation):
     def model_post_init(self, __context: Any) -> None:
         """Build standalone backward recovery code."""
         # Standalone recovery code mirroring `backward()` with embedded kwargs
-        self.backward_code = textwrap.dedent(f"""
+        self.backward_code = textwrap.dedent("""
             def backward(data):
                 import json
                 if not isinstance(data, str):
@@ -40,7 +41,6 @@ class JsonString(_data_transformation):
                 return json.loads(data)
         """)
 
-    
     def forward(self, data: Any) -> str:
         """Serialize *data* to a compact JSON string.
 
@@ -69,7 +69,6 @@ class JsonString(_data_transformation):
         except (TypeError, ValueError) as e:
             raise TypeError(f"JsonString.forward: object not JSON serializable: {e!s}")
 
-    
     def backward(self, data: str) -> Any:
         """Deserialize a JSON string back to a Python object.
 

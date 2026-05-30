@@ -14,23 +14,24 @@ bank.
 """
 
 from __future__ import annotations
-from typing import Dict, List, Optional, Callable, Any
-import asyncio
-import threading
-from pydantic import Field, ConfigDict, PrivateAttr
-import json
-from typing import Iterator
 
-from .future import Future
-from .future_status import FutureStatus
+import asyncio
+import json
+from collections.abc import Iterator
+from typing import Any
+
+from pydantic import ConfigDict, Field, PrivateAttr
 
 from .......basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from .......macros.strings import _GROUP_FUTURE_SCOPE
+from .future import Future
+from .future_status import FutureStatus
 
 
 def _get_future_bank():
     """Return the active local policy's future bank mapping."""
     from ....... import _get_active_local_policy
+
     return _get_active_local_policy().future_bank
 
 
@@ -47,32 +48,34 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_GROUP_FUTURE_SCOPE]))
 
-    taskforce_id: _LAILA_IDENTIFIABLE_OBJECT|str
-    policy_id: _LAILA_IDENTIFIABLE_OBJECT|str
+    taskforce_id: _LAILA_IDENTIFIABLE_OBJECT | str
+    policy_id: _LAILA_IDENTIFIABLE_OBJECT | str
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    future_ids: List[str] = Field(default_factory=list)
+    future_ids: list[str] = Field(default_factory=list)
 
     def model_post_init(self, __context: Any) -> None:
         """Register this group future with the active local policy's future bank."""
         from ....... import _get_active_local_policy
+
         policy = _get_active_local_policy()
         policy.central.command._register_future_with_active_guarantees(self)
         policy.future_bank[self.global_id] = self
         try:
             from .......logger import get_logger
+
             get_logger().record_group_future_created(self)
         except Exception:
             pass
 
-    def _resolve_children(self) -> List[Future]:
+    def _resolve_children(self) -> list[Future]:
         """Look up child Future objects from the future bank."""
         bank = _get_future_bank()
         return [bank[fid] for fid in self.future_ids]
 
     # ---------- computed status ----------
     @property
-    def status(self) -> Dict[str, Any]:
+    def status(self) -> dict[str, Any]:
         """Return a percentage breakdown of child statuses.
 
         The returned dict has shape::
@@ -125,23 +128,20 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
             },
         }
 
-
     # ---------- read-only interface (except cancel passthrough) ----------
 
-    def append(self, future_ids: List[str]) -> None:
+    def append(self, future_ids: list[str]) -> None:
         """Merge additional child future IDs into this group."""
         self.future_ids.extend(future_ids)
-    
 
-    def __add__(self, other: Any) -> "GroupFuture":
+    def __add__(self, other: Any) -> GroupFuture:
         """Return self with merged child future IDs from another GroupFuture."""
         if not isinstance(other, GroupFuture):
             return NotImplemented
         self.future_ids.extend(other.future_ids)
         return self
 
-
-    def wait(self, timeout: Optional[float] = None) -> Any:
+    def wait(self, timeout: float | None = None) -> Any:
         """Block until every child future completes; return their results.
 
         Children are waited *sequentially*. The same ``timeout`` value
@@ -164,6 +164,7 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
             If a child does not expose a ``wait`` method.
         """
         from ...exceptions import _check_not_loop_thread
+
         _check_not_loop_thread()
 
         children = self._resolve_children()
@@ -176,7 +177,7 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
         return return_values
 
     @property
-    def result(self) -> List[Any]:
+    def result(self) -> list[Any]:
         """Collect results from all children without blocking.
 
         Assumes every child has already completed (e.g. after a
@@ -186,7 +187,7 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
         return [f.result for f in children]
 
     @property
-    def data(self) -> List[Any]:
+    def data(self) -> list[Any]:
         """Return the unwrapped payload data from every child future.
 
         Raises
@@ -199,20 +200,22 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
 
     def __await__(self):
         """Await all children concurrently via ``asyncio.gather``."""
+
         async def _await_all():
             children = self._resolve_children()
             return await asyncio.gather(*children)
+
         return _await_all().__await__()
 
     # ---------- introspection ----------
     @property
-    def what(self) -> Dict[str, Dict[str, Any]]:
+    def what(self) -> dict[str, dict[str, Any]]:
         """Nested summary keyed by task_group_id."""
         group_key = self.global_id
-        child_details: Dict[str, Any] = {}
+        child_details: dict[str, Any] = {}
         cancelled_ids = []
         not_cancelled_ids = []
-        errors: Dict[str, str] = {}
+        errors: dict[str, str] = {}
 
         children = self._resolve_children()
         for f in children:
@@ -225,7 +228,9 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
                 det = {
                     fid: {
                         "status": getattr(f, "status", FutureStatus.UNKNOWN).value,
-                        "error": repr(f.outcome) if getattr(f, "status", None) == FutureStatus.ERROR else None,
+                        "error": repr(f.outcome)
+                        if getattr(f, "status", None) == FutureStatus.ERROR
+                        else None,
                     }
                 }
             for child_id, payload in det.items():
@@ -255,7 +260,6 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
                 },
             }
         }
-
 
     def __str__(self) -> str:
         """Return JSON representation of the group."""

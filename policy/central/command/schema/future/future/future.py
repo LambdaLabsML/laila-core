@@ -29,13 +29,15 @@ producer-side completion logic:
 """
 
 from __future__ import annotations
-from typing import Optional, Callable, Any, Dict, List
+
+from collections.abc import Callable
+from typing import Any
+
 from pydantic import ConfigDict, Field, PrivateAttr
 
-
-from .future_status import FutureStatus
-from .future_identity import _LAILA_IDENTIFIABLE_FUTURE
 from .......utils.decorators.synchronized import synchronized
+from .future_identity import _LAILA_IDENTIFIABLE_FUTURE
+from .future_status import FutureStatus
 
 
 class Future(_LAILA_IDENTIFIABLE_FUTURE):
@@ -64,16 +66,17 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
 
     _status: FutureStatus = PrivateAttr(default=FutureStatus.NOT_STARTED)
     _return_value: Any = PrivateAttr(default=None)
-    _exception: Optional[Exception] = PrivateAttr(default=None)
-    _result_global_id: Optional[str] = PrivateAttr(default=None)
+    _exception: Exception | None = PrivateAttr(default=None)
+    _result_global_id: str | None = PrivateAttr(default=None)
     _timeout_ms: int = PrivateAttr(default=100)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-
-    _default_callbacks: Dict[FutureStatus, Callable[..., Any]] = PrivateAttr(default_factory=dict)
-    _status_callbacks: Dict[FutureStatus, List[Callable[..., Any]]] = PrivateAttr(default_factory=dict)
-    callbacks: Dict[FutureStatus, Callable[..., Any]] = Field(default_factory=dict)
+    _default_callbacks: dict[FutureStatus, Callable[..., Any]] = PrivateAttr(default_factory=dict)
+    _status_callbacks: dict[FutureStatus, list[Callable[..., Any]]] = PrivateAttr(
+        default_factory=dict
+    )
+    callbacks: dict[FutureStatus, Callable[..., Any]] = Field(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
         """Wire default per-status callbacks and self-register with the
@@ -95,27 +98,41 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
         """
         self._setup_default_callbacks()
         from ....... import _get_active_local_policy
+
         policy = _get_active_local_policy()
         policy.central.command._register_future_with_active_guarantees(self)
         policy.future_bank[self.global_id] = self
         try:
             from .......logger import get_logger
+
             get_logger().record_future_created(self)
         except Exception:
             pass
 
-
     def _setup_default_callbacks(self) -> None:
         """Populate default status-transition callbacks."""
-        self._default_callbacks[FutureStatus.ERROR] = lambda f: setattr(f, "status", FutureStatus.ERROR)
-        self._default_callbacks[FutureStatus.CANCELLED] = lambda f: setattr(f, "status", FutureStatus.CANCELLED)
-        self._default_callbacks[FutureStatus.NOT_STARTED] = lambda f: setattr(f, "status", FutureStatus.NOT_STARTED)
-        self._default_callbacks[FutureStatus.RUNNING] = lambda f: setattr(f, "status", FutureStatus.RUNNING)
-        self._default_callbacks[FutureStatus.POLL_TIMEOUT] = lambda f: setattr(f, "status", FutureStatus.POLL_TIMEOUT)
-        self._default_callbacks[FutureStatus.UNKNOWN] = lambda f: setattr(f, "status", FutureStatus.UNKNOWN)
-        self._default_callbacks[FutureStatus.FINISHED] = lambda f: setattr(f, "status", FutureStatus.FINISHED)
+        self._default_callbacks[FutureStatus.ERROR] = lambda f: setattr(
+            f, "status", FutureStatus.ERROR
+        )
+        self._default_callbacks[FutureStatus.CANCELLED] = lambda f: setattr(
+            f, "status", FutureStatus.CANCELLED
+        )
+        self._default_callbacks[FutureStatus.NOT_STARTED] = lambda f: setattr(
+            f, "status", FutureStatus.NOT_STARTED
+        )
+        self._default_callbacks[FutureStatus.RUNNING] = lambda f: setattr(
+            f, "status", FutureStatus.RUNNING
+        )
+        self._default_callbacks[FutureStatus.POLL_TIMEOUT] = lambda f: setattr(
+            f, "status", FutureStatus.POLL_TIMEOUT
+        )
+        self._default_callbacks[FutureStatus.UNKNOWN] = lambda f: setattr(
+            f, "status", FutureStatus.UNKNOWN
+        )
+        self._default_callbacks[FutureStatus.FINISHED] = lambda f: setattr(
+            f, "status", FutureStatus.FINISHED
+        )
 
-    
     @property
     @synchronized
     def status(self) -> FutureStatus:
@@ -124,7 +141,6 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
         """
         return self._status
 
-    
     @status.setter
     @synchronized
     def status(self, status: FutureStatus) -> None:
@@ -141,6 +157,7 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
         if prev != status:
             try:
                 from .......logger import get_logger
+
                 get_logger().record_future_transition(self, status, prev)
             except Exception:
                 pass
@@ -151,7 +168,7 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
                 except Exception:
                     pass
 
-    def add_status_callback(self, status: FutureStatus, fn: Callable[["Future"], Any]) -> None:
+    def add_status_callback(self, status: FutureStatus, fn: Callable[[Future], Any]) -> None:
         """Register *fn* to fire when this future transitions into *status*.
 
         Multiple callbacks per status are supported (registered in insertion
@@ -171,7 +188,6 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
             except Exception:
                 pass
 
-    
     @property
     def result(self) -> Any:
         """The future's result, blocking until completion if necessary.
@@ -197,8 +213,7 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
             if self._status in [FutureStatus.ERROR, FutureStatus.CANCELLED]:
                 raise self._exception
             return self._return_value
-    
-    
+
     @result.setter
     @synchronized
     def result(self, result: Any) -> None:
@@ -240,16 +255,16 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
             or for raw non-Entry results from legacy code paths).
         """
         from .......entry import Entry
+
         result = self.result
         if not isinstance(result, Entry):
             raise RuntimeError(
-                f"Future result is not an Entry (got {type(result).__name__}); "
-                "cannot access .data"
+                f"Future result is not an Entry (got {type(result).__name__}); cannot access .data"
             )
         return result.data
 
     @property
-    def exception(self) -> Optional[Exception]:
+    def exception(self) -> Exception | None:
         """
         Return the current exception value.
         """
@@ -257,19 +272,19 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
 
     @exception.setter
     @synchronized
-    def exception(self, exception: Optional[Exception]) -> None:
+    def exception(self, exception: Exception | None) -> None:
         """
         Set the exception value.
         """
         self._exception = exception
 
-    def add_callback(self, status: FutureStatus, fn: Callable[["Future"], Any]) -> None:
+    def add_callback(self, status: FutureStatus, fn: Callable[[Future], Any]) -> None:
         """
         Register a callback for a specific status transition.
         """
         self.callbacks[status] = fn
-    
-    def remove_callback(self, status: FutureStatus, fn: Callable[["Future"], Any]) -> None:
+
+    def remove_callback(self, status: FutureStatus, fn: Callable[[Future], Any]) -> None:
         """
         Remove a callback for a specific status.
         """
@@ -280,14 +295,14 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
         Clear the callback for a specific status.
         """
         self._callbacks[status] = None
-    
+
     def clear_all_callbacks(self) -> None:
         """
         Clear all registered callbacks.
         """
         self._callbacks.clear()
-    
-    #TODO: This needs to go through the central command.
+
+    # TODO: This needs to go through the central command.
     def trigger_callback(self, status: FutureStatus) -> None:
         """
         Trigger the callback for the given status, if present.
@@ -296,10 +311,8 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
         if fn is not None:
             fn(self.result)
 
-
-
     @property
-    def future_identity(self) -> "_LAILA_IDENTIFIABLE_FUTURE":
+    def future_identity(self) -> _LAILA_IDENTIFIABLE_FUTURE:
         """Return a lightweight identity handle for this future."""
         return _LAILA_IDENTIFIABLE_FUTURE(
             taskforce_id=self.taskforce_id,
@@ -310,7 +323,7 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
             uuid=self._uuid,
         )
 
-    def wait(self, timeout: Optional[float] = None) -> Any:
+    def wait(self, timeout: float | None = None) -> Any:
         """Block until the future completes. Subclasses must override.
 
         Concrete subclasses must implement this and additionally guard
@@ -334,24 +347,27 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
         Return True if the Future has finished successfully.
         """
         return self.status in [FutureStatus.FINISHED]
+
     def cancelled(self) -> bool:
         """
         Return True if the Future was cancelled.
         """
         return self.status in [FutureStatus.CANCELLED]
+
     def error(self) -> bool:
         """
         Return True if the Future finished with an error.
         """
         return self.status in [FutureStatus.ERROR]
+
     def not_started(self) -> bool:
         """
         Return True if the Future has not started.
         """
         return self.status in [FutureStatus.NOT_STARTED]
+
     def running(self) -> bool:
         """
         Return True if the Future is currently running.
         """
         return self.status in [FutureStatus.RUNNING]
-

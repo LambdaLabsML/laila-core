@@ -23,10 +23,11 @@ transformation:
 compression level, window bits, etc.
 """
 
-import zlib
 import base64
 import textwrap
+import zlib
 from typing import Any
+
 from ..base import _data_transformation
 
 

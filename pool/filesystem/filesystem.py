@@ -16,19 +16,22 @@ Why an image-backed mount instead of a plain directory?
 The class is Linux-only (relies on ``mkfs.ext4`` and ``mount``) and
 needs root privileges or appropriate capabilities to mount.
 """
+
 from __future__ import annotations
 
-from typing import Optional, Any, Iterable, Iterator
-from urllib.parse import quote, unquote
-from contextlib import suppress
-import subprocess
-from pydantic import Field, PrivateAttr
 import json
 import os
+import subprocess
+from collections.abc import Iterable, Iterator
+from contextlib import suppress
+from typing import Any
+from urllib.parse import quote, unquote
 
-from ..schema.base import _LAILA_IDENTIFIABLE_POOL
-from ...entry.compdata.transformation import TransformationSequence
+from pydantic import ConfigDict, Field, PrivateAttr
+
 from ...entry import transformation_base64
+from ...entry.compdata.transformation import TransformationSequence
+from ..schema.base import _LAILA_IDENTIFIABLE_POOL
 
 
 class FilesystemPool(_LAILA_IDENTIFIABLE_POOL):
@@ -57,14 +60,13 @@ class FilesystemPool(_LAILA_IDENTIFIABLE_POOL):
     encoding surprises across mount platforms).
     """
 
-    transformations: Optional[TransformationSequence] = Field(default=transformation_base64)
+    transformations: TransformationSequence | None = Field(default=transformation_base64)
     _pool_dir: str = PrivateAttr()
     _mount_dir: str = PrivateAttr()
     _image_path: str = PrivateAttr()
     _image_size_bytes: int = PrivateAttr(default=64 * 1024 * 1024)
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __init__(self, **data: Any):
         """Validate that reserved path fields are not overridden."""
@@ -117,6 +119,7 @@ class FilesystemPool(_LAILA_IDENTIFIABLE_POOL):
     def _resolve_pool_dir(self) -> str:
         """Derive the pool directory from default directories."""
         from ...macros.defaults import LAILA_DEFAULT_DIRECTORIES
+
         return os.path.join(LAILA_DEFAULT_DIRECTORIES["pools"], self.uuid)
 
     def _resolve_image_path(self) -> str:
@@ -145,7 +148,7 @@ class FilesystemPool(_LAILA_IDENTIFIABLE_POOL):
 
         normalized_path = os.path.realpath(path)
         try:
-            with open("/proc/self/mountinfo", "r", encoding="utf-8") as handle:
+            with open("/proc/self/mountinfo", encoding="utf-8") as handle:
                 for line in handle:
                     parts = line.split()
                     if len(parts) > 4 and os.path.realpath(parts[4]) == normalized_path:
@@ -196,16 +199,15 @@ class FilesystemPool(_LAILA_IDENTIFIABLE_POOL):
         """Full filesystem path for the given entry key."""
         return os.path.join(self.mount_dir, self._storage_key(key))
 
-    def _read(self, key: str) -> Optional[Any]:
+    def _read(self, key: str) -> Any | None:
         """Read and parse the JSON file for *key*, or return ``None``."""
         path = self._entry_path(key)
         if not os.path.exists(path):
             return None
 
-        with self.atomic():
-            with open(path, "a+", encoding="utf-8") as handle:
-                handle.seek(0)
-                raw = handle.read()
+        with self.atomic(), open(path, "a+", encoding="utf-8") as handle:
+            handle.seek(0)
+            raw = handle.read()
 
         if raw.strip() == "":
             return None
@@ -220,16 +222,14 @@ class FilesystemPool(_LAILA_IDENTIFIABLE_POOL):
             raise TypeError("FilesystemPool expects a serialized JSON string.")
 
         path = self._entry_path(key)
-        with self.atomic():
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write(value)
+        with self.atomic(), open(path, "w", encoding="utf-8") as handle:
+            handle.write(value)
 
     def _delete(self, key: str) -> None:
         """Remove the JSON file for *key*; no-op if absent."""
         path = self._entry_path(key)
-        with self.atomic():
-            with suppress(FileNotFoundError):
-                os.remove(path)
+        with self.atomic(), suppress(FileNotFoundError):
+            os.remove(path)
 
     def _empty(self) -> None:
         """Remove all ``.json`` files from the mount directory."""

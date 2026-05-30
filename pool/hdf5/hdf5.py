@@ -1,16 +1,19 @@
 """HDF5 file pool implementation."""
+
 from __future__ import annotations
 
-from typing import Optional, Any, Iterable, Iterator
-from pydantic import Field, PrivateAttr
-from urllib.parse import quote, unquote
-import os
 import json
-import h5py
+import os
+from collections.abc import Iterable, Iterator
+from typing import Any
+from urllib.parse import quote, unquote
 
-from ..schema.base import _LAILA_IDENTIFIABLE_POOL
-from ...entry.compdata.transformation import TransformationSequence
+import h5py
+from pydantic import ConfigDict, Field, PrivateAttr
+
 from ...entry import transformation_base64
+from ...entry.compdata.transformation import TransformationSequence
+from ..schema.base import _LAILA_IDENTIFIABLE_POOL
 
 
 class HDF5Pool(_LAILA_IDENTIFIABLE_POOL):
@@ -20,17 +23,17 @@ class HDF5Pool(_LAILA_IDENTIFIABLE_POOL):
     file that remains open for the lifetime of the pool.
     """
 
-    file_path: Optional[str] = Field(default=None)
-    transformations: Optional[TransformationSequence] = Field(default=transformation_base64)
+    file_path: str | None = Field(default=None)
+    transformations: TransformationSequence | None = Field(default=transformation_base64)
 
     _file: Any = PrivateAttr(default=None)
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def _resolve_memory_global_id(self) -> str:
         """Return the active policy's memory global ID."""
         from ... import active_policy
+
         return active_policy.central.memory.global_id
 
     def model_post_init(self, __context: Any) -> None:
@@ -38,6 +41,7 @@ class HDF5Pool(_LAILA_IDENTIFIABLE_POOL):
         super().model_post_init(__context)
         if self.file_path is None:
             from ...macros.defaults import LAILA_DEFAULT_DIRECTORIES
+
             pool_dir = os.path.join(LAILA_DEFAULT_DIRECTORIES["pools"], self.uuid)
             os.makedirs(pool_dir, exist_ok=True)
             self.file_path = os.path.join(pool_dir, "pool.h5py")
@@ -63,7 +67,7 @@ class HDF5Pool(_LAILA_IDENTIFIABLE_POOL):
         """Decode a storage key back to the logical key."""
         return unquote(key)
 
-    def _read_raw(self, key: str) -> Optional[str]:
+    def _read_raw(self, key: str) -> str | None:
         """Read the raw UTF-8 string for *key*, or ``None``."""
         skey = self._storage_key(key)
         root = self._root()
@@ -81,7 +85,7 @@ class HDF5Pool(_LAILA_IDENTIFIABLE_POOL):
             self._file = None
 
     # ---------------- mapping API ----------------
-    def _read(self, key: str) -> Optional[Any]:
+    def _read(self, key: str) -> Any | None:
         """Retrieve the JSON value for *key*, or ``None`` if absent."""
         with self.atomic():
             raw = self._read_raw(key)

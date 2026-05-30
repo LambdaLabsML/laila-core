@@ -15,19 +15,21 @@ trivial coroutine functions so the runner sees a uniform contract --
 no separate "sync vs async submit" plumbing is needed downstream.
 """
 
-from typing import Callable, Any, Iterable, List, Union, Tuple, Optional
-from pydantic import Field, PrivateAttr, ConfigDict
-from .....basics.definitions.cli_capable import CLIExempt, _LAILA_CLI_CAPABLE_CLASS
-from typing import Dict
 import threading
+from collections.abc import Callable, Iterable
+from typing import Any
 
-from .future.future import Future
+from pydantic import PrivateAttr
+
+from .....basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS, CLIExempt
+from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+from .....macros.strings import _CENTRAL_COMMAND_SCOPE
 from .exceptions import (
     _check_no_pending_submit_owner,
     ensure_coroutine_function,
 )
-from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
-from .....macros.strings import _CENTRAL_COMMAND_SCOPE
+from .future.future import Future
+
 
 class _LAILA_IDENTIFIABLE_CENTRAL_COMMAND(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
     """Central command -- task-force registry, work submission, and guarantee scopes.
@@ -52,12 +54,10 @@ class _LAILA_IDENTIFIABLE_CENTRAL_COMMAND(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENT
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_CENTRAL_COMMAND_SCOPE]))
 
-
-    taskforces: Dict[str, Any] = CLIExempt(default_factory=dict)
-    alpha_taskforce: Optional[str] = None
-    policy_id: Optional[_LAILA_IDENTIFIABLE_OBJECT | str] = CLIExempt(default=None)
+    taskforces: dict[str, Any] = CLIExempt(default_factory=dict)
+    alpha_taskforce: str | None = None
+    policy_id: _LAILA_IDENTIFIABLE_OBJECT | str | None = CLIExempt(default=None)
     _guarantee_local: threading.local = PrivateAttr(default_factory=threading.local)
-
 
     def model_post_init(self, __context: Any) -> None:
         """Create a default async taskforce if none was registered.
@@ -72,6 +72,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_COMMAND(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENT
         """
         if len(self.taskforces) == 0:
             from .....macros.defaults import DefaultTaskForce
+
             tf = DefaultTaskForce(policy_id=self.policy_id)
             self.taskforces[tf.global_id] = tf
             self.alpha_taskforce = tf.global_id
@@ -81,9 +82,8 @@ class _LAILA_IDENTIFIABLE_CENTRAL_COMMAND(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENT
 
         return self
 
-
     def add_taskforce(
-        self, 
+        self,
         taskforce: Any,
     ):
         """Register a task-force with this central command.
@@ -100,7 +100,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_COMMAND(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENT
         """
         self.taskforces[taskforce.global_id] = taskforce
 
-    def _guarantee_stack(self) -> list[Dict[str, Future]]:
+    def _guarantee_stack(self) -> list[dict[str, Future]]:
         """Return the thread-local stack of open guarantee scopes.
 
         The stack lives on a :class:`threading.local` so each thread
@@ -153,14 +153,13 @@ class _LAILA_IDENTIFIABLE_CENTRAL_COMMAND(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENT
         for scope_futures in stack:
             scope_futures[future.global_id] = future
 
-
     def submit(
         self,
         tasks: Iterable[Callable[[], Any]],
         wait: bool = False,
         *,
-        taskforce_id: Optional[str] = None
-    ) -> Union[Future, List[Any], Any]:
+        taskforce_id: str | None = None,
+    ) -> Future | list[Any] | Any:
         """Submit zero-argument callables to a task-force for execution.
 
         Calling protocol
@@ -219,16 +218,11 @@ class _LAILA_IDENTIFIABLE_CENTRAL_COMMAND(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENT
         wrapped = [ensure_coroutine_function(t) for t in tasks]
 
         return self.taskforces[taskforce_id].submit(
-            tasks = wrapped,
-            wait = wait,
+            tasks=wrapped,
+            wait=wait,
         )
 
-    
-    def shutdown(
-        self, 
-        wait: bool = True, 
-        cancel_pending: bool = False
-    ) -> None:
+    def shutdown(self, wait: bool = True, cancel_pending: bool = False) -> None:
         """Shut down every registered task-force.
 
         Iterates over ``self.taskforces.values()`` and calls
@@ -249,13 +243,8 @@ class _LAILA_IDENTIFIABLE_CENTRAL_COMMAND(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENT
             this flag.
         """
         for tf in self.taskforces.values():
-            tf.shutdown(
-                wait = wait,
-                cancel_pending = cancel_pending
-            )
+            tf.shutdown(wait=wait, cancel_pending=cancel_pending)
 
     def __await__(self):
         """Async awaiting is not yet supported."""
         raise NotImplementedError
-
-    

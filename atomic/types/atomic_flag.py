@@ -12,13 +12,19 @@ For coordinated wait-for-state semantics, prefer
 :class:`threading.Event`. For atomically-incrementable counters,
 see :class:`AtomicInt`.
 """
+
 from __future__ import annotations
+
 from threading import RLock
-from pydantic import BaseModel, Field, PrivateAttr, ConfigDict
+
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+
 from ..definitions.locally_atomic_object import _LAILA_LOCALLY_ATOMIC_OBJECT
+
 
 class AtomicFlag(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel):
     """Thread-safe boolean flag with atomic set/clear/toggle/get operations."""
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     value: bool = Field(default=False)
@@ -52,16 +58,18 @@ class AtomicFlag(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel):
     class _Atomic:
         """Context manager that holds the flag's lock."""
 
-        def __init__(self, parent: "AtomicFlag"):
+        def __init__(self, parent: AtomicFlag):
             """Initialize with the parent flag."""
             self._p = parent
-        def __enter__(self) -> "AtomicFlag":
+
+        def __enter__(self) -> AtomicFlag:
             self._p._lock.acquire()
             return self._p
+
         def __exit__(self, exc_type, exc, tb):
             self._p._lock.release()
 
-    def atomic(self) -> "_Atomic":
+    def atomic(self) -> _Atomic:
         """Return a context manager for batched lock-held operations."""
         return AtomicFlag._Atomic(self)
 

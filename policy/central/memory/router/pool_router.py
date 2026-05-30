@@ -18,15 +18,17 @@ Routing precedence used by :meth:`PoolRouter.route`:
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Dict, Iterable, Iterator, Mapping, List
-from pydantic import BaseModel, Field, PrivateAttr
-from .....basics.definitions.cli_capable import CLIExempt, _LAILA_CLI_CAPABLE_CLASS
-from queue import PriorityQueue
 
+from queue import PriorityQueue
+from typing import Any
+
+from pydantic import ConfigDict, Field, PrivateAttr
+
+from .....basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS, CLIExempt
 from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
-from .....macros.strings import _POOL_ROUTER_SCOPE, _DEFAULT_POOL_NICKNAME
-from .....pool.schema.base import _LAILA_IDENTIFIABLE_POOL
 from .....entry import Entry
+from .....macros.strings import _DEFAULT_POOL_NICKNAME, _POOL_ROUTER_SCOPE
+from .....pool.schema.base import _LAILA_IDENTIFIABLE_POOL
 
 
 class _LAILA_IDENTIFIABLE_POOL_ROUTER(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
@@ -42,14 +44,11 @@ class _LAILA_IDENTIFIABLE_POOL_ROUTER(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIA
     """
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_POOL_ROUTER_SCOPE]))
-    pools: Optional[Dict[str,_LAILA_IDENTIFIABLE_POOL]] = CLIExempt(default_factory = dict)
-    pools_pq: Optional[PriorityQueue] = CLIExempt(default_factory = PriorityQueue)
-    pools_nicknames: Optional[Dict[str,str]] = Field(default_factory = dict)
+    pools: dict[str, _LAILA_IDENTIFIABLE_POOL] | None = CLIExempt(default_factory=dict)
+    pools_pq: PriorityQueue | None = CLIExempt(default_factory=PriorityQueue)
+    pools_nicknames: dict[str, str] | None = Field(default_factory=dict)
 
-
-    class Config:
-        arbitrary_types_allowed = True
-
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def model_post_init(self, __context: Any) -> None:
         """Auto-register a :class:`DefaultPool` (in-memory) when no pools were supplied.
@@ -62,19 +61,15 @@ class _LAILA_IDENTIFIABLE_POOL_ROUTER(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIA
         """
         if len(self.pools) == 0:
             from .....macros.defaults import DefaultPool
-            self.extend(
-                pool = DefaultPool(), 
-                affinity=1,
-                pool_nickname=_DEFAULT_POOL_NICKNAME
-            )
 
+            self.extend(pool=DefaultPool(), affinity=1, pool_nickname=_DEFAULT_POOL_NICKNAME)
 
     def extend(
         self,
         pool: _LAILA_IDENTIFIABLE_POOL,
         *,
-        affinity: Optional[float] = None,
-        pool_nickname: Optional[str] = None,
+        affinity: float | None = None,
+        pool_nickname: str | None = None,
     ):
         """Register a pool with optional affinity priority and nickname.
 
@@ -102,21 +97,20 @@ class _LAILA_IDENTIFIABLE_POOL_ROUTER(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIA
             ``pool_nickname`` kwarg on memory operations.
         """
         if affinity is None:
-            affinity = 0 #farthest away
+            affinity = 0  # farthest away
 
         self.pools_pq.put((-affinity, pool.global_id))
         self.pools[pool.global_id] = pool
         if pool_nickname is not None:
             self.pools_nicknames[pool_nickname] = pool.global_id
 
-
     def route(
         self,
-        entries: List[Entry]|List[str],
+        entries: list[Entry] | list[str],
         *,
-        pool_id: Optional[str] = None,
-        pool_nickname: Optional[str] = None,
-        affinity: Optional[float] = None,
+        pool_id: str | None = None,
+        pool_nickname: str | None = None,
+        affinity: float | None = None,
     ):
         """Resolve the destination pool for *entries*.
 
@@ -153,11 +147,10 @@ class _LAILA_IDENTIFIABLE_POOL_ROUTER(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIA
             return self.pools[pool_id]
         return self._route_by_nickname(pool_nickname=pool_nickname)
 
-
     def _route_by_nickname(
-        self, 
+        self,
         *,
-        pool_nickname: Optional[str] = None,
+        pool_nickname: str | None = None,
     ) -> _LAILA_IDENTIFIABLE_POOL:
         """Resolve a pool by nickname, falling back to the default pool.
 

@@ -1,19 +1,22 @@
 """Google Cloud Storage pool implementation."""
+
 from __future__ import annotations
 
-from typing import Optional, Any, Iterable, Iterator
-from pydantic import Field, PrivateAttr
-from urllib.parse import quote, unquote
 import json
+from collections.abc import Iterable, Iterator
+from typing import Any
+from urllib.parse import quote, unquote
 
-from ..schema.base import _LAILA_IDENTIFIABLE_POOL
-from ...entry.compdata.transformation import TransformationSequence
+from pydantic import ConfigDict, Field, PrivateAttr
+
 from ...entry import transformation_base64
+from ...entry.compdata.transformation import TransformationSequence
+from ..schema.base import _LAILA_IDENTIFIABLE_POOL
 
 try:
+    from google.api_core.exceptions import NotFound
     from google.cloud import storage
     from google.oauth2 import service_account
-    from google.api_core.exceptions import NotFound
 except ImportError:
     storage = None  # type: ignore
     service_account = None  # type: ignore
@@ -27,16 +30,15 @@ class GCSPool(_LAILA_IDENTIFIABLE_POOL):
     can use explicit service-account info or Application Default Credentials.
     """
 
-    service_account_info: Optional[dict[str, Any]] = Field(default=None)
-    project_id: Optional[str] = Field(default=None)
+    service_account_info: dict[str, Any] | None = Field(default=None)
+    project_id: str | None = Field(default=None)
     bucket_name: str = Field(...)
-    transformations: Optional[TransformationSequence] = Field(default=transformation_base64)
+    transformations: TransformationSequence | None = Field(default=transformation_base64)
 
     _client: Any = PrivateAttr(default=None)
     _bucket: Any = PrivateAttr(default=None)
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def _get_client(self):
         """Return the GCS ``storage.Client``, creating it on first call."""
@@ -79,7 +81,7 @@ class GCSPool(_LAILA_IDENTIFIABLE_POOL):
         self._client = None
         self._bucket = None
 
-    def _read(self, key: str) -> Optional[Any]:
+    def _read(self, key: str) -> Any | None:
         """Retrieve the JSON value for *key*, or ``None`` if absent."""
         blob = self._get_bucket().blob(self._object_key(key))
         try:
@@ -135,6 +137,7 @@ class GCSPool(_LAILA_IDENTIFIABLE_POOL):
         Iterable[str]
             Pool keys.
         """
+
         def _iter_keys() -> Iterator[str]:
             for blob in self._get_client().list_blobs(self.bucket_name):
                 yield self._logical_key(blob.name)

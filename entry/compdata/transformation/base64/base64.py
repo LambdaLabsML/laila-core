@@ -15,7 +15,8 @@ so callers can, for example, configure a URL-safe alphabet via
 """
 
 import base64
-from typing import Any, Union
+from typing import Any
+
 from ..base import _data_transformation
 
 
@@ -40,7 +41,7 @@ class Base64(_data_transformation):
             "    return base64.b64decode(inp, **kwargs)\n"
         )
 
-    def forward(self, data: Union[bytes, bytearray, memoryview]) -> str:
+    def forward(self, data: bytes | bytearray | memoryview) -> str:
         """Encode binary data -> Base64 UTF-8 string."""
         if isinstance(data, memoryview):
             data = data.tobytes()
@@ -50,7 +51,7 @@ class Base64(_data_transformation):
         out = base64.b64encode(bytes(data), **self.forward_kwargs)
         return out.decode("utf-8")
 
-    def backward(self, payload: Union[str, bytes, bytearray, memoryview]) -> bytes:
+    def backward(self, payload: str | bytes | bytearray | memoryview) -> bytes:
         """Decode Base64 (str/bytes/bytearray/memoryview) -> raw bytes."""
         if isinstance(payload, memoryview):
             payload = payload.tobytes()

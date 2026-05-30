@@ -1,0 +1,61 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: "America/Los_Angeles"
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - python
+    groups:
+      runtime:
+        applies-to: version-updates
+        patterns:
+          - "pydantic*"
+          - "dotmap"
+          - "msgpack"
+          - "websockets"
+          - "jsonrpcserver"
+          - "numpy"
+      backends:
+        applies-to: version-updates
+        patterns:
+          - "boto3"
+          - "aioboto3"
+          - "google-cloud-storage"
+          - "azure-storage-blob"
+          - "psycopg*"
+          - "pymongo"
+          - "redis"
+          - "duckdb"
+          - "h5py"
+          - "huggingface_hub"
+      dev-tools:
+        applies-to: version-updates
+        patterns:
+          - "ruff"
+          - "mypy"
+          - "pytest*"
+          - "pre-commit"
+          - "build"
+          - "twine"
+          - "nbstripout"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    labels:
+      - dependencies
+      - github-actions
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        applies-to: version-updates
+        patterns:
+          - "*"

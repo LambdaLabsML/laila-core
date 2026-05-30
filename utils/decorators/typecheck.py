@@ -7,6 +7,7 @@ signature, finds the named parameter, and -- if its bound value is
 not a :class:`list` / :class:`set` / :class:`frozenset` -- wraps it
 in a single-element list before forwarding the call.
 """
+
 from functools import wraps
 from inspect import signature
 
@@ -42,6 +43,7 @@ def ensure_list(arg_name: str):
         At call time, if *arg_name* is not bound by the call (e.g.
         the parameter is missing from the function's signature).
     """
+
     def decorator(fn):
         sig = signature(fn)
 
@@ -61,4 +63,5 @@ def ensure_list(arg_name: str):
             return fn(*bound.args, **bound.kwargs)
 
         return wrapper
+
     return decorator

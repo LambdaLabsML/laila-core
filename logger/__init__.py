@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from .logger import Logger, _install_null_handler, _LAILA_LOGGER_NAME
+from .logger import _LAILA_LOGGER_NAME, Logger, _install_null_handler
 from .record import build_record, normalize_level, numeric_level
 
 
@@ -54,8 +54,8 @@ def get_logger() -> Logger:
 def enable_logging(
     level: str = "DEBUG",
     *,
-    pool_nickname: Optional[str] = None,
-    pool_id: Optional[str] = None,
+    pool_nickname: str | None = None,
+    pool_id: str | None = None,
     display: bool = False,
     capture_traceback: bool = False,
 ) -> Logger:
@@ -125,14 +125,14 @@ def set_log_level(level: str) -> None:
 
 
 __all__ = [
+    "_LAILA_LOGGER_NAME",
     "Logger",
+    "_install_null_handler",
     "build_record",
+    "disable_logging",
+    "enable_logging",
+    "get_logger",
     "normalize_level",
     "numeric_level",
-    "get_logger",
-    "enable_logging",
-    "disable_logging",
     "set_log_level",
-    "_install_null_handler",
-    "_LAILA_LOGGER_NAME",
 ]

@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/laila-core)](https://pypi.org/project/laila-core/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/LambdaLabsML/laila-core/blob/main/LICENSE)
 [![Status](https://img.shields.io/badge/status-beta%201.0-orange)]()
-[![Docs](https://img.shields.io/badge/docs-tutorials-blueviolet)](http://13.57.186.112/)
+[![Docs](https://img.shields.io/badge/docs-tutorials-blueviolet)](https://lambdalabsml.github.io/laila-core/)
 
 **Lambda's Interdisciplinary Large Atlas**
 
@@ -97,7 +97,8 @@ s3_pool = S3Pool(
 laila.memory.extend(hdf5_pool, pool_nickname="cache_hdf5")
 laila.memory.extend(s3_pool, pool_nickname="origin_s3")
 
-# Wire a three-tier proxy chain: memory → HDF5 → S3
+# Wire a three-tier proxy chain: memory ← HDF5 ← S3
+# (arrows match `<<` — each tier pulls from the one on its right)
 laila.alpha_pool << hdf5_pool << s3_pool
 
 # Store an entry directly in S3

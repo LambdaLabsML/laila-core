@@ -1,14 +1,17 @@
 """Hugging Face Hub pool implementation."""
+
 from __future__ import annotations
 
-from typing import Optional, Any, Iterable, Iterator
-from pydantic import Field, PrivateAttr
-from urllib.parse import quote, unquote
 import json
+from collections.abc import Iterable, Iterator
+from typing import Any
+from urllib.parse import quote, unquote
 
-from ..schema.base import _LAILA_IDENTIFIABLE_POOL
-from ...entry.compdata.transformation import TransformationSequence
+from pydantic import ConfigDict, Field, PrivateAttr
+
 from ...entry import transformation_base64
+from ...entry.compdata.transformation import TransformationSequence
+from ..schema.base import _LAILA_IDENTIFIABLE_POOL
 
 try:
     from huggingface_hub import HfApi, hf_hub_download
@@ -30,16 +33,13 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
     repo_id: str = Field(...)
     repo_type: str = Field(default="model")
     revision: str = Field(default="main")
-    token: Optional[str] = Field(default=None)
+    token: str | None = Field(default=None)
     path_prefix: str = Field(default="laila_pool")
-    transformations: Optional[TransformationSequence] = Field(default=transformation_base64)
+    transformations: TransformationSequence | None = Field(default=transformation_base64)
 
     _api: Any = PrivateAttr(default=None)
 
-    class Config:
-        """Pydantic model configuration."""
-
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def _get_api(self):
         """Return the ``HfApi`` instance, creating it on first call."""
@@ -76,7 +76,7 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
         """Release the API handle."""
         self._api = None
 
-    def _read(self, key: str) -> Optional[Any]:
+    def _read(self, key: str) -> Any | None:
         """Download and parse the JSON file for *key*, or return ``None``."""
         with self.atomic():
             try:
@@ -87,7 +87,7 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
                     revision=self.revision,
                     token=self.token,
                 )
-                with open(path, "r", encoding="utf-8") as f:
+                with open(path, encoding="utf-8") as f:
                     raw = f.read()
                 return json.loads(raw)
             except EntryNotFoundError:

@@ -43,11 +43,13 @@ Implementation notes
 """
 
 from __future__ import annotations
+
 import asyncio
-import time
-from concurrent.futures import TimeoutError as FutureTimeoutError
-from typing import Any, Callable, List, Optional, Union
 import threading
+import time
+from collections.abc import Callable
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from typing import Any
 
 from pydantic import ConfigDict, Field, PrivateAttr
 
@@ -56,8 +58,7 @@ from .future_identity import _LAILA_IDENTIFIABLE_FUTURE
 from .future_status import FutureStatus
 from .group_future import GroupFuture
 
-
-StageFn = Callable[[Any], Union[Future, GroupFuture, _LAILA_IDENTIFIABLE_FUTURE]]
+StageFn = Callable[[Any], Future | GroupFuture | _LAILA_IDENTIFIABLE_FUTURE]
 
 
 _PARK: dict[int, list] = {}
@@ -89,9 +90,9 @@ class ComplexFuture(Future):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    stage_future_ids: List[str] = Field(default_factory=list)
+    stage_future_ids: list[str] = Field(default_factory=list)
 
-    _stage_fns: List[StageFn] = PrivateAttr(default_factory=list)
+    _stage_fns: list[StageFn] = PrivateAttr(default_factory=list)
     _stage_lock: threading.RLock = PrivateAttr(default_factory=threading.RLock)
     _current_idx: int = PrivateAttr(default=-1)
     _terminated: bool = PrivateAttr(default=False)
@@ -104,9 +105,7 @@ class ComplexFuture(Future):
             raise ValueError("ComplexFuture requires at least one stage")
         for idx, fn in enumerate(stage_fns):
             if not callable(fn):
-                raise TypeError(
-                    f"stage_fns[{idx}] must be callable, got {type(fn).__name__}"
-                )
+                raise TypeError(f"stage_fns[{idx}] must be callable, got {type(fn).__name__}")
         # Pydantic v2 wipes private attributes during validate_python (called
         # inside super().__init__), so we cannot stash stage_fns on `self`
         # before the super call. Instead, hand them off via a thread-local
@@ -145,13 +144,14 @@ class ComplexFuture(Future):
         """Total number of stages declared at construction."""
         return len(self._stage_fns)
 
-    def stage_futures(self) -> List[Future]:
+    def stage_futures(self) -> list[Future]:
         """Resolve and return the list of stage futures constructed so far.
 
         Lookups go through the active policy's future bank.
         """
         from ....... import _local_policies
-        out: List[Future] = []
+
+        out: list[Future] = []
         for fid in self.stage_future_ids:
             for policy in _local_policies.values():
                 if fid in policy.future_bank:
@@ -172,6 +172,7 @@ class ComplexFuture(Future):
             return value
         if isinstance(value, _LAILA_IDENTIFIABLE_FUTURE):
             from ....... import _local_policies
+
             gid = value.global_id
             for policy in _local_policies.values():
                 if gid in policy.future_bank:
@@ -217,7 +218,7 @@ class ComplexFuture(Future):
             if self._status == FutureStatus.NOT_STARTED:
                 self.status = FutureStatus.RUNNING
 
-    def _watch_group_future(self, idx: int, gf: "GroupFuture") -> None:
+    def _watch_group_future(self, idx: int, gf: GroupFuture) -> None:
         """Drive a :class:`GroupFuture` stage via a daemon-thread poll loop.
 
         ``GroupFuture`` exposes its status as a percentage breakdown rather
@@ -227,6 +228,7 @@ class ComplexFuture(Future):
         forward to :meth:`_on_stage_done` / :meth:`_on_stage_failed` exactly
         as we would for a leaf future.
         """
+
         def _poll():
             poll_interval_s = 0.01
             while True:
@@ -238,16 +240,19 @@ class ComplexFuture(Future):
             try:
                 results = gf.result
             except Exception as exc:
+
                 class _Holder:
                     def __init__(self, e):
                         self.exception = e
                         self.status = FutureStatus.ERROR
+
                 self._on_stage_failed(idx, _Holder(exc))
                 return
 
             class _Holder:
                 def __init__(self, r):
                     self.result = r
+
             self._on_stage_done(idx, _Holder(results))
 
         threading.Thread(target=_poll, name=f"ComplexFuture-GF-watch-{idx}", daemon=True).start()
@@ -286,7 +291,7 @@ class ComplexFuture(Future):
 
     def _fail(
         self,
-        exc: Optional[BaseException],
+        exc: BaseException | None,
         status: FutureStatus = FutureStatus.ERROR,
     ) -> None:
         """Mark the parent as failed/cancelled and seal further progress."""
@@ -295,7 +300,7 @@ class ComplexFuture(Future):
         self.result = None
         self.status = status
 
-    def wait(self, timeout: Optional[float] = None) -> Any:
+    def wait(self, timeout: float | None = None) -> Any:
         """Block until the pipeline terminates.
 
         Polls the parent status (which is driven by stage callbacks). When
@@ -308,6 +313,7 @@ class ComplexFuture(Future):
             If called from a thread that owns an async event loop.
         """
         from ...exceptions import _check_not_loop_thread
+
         _check_not_loop_thread()
 
         deadline = None if timeout is None else time.monotonic() + timeout
@@ -333,6 +339,7 @@ class ComplexFuture(Future):
 
     def __await__(self):
         """Await the pipeline's terminal status by yielding to the event loop."""
+
         async def _await_terminal():
             poll_interval_s = 0.01
             while True:

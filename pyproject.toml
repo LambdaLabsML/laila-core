@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "laila-core"
-version = "1.0.6"
+version = "1.0.8"
 description = "Lambda's Interdisciplinary Large Atlas"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,12 +12,12 @@ authors = [
   { name = "Amir Zadeh" },
 ]
 dependencies = [
-  "pydantic",
-  "dotmap",
-  "msgpack",
-  "websockets",
-  "jsonrpcserver",
-  "numpy",
+  "pydantic>=2.5,<3",
+  "dotmap>=1.3.30,<2",
+  "msgpack>=1.0.5,<2",
+  "websockets>=12.0,<14",
+  "jsonrpcserver>=5.0.9,<6",
+  "numpy>=1.26,<3",
 ]
 classifiers = [
   "Development Status :: 4 - Beta",
@@ -32,45 +32,52 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-s3 = ["boto3", "aioboto3"]
-cloudflare = ["boto3", "aioboto3"]
-backblaze = ["boto3", "aioboto3"]
-gcs = ["google-cloud-storage"]
-azure = ["azure-storage-blob"]
-postgres = ["psycopg[binary]"]
-mongo = ["pymongo"]
-redis = ["redis"]
-duckdb = ["duckdb"]
-hdf5 = ["h5py"]
-huggingface = ["huggingface_hub"]
-crypto = ["cryptography"]
-torch = ["torch", "pillow"]
-imaging = ["imageio", "pillow"]
+s3 = ["boto3>=1.34,<2", "aioboto3>=12.3,<14"]
+cloudflare = ["boto3>=1.34,<2", "aioboto3>=12.3,<14"]
+backblaze = ["boto3>=1.34,<2", "aioboto3>=12.3,<14"]
+gcs = ["google-cloud-storage>=2.14,<4"]
+azure = ["azure-storage-blob>=12.19,<13"]
+postgres = ["psycopg[binary]>=3.1,<4"]
+mongo = ["pymongo>=4.6,<5"]
+redis = ["redis>=5.0,<6"]
+duckdb = ["duckdb>=0.10,<2"]
+hdf5 = ["h5py>=3.10,<4"]
+huggingface = ["huggingface_hub>=0.20,<1"]
+crypto = ["cryptography>=42.0,<46"]
+torch = ["torch>=2.1,<3", "pillow>=10.0,<12"]
+imaging = ["imageio>=2.34,<3", "pillow>=10.0,<12"]
 docs = [
-  "mkdocs-material",
-  "mkdocstrings[python]",
-  "mkdocs-gen-files",
-  "mkdocs-literate-nav",
+  "mkdocs-material>=9.5,<10",
+  "mkdocstrings[python]>=0.24,<1",
+  "mkdocs-gen-files>=0.5,<1",
+  "mkdocs-literate-nav>=0.6,<1",
 ]
 dev = [
-  "pytest",
-  "nbstripout",
+  "pytest>=8.0,<10",
+  "pytest-cov>=4.1,<7",
+  "pytest-xdist>=3.5,<4",
+  "nbstripout>=0.6,<1",
+  "ruff>=0.5,<1",
+  "mypy>=1.10,<2",
+  "build>=1.0,<2",
+  "twine>=5.0,<7",
+  "pre-commit>=3.7,<4",
 ]
 all = [
-  "boto3",
-  "aioboto3",
-  "google-cloud-storage",
-  "azure-storage-blob",
-  "psycopg[binary]",
-  "pymongo",
-  "redis",
-  "duckdb",
-  "h5py",
-  "huggingface_hub",
-  "cryptography",
-  "torch",
-  "pillow",
-  "imageio",
+  "boto3>=1.34,<2",
+  "aioboto3>=12.3,<14",
+  "google-cloud-storage>=2.14,<4",
+  "azure-storage-blob>=12.19,<13",
+  "psycopg[binary]>=3.1,<4",
+  "pymongo>=4.6,<5",
+  "redis>=5.0,<6",
+  "duckdb>=0.10,<2",
+  "h5py>=3.10,<4",
+  "huggingface_hub>=0.20,<1",
+  "cryptography>=42.0,<46",
+  "torch>=2.1,<3",
+  "pillow>=10.0,<12",
+  "imageio>=2.34,<3",
 ]
 
 [project.urls]
@@ -144,4 +151,148 @@ packages = [
 
 [tool.setuptools.package-dir]
 laila = "."
+
+# ── Tooling ───────────────────────────────────────────────────────────────────
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [
+  ".venv",
+  "site",
+  "build",
+  "dist",
+  "_dev",
+  "**/_dev",
+  "vault",
+  "tutorials",
+  "examples",
+]
+
+[tool.ruff.lint]
+# Baseline kept intentionally pragmatic. The codebase predates ruff/CI, so
+# `PL` (pylint) and `SIM` (flake8-simplify) rule sets are disabled wholesale
+# rather than ignoring 30+ individual codes -- they fight several intentional
+# patterns (deliberate lazy/circular imports, try/except/pass for best-effort
+# cleanup paths, lambdas in dispatch tables, etc.). Re-enable per-rule as the
+# codebase is normalized.
+select = [
+  "E",   # pycodestyle errors
+  "F",   # pyflakes
+  "W",   # pycodestyle warnings
+  "I",   # isort
+  "B",   # flake8-bugbear
+  "UP",  # pyupgrade
+  "RUF", # ruff-specific
+]
+ignore = [
+  "E501",   # handled by formatter
+  "E731",   # lambda assignment (intentional in dispatch tables / closures)
+  "E402",   # module-level import-not-at-top (used for conditional imports)
+  "F405",   # may-be-undefined-from-star-import (re-exports via star imports)
+  "F811",   # redefined-while-unused (intentional overrides in some modules)
+  "F841",   # unused-variable (intentional destructuring / future use)
+  "B007",   # unused-loop-control-variable
+  "B008",   # function-call-in-default-argument (used for defaults)
+  "B017",   # assert-raises-exception (broad assertions in tests)
+  "B018",   # useless-expression (intentional attribute access for side effects)
+  "B023",   # function-uses-loop-variable (closures captured intentionally)
+  "B904",   # raise-without-from-inside-except (best-effort error paths)
+  "B905",   # zip-without-explicit-strict (zip semantics already explicit)
+  "UP028",  # yield-from preferred over yield (intentional generator shape)
+  "UP042",  # replace `str, Enum` with `StrEnum`
+  "RUF001", # ambiguous-unicode-character (one-off in a comment)
+  "RUF005", # collection-literal-concatenation
+  "RUF006", # asyncio-dangling-task (intentional fire-and-forget)
+  "RUF012", # mutable-class-default (acceptable in our taskforce models)
+  "RUF013", # implicit-optional (used in keyword args)
+  "RUF015", # unnecessary-iterable-allocation-for-first-element
+  "RUF059", # unused-unpacked-variable
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "F403", "E402"]
+# Tests intentionally use single-letter math names (I for identity, etc.)
+# and broader assert patterns.
+"tests/**/*.py" = ["B011", "E741", "S101"]
+"docs/**/*.py" = ["I001"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+check_untyped_defs = true
+ignore_missing_imports = true
+# Strictness is intentionally low to start; tighten module-by-module via overrides.
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+exclude = [
+  '^(\.venv|site|build|dist|_dev|vault|tutorials|examples)/',
+]
+
+[[tool.mypy.overrides]]
+module = [
+  "dotmap",
+  "msgpack",
+  "jsonrpcserver",
+  "boto3",
+  "aioboto3",
+  "h5py",
+  "duckdb",
+  "imageio",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+# `importlib` mode lets identically-named test modules coexist under
+# different packages (e.g. `tests/.../edge_cases/unit_tests/` paths repeat).
+addopts = [
+  "-ra",
+  "--strict-markers",
+  "--strict-config",
+  "--tb=short",
+  "--import-mode=importlib",
+]
+markers = [
+  "cloud: tests that require external cloud credentials (S3/GCS/Azure/etc.)",
+  "slow: long-running tests (perf, large datasets)",
+  "integration: cross-component integration tests",
+]
+filterwarnings = [
+  "error::pydantic.PydanticDeprecatedSince20",
+  "default",
+  "ignore::DeprecationWarning:dotmap.*",
+  "ignore::ResourceWarning",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["laila"]
+omit = [
+  "tests/*",
+  "*/_dev/*",
+  "examples/*",
+  "tutorials/*",
+  "docs/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+  "pragma: no cover",
+  "raise NotImplementedError",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+  "\\.\\.\\.",
+]
+show_missing = true
+skip_covered = false
 

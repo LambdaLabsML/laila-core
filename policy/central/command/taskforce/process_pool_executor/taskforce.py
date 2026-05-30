@@ -6,19 +6,20 @@ import multiprocessing
 import os
 import pickle
 import threading
+from collections.abc import Callable, Iterable
 from concurrent.futures import ProcessPoolExecutor
-from typing import Callable, Any, Iterable, Tuple, List, Union, Optional, Dict
+from typing import Any
 
-from pydantic import Field, PrivateAttr, ConfigDict
+from pydantic import ConfigDict, Field, PrivateAttr
 
-from .future import ProcessPackageFuture
-from ...schema.future.future.group_future import GroupFuture
 from ...schema.future.future.future_status import FutureStatus
-from ..status import TaskForceStatus
+from ...schema.future.future.group_future import GroupFuture
 from ..base import _LAILA_IDENTIFIABLE_TASK_FORCE
+from ..status import TaskForceStatus
+from .future import ProcessPackageFuture
 
 
-def _process_runner(task: Callable[..., Any], args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Any:
+def _process_runner(task: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
     """Top-level picklable function that executes a task in a worker process."""
     return task(*args, **kwargs)
 
@@ -40,11 +41,11 @@ class PythonProcessPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
         description="Number of worker processes (minimum 4).",
     )
 
-    _cv: Optional[threading.Condition] = PrivateAttr(default=None)
-    _worker_pool: Optional[ProcessPoolExecutor] = PrivateAttr(default=None)
-    _stop: Optional[threading.Event] = PrivateAttr(default=None)
-    _dispatcher: Optional[threading.Thread] = PrivateAttr(default=None)
-    _submit_slots: Optional[threading.Semaphore] = PrivateAttr(default=None)
+    _cv: threading.Condition | None = PrivateAttr(default=None)
+    _worker_pool: ProcessPoolExecutor | None = PrivateAttr(default=None)
+    _stop: threading.Event | None = PrivateAttr(default=None)
+    _dispatcher: threading.Thread | None = PrivateAttr(default=None)
+    _submit_slots: threading.Semaphore | None = PrivateAttr(default=None)
     _mp_context: Any = PrivateAttr(default=None)
 
     def _on_start(self) -> None:
@@ -97,8 +98,8 @@ class PythonProcessPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
     def _validate_process_task(
         self,
         task: Callable[..., Any],
-        args: Tuple[Any, ...],
-        kwargs: Dict[str, Any],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
     ) -> None:
         """Verify that task, args, and kwargs are picklable."""
         try:
@@ -139,7 +140,7 @@ class PythonProcessPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
         self,
         tasks: Iterable[Callable[[], Any]],
         wait: bool = False,
-    ) -> Union[GroupFuture, Any]:
+    ) -> GroupFuture | Any:
         """Batch submit zero-arg callables.
 
         Returns future identities (single) or a hollow GroupFuture (multiple)
@@ -147,7 +148,7 @@ class PythonProcessPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
         """
         tasks = list(tasks)
 
-        futures: List[ProcessPackageFuture] = []
+        futures: list[ProcessPackageFuture] = []
         for task in tasks:
             fut = self._queue_submit(task)
             fut.taskforce_id = self.global_id

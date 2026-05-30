@@ -31,7 +31,7 @@ different host. It is structured around four collaborating pieces:
     long-lived TCP/IP sockets between two known peers).
 """
 
-from .schema.base import _LAILA_IDENTIFIABLE_COMMUNICATION
-from .proxy import RemotePolicyProxy
 from .protocols.base import _LAILA_IDENTIFIABLE_COMM_PROTOCOL
 from .protocols.tcpip import _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL
+from .proxy import RemotePolicyProxy
+from .schema.base import _LAILA_IDENTIFIABLE_COMMUNICATION

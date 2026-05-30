@@ -6,13 +6,13 @@ laila-pooled dicts) and substantially smaller for the common
 shallow-string-keyed cases.
 """
 
-from dataclasses import dataclass, field
-from typing import Dict, Any
-from pydantic import PrivateAttr
 import copy
+from typing import Any
 
-from .compdata import ComputationalData, register_cdtype, _scalar_len
+from pydantic import PrivateAttr
+
 from ..transformation.serialization import MsgpackSerializer
+from .compdata import ComputationalData, register_cdtype
 
 
 @register_cdtype(dict)
@@ -25,7 +25,7 @@ class CD_dict(ComputationalData):
     mask bugs).
     """
 
-    data: Dict[Any, Any]
+    data: dict[Any, Any]
     _serializer: MsgpackSerializer = PrivateAttr(default_factory=MsgpackSerializer)
 
     # --- Serializer getter/setter ---
@@ -63,7 +63,7 @@ class CD_dict(ComputationalData):
     def __deepcopy__(self, memo=None):
         """Return a deep copy."""
         return type(self)(copy.deepcopy(self.data, memo))
-    
+
     def __repr__(self):
         """Return a developer-friendly representation."""
         return f"CD_dict({self.data!r})"

@@ -14,11 +14,11 @@ extensible -- third-party Entry subclasses can be deserialized cleanly
 as long as they register their own builders at import time.
 """
 
-from typing import Any, Callable, Dict, Tuple
-
+from collections.abc import Callable
+from typing import Any
 
 # Each value is (sync_builder, async_builder).
-BUILDER_MAP: Dict[str, Tuple[Callable, Callable]] = {}
+BUILDER_MAP: dict[str, tuple[Callable, Callable]] = {}
 
 
 def register_builder(scope: str, sync_fn: Callable, async_fn: Callable) -> None:
@@ -91,10 +91,13 @@ def build_by_scope(in_dict: Any, *, asynchronous: bool = False, **kwargs) -> Any
             in_dict = json.loads(in_dict)
         else:
             from ..entry import Entry
+
             if isinstance(in_dict, Entry):
                 if asynchronous:
+
                     async def _identity(entry=in_dict):
                         return entry
+
                     return _identity()
                 return in_dict
             raise RuntimeError("Invalid input for entry build.")

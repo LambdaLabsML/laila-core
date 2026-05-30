@@ -17,17 +17,15 @@ full :class:`Future` instance per submission, and so that
 remote side.
 """
 
-from ast import Str
-from pydantic import BaseModel, Field, PrivateAttr
-import uuid
-from typing import Optional, List, Dict, Any
 import json
+from typing import Any
 
-from .future_status import FutureStatus
+from pydantic import PrivateAttr
+
+from .......atomic.definitions.locally_atomic_identifiable_object import (
+    _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT,
+)
 from .......basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
-from .......atomic.definitions.locally_atomic_identifiable_object import _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT
-
-
 from .......macros.strings import _FUTURE_SCOPE
 
 
@@ -55,20 +53,18 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         (e.g. ``"memorize:42"``, ``"build:my_model"``).
     """
 
-
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_FUTURE_SCOPE]))
 
-    taskforce_id: _LAILA_IDENTIFIABLE_OBJECT|str
+    taskforce_id: _LAILA_IDENTIFIABLE_OBJECT | str
 
-    policy_id: _LAILA_IDENTIFIABLE_OBJECT|str
+    policy_id: _LAILA_IDENTIFIABLE_OBJECT | str
 
-    future_group_id: Optional[_LAILA_IDENTIFIABLE_OBJECT|str] = None
+    future_group_id: _LAILA_IDENTIFIABLE_OBJECT | str | None = None
 
-    #is this created by another future?
-    precedence: Optional[_LAILA_IDENTIFIABLE_OBJECT|str] = None
+    # is this created by another future?
+    precedence: _LAILA_IDENTIFIABLE_OBJECT | str | None = None
 
-    purpose: Optional[str] = None
-
+    purpose: str | None = None
 
     def __str__(self) -> str:
         """
@@ -94,6 +90,7 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
     def status(self):
         """Read-only status resolved from the owning policy's future bank."""
         from ....... import _local_policies
+
         gid = self.global_id
         for policy in _local_policies.values():
             if gid in policy.future_bank:
@@ -104,6 +101,7 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
     def result(self):
         """Read-only result resolved from the owning policy's future bank."""
         from ....... import _local_policies
+
         gid = self.global_id
         for policy in _local_policies.values():
             if gid in policy.future_bank:
@@ -114,6 +112,7 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
     def data(self):
         """Read-only unwrapped Entry payload, resolved through the owning policy's future bank."""
         from ....... import _local_policies
+
         pid = self.policy_id.global_id if hasattr(self.policy_id, "global_id") else self.policy_id
         policy = _local_policies.get(pid)
         if policy is None:
@@ -127,6 +126,7 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
     def exception(self):
         """Read-only exception resolved from the owning policy's future bank."""
         from ....... import _local_policies
+
         gid = self.global_id
         for policy in _local_policies.values():
             if gid in policy.future_bank:
@@ -143,9 +143,11 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
             ``await fut`` from inside coroutines instead.
         """
         from ...exceptions import _check_not_loop_thread
+
         _check_not_loop_thread()
 
         from ....... import _local_policies
+
         gid = self.global_id
         for policy in _local_policies.values():
             if gid in policy.future_bank:
@@ -161,13 +163,14 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         completion signal).
         """
         from ....... import _local_policies
+
         gid = self.global_id
         for policy in _local_policies.values():
             if gid in policy.future_bank:
                 return policy.future_bank[gid].__await__()
         raise KeyError(f"Future {gid} not found in any local policy bank")
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         """
         Return a dict with all identity fields.
         """
@@ -179,10 +182,9 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
             "precedence": self.precedence,
             "purpose": self.purpose,
         }
-    
+
     def __json__(self) -> str:
         """
         Return a JSON string for the identity fields.
         """
         return json.dumps(self.as_dict())
-    

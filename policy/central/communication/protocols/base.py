@@ -24,12 +24,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import PrivateAttr, ConfigDict
+from pydantic import ConfigDict, PrivateAttr
 
-from .....basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS
 from .....atomic.definitions.locally_atomic_identifiable_object import (
     _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT,
 )
+from .....basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS
 from .....macros.strings import _COMM_PROTOCOL_SCOPE
 
 
@@ -114,9 +114,7 @@ class _LAILA_IDENTIFIABLE_COMM_PROTOCOL(
         """
         raise NotImplementedError
 
-    def send_rpc(
-        self, peer_id: str, path: list[str], args: tuple, kwargs: dict
-    ) -> Any:
+    def send_rpc(self, peer_id: str, path: list[str], args: tuple, kwargs: dict) -> Any:
         """Send an RPC frame to *peer_id* and block for the deserialized response.
 
         The frame layout is the protocol's choice; the only contract

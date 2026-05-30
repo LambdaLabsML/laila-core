@@ -1,18 +1,21 @@
 """Azure Blob Storage pool implementation."""
+
 from __future__ import annotations
 
-from typing import Optional, Any, Iterable, Iterator
-from pydantic import Field, PrivateAttr
-from urllib.parse import quote, unquote
 import json
+from collections.abc import Iterable, Iterator
+from typing import Any
+from urllib.parse import quote, unquote
 
-from ..schema.base import _LAILA_IDENTIFIABLE_POOL
-from ...entry.compdata.transformation import TransformationSequence
+from pydantic import ConfigDict, Field, PrivateAttr
+
 from ...entry import transformation_base64
+from ...entry.compdata.transformation import TransformationSequence
+from ..schema.base import _LAILA_IDENTIFIABLE_POOL
 
 try:
+    from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
     from azure.storage.blob import BlobServiceClient
-    from azure.core.exceptions import ResourceNotFoundError, ResourceExistsError
 except ImportError:
     BlobServiceClient = None  # type: ignore
     ResourceNotFoundError = Exception  # type: ignore
@@ -28,13 +31,12 @@ class AzurePool(_LAILA_IDENTIFIABLE_POOL):
 
     connection_string: str = Field(...)
     container_name: str = Field(...)
-    transformations: Optional[TransformationSequence] = Field(default=transformation_base64)
+    transformations: TransformationSequence | None = Field(default=transformation_base64)
 
     _client: Any = PrivateAttr(default=None)
     _container: Any = PrivateAttr(default=None)
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def _get_client(self):
         """Return the ``BlobServiceClient``, creating it on first call."""
@@ -68,7 +70,7 @@ class AzurePool(_LAILA_IDENTIFIABLE_POOL):
         self._client = None
         self._container = None
 
-    def _read(self, key: str) -> Optional[Any]:
+    def _read(self, key: str) -> Any | None:
         """Retrieve the JSON value for *key*, or ``None`` if absent."""
         blob = self._get_container().get_blob_client(self._object_key(key))
         try:
@@ -124,6 +126,7 @@ class AzurePool(_LAILA_IDENTIFIABLE_POOL):
         Iterable[str]
             Pool keys.
         """
+
         def _iter_keys() -> Iterator[str]:
             for blob in self._get_container().list_blobs():
                 yield self._logical_key(blob.name)

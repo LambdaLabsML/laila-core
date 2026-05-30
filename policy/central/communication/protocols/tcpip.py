@@ -27,12 +27,12 @@ import asyncio
 import logging
 import threading
 import uuid as _uuid
-from typing import Any, Dict, Optional
+from typing import Any
 
 from pydantic import Field, PrivateAttr
 
-from .base import _LAILA_IDENTIFIABLE_COMM_PROTOCOL
 from .. import protocol as rpc_protocol
+from .base import _LAILA_IDENTIFIABLE_COMM_PROTOCOL
 
 log = logging.getLogger(__name__)
 
@@ -72,12 +72,12 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
     peer_secret_key: str = Field(default_factory=lambda: _uuid.uuid4().hex)
 
     _server: Any = PrivateAttr(default=None)
-    _connections: Dict[str, Any] = PrivateAttr(default_factory=dict)
-    _pending_rpcs: Dict[str, Dict[str, Any]] = PrivateAttr(default_factory=dict)
-    _event_loop: Optional[asyncio.AbstractEventLoop] = PrivateAttr(default=None)
-    _loop_thread: Optional[threading.Thread] = PrivateAttr(default=None)
+    _connections: dict[str, Any] = PrivateAttr(default_factory=dict)
+    _pending_rpcs: dict[str, dict[str, Any]] = PrivateAttr(default_factory=dict)
+    _event_loop: asyncio.AbstractEventLoop | None = PrivateAttr(default=None)
+    _loop_thread: threading.Thread | None = PrivateAttr(default=None)
     _started: bool = PrivateAttr(default=False)
-    _bound_port: Optional[int] = PrivateAttr(default=None)
+    _bound_port: int | None = PrivateAttr(default=None)
 
     @property
     def bound_port(self) -> int:
@@ -132,7 +132,8 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
         policy_id = self._communication.policy_id if self._communication else None
         log.info(
             "TCP/IP protocol started for policy %s on port %s",
-            policy_id, self.bound_port,
+            policy_id,
+            self.bound_port,
         )
 
     async def _async_start(self, ready: threading.Event) -> None:
@@ -145,6 +146,7 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
         actually bound.
         """
         from .. import connection
+
         await connection.start_server(self)
         ready.set()
 
@@ -179,7 +181,8 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
 
         if self._event_loop is not None and self._event_loop.is_running():
             future = asyncio.run_coroutine_threadsafe(
-                _shutdown(), self._event_loop,
+                _shutdown(),
+                self._event_loop,
             )
             try:
                 future.result(timeout=5.0)
@@ -219,6 +222,7 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
         self.start()
 
         from .. import connection
+
         future = asyncio.run_coroutine_threadsafe(
             connection.connect_outbound(self, uri, secret),
             self._event_loop,
@@ -255,9 +259,7 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
     # RPC (outbound)
     # ------------------------------------------------------------------
 
-    def send_rpc(
-        self, peer_id: str, path: list[str], args: tuple, kwargs: dict
-    ) -> Any:
+    def send_rpc(self, peer_id: str, path: list[str], args: tuple, kwargs: dict) -> Any:
         """Send an RPC call over the WebSocket to *peer_id* and block for the response.
 
         Allocates a fresh request id, registers a pending-RPC slot
@@ -280,14 +282,18 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
 
         request_id = str(_uuid.uuid4())
         event = threading.Event()
-        slot: Dict[str, Any] = {"event": event}
+        slot: dict[str, Any] = {"event": event}
         self._pending_rpcs[request_id] = slot
 
-        req = rpc_protocol.make_request("rpc.call", {
-            "path": path,
-            "args": list(args),
-            "kwargs": dict(kwargs),
-        }, request_id=request_id)
+        req = rpc_protocol.make_request(
+            "rpc.call",
+            {
+                "path": path,
+                "args": list(args),
+                "kwargs": dict(kwargs),
+            },
+            request_id=request_id,
+        )
 
         asyncio.run_coroutine_threadsafe(
             ws.send(rpc_protocol.encode(req)),

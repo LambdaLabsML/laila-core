@@ -29,7 +29,7 @@ they have evolved since the constitution was first created.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import PrivateAttr
 
@@ -58,9 +58,9 @@ class ComplexConstitution(Constitution):
         c = ComplexConstitution(code=src, manifest_global_id=gid)
     """
 
-    _code: Optional[str] = PrivateAttr(default=None)
-    _manifest: Optional[Any] = PrivateAttr(default=None)
-    _manifest_global_id: Optional[str] = PrivateAttr(default=None)
+    _code: str | None = PrivateAttr(default=None)
+    _manifest: Any | None = PrivateAttr(default=None)
+    _manifest_global_id: str | None = PrivateAttr(default=None)
 
     def __init__(self, **data: Any):
         """Initialise from optional ``code``, ``manifest``, and
@@ -73,9 +73,9 @@ class ComplexConstitution(Constitution):
         is attached via the setter.
         """
         super().__init__()
-        code = data.get("code", None)
-        manifest = data.get("manifest", None)
-        manifest_global_id = data.get("manifest_global_id", None)
+        code = data.get("code")
+        manifest = data.get("manifest")
+        manifest_global_id = data.get("manifest_global_id")
         if code is not None:
             self.code = code
         if manifest is not None:
@@ -84,7 +84,7 @@ class ComplexConstitution(Constitution):
             self._manifest_global_id = manifest_global_id
 
     @property
-    def code(self) -> Optional[str]:
+    def code(self) -> str | None:
         """The single Python source string defining the constitution callable.
 
         Read-only after first assignment. The string must define
@@ -151,7 +151,7 @@ class ComplexConstitution(Constitution):
         self._manifest_global_id = value.global_id
 
     @property
-    def manifest_global_id(self) -> Optional[str]:
+    def manifest_global_id(self) -> str | None:
         """The bound manifest's ``global_id``, if known.
 
         Set automatically when :attr:`manifest` is assigned, and
@@ -249,7 +249,7 @@ class ComplexConstitution(Constitution):
         self._manifest = resolved
         return self._manifest
 
-    def build(self, payload_input: Optional[Any] = None) -> Any:
+    def build(self, payload_input: Any | None = None) -> Any:
         """Resolve the manifest and apply the single constitution callable.
 
         ``payload_input`` is ignored -- complex constitutions read from
@@ -298,7 +298,7 @@ class ComplexConstitution(Constitution):
         }
 
     @classmethod
-    def _from_dict(cls, in_dict: dict) -> "ComplexConstitution":
+    def _from_dict(cls, in_dict: dict) -> ComplexConstitution:
         """Build a `ComplexConstitution` from its serialized dict."""
         return cls(
             code=in_dict.get("code"),

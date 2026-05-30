@@ -15,16 +15,18 @@ against.
 """
 
 from __future__ import annotations
-from typing import Optional, Dict, Any
-from pydantic import BaseModel, Field, ConfigDict, PrivateAttr
-from ...basics.definitions.cli_capable import CLIExempt, _LAILA_CLI_CAPABLE_CLASS
 
-from ...pool.schema.base import _LAILA_IDENTIFIABLE_POOL
-from ...entry import Entry
-from ..central.command.schema.base import _LAILA_IDENTIFIABLE_CENTRAL_COMMAND
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, PrivateAttr
+
+from ...basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS, CLIExempt
 from ...basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
-from ..central.memory.schema.base import _LAILA_IDENTIFIABLE_CENTRAL_MEMORY
+from ...entry import Entry
 from ...macros.strings import _POLICY_SCOPE
+from ...pool.schema.base import _LAILA_IDENTIFIABLE_POOL
+from ..central.command.schema.base import _LAILA_IDENTIFIABLE_CENTRAL_COMMAND
+
 
 class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
     """Top-level policy object owning central command, memory, communication, and logic.
@@ -53,6 +55,7 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
     """
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_POLICY_SCOPE]))
+
     class Central(BaseModel):
         """Container struct for the four central sub-systems of a policy.
 
@@ -63,10 +66,10 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
         not from CLI args.
         """
 
-        logic: Optional[Any] = CLIExempt(default=None)
-        command: Optional[_LAILA_IDENTIFIABLE_CENTRAL_COMMAND] = CLIExempt(default=None)
-        communication: Optional[Any] = CLIExempt(default=None)
-        memory: Optional[Any] = CLIExempt(default=None)
+        logic: Any | None = CLIExempt(default=None)
+        command: _LAILA_IDENTIFIABLE_CENTRAL_COMMAND | None = CLIExempt(default=None)
+        communication: Any | None = CLIExempt(default=None)
+        memory: Any | None = CLIExempt(default=None)
 
         model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -74,8 +77,7 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
 
     # Core components
     central: Central = CLIExempt(default_factory=Central)
-    future_bank: Dict[str, Any] = CLIExempt(default_factory=dict)
-
+    future_bank: dict[str, Any] = CLIExempt(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
         """Lazily wire the default central sub-systems if the user didn't supply them.
@@ -93,8 +95,8 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
         """
         from ...macros.defaults import (
             DefaultCentralCommand,
-            DefaultCentralMemory,
             DefaultCentralCommunication,
+            DefaultCentralMemory,
         )
 
         if self.central.memory is None:
@@ -109,7 +111,6 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
             )
 
         self.central.communication._local_policy = self
-
 
     def extend(self, new_pool: _LAILA_IDENTIFIABLE_POOL) -> None:
         """Register a new pool with this policy's central memory.
@@ -128,16 +129,15 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
         """
         self.central.memory[new_pool.pool_id] = new_pool
 
-
     def remember(
         self,
         global_id: str,
         *,
         global_fetch: bool = False,
-        pool_subset: Optional[Dict[str, _LAILA_IDENTIFIABLE_POOL]] = None,
-        hint: Optional[str] = None,
+        pool_subset: dict[str, _LAILA_IDENTIFIABLE_POOL] | None = None,
+        hint: str | None = None,
         _remote_called: bool = False,
-    ) -> Optional[Entry]:
+    ) -> Entry | None:
         """Fetch a single entry from central memory by its ``global_id``.
 
         This is a *low-level*, blocking convenience used internally and
@@ -173,23 +173,17 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
         """
         if global_fetch:
             raise NotImplementedError
-        
-        entry = self.central.memory.fetch(
-            key = global_id,
-            pool_subset = pool_subset,
-            hint = hint
-        )
+
+        entry = self.central.memory.fetch(key=global_id, pool_subset=pool_subset, hint=hint)
 
         return entry
 
-
-    
     def memorize(
         self,
         entries: Any,
         *,
-        require_local_update = False, #update only affects the main pool at first.
-        require_global_update = False
+        require_local_update=False,  # update only affects the main pool at first.
+        require_global_update=False,
     ) -> None:
         """Persist *entries* into central memory.
 
@@ -227,7 +221,7 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
             return status.value
         return status
 
-    def _get_future_exception(self, future_id: str) -> Optional[Dict]:
+    def _get_future_exception(self, future_id: str) -> dict | None:
         """RPC: return a JSON-serializable view of a local future's exception.
 
         Returns the empty payload ``None`` when the future succeeded.
@@ -289,4 +283,3 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
         if hasattr(future, "_result_global_id"):
             return future._result_global_id
         return None
-

@@ -11,14 +11,19 @@ For a single-bit signal, use :class:`AtomicFlag`. For a more
 elaborate compute-and-set pattern, use :meth:`AtomicDict.compute`
 on a one-key dict (rare, but possible).
 """
+
 from __future__ import annotations
+
 from threading import RLock
-from pydantic import BaseModel, Field, PrivateAttr, ConfigDict
-from typing import Union
+
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+
 from ..definitions.locally_atomic_object import _LAILA_LOCALLY_ATOMIC_OBJECT
+
 
 class AtomicInt(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel):
     """Thread-safe integer with atomic add, increment, decrement, set, and get operations."""
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     value: int = Field(default=0)
@@ -56,16 +61,18 @@ class AtomicInt(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel):
     class _Atomic:
         """Context manager that holds the integer's lock."""
 
-        def __init__(self, parent: "AtomicInt"):
+        def __init__(self, parent: AtomicInt):
             """Initialize with the parent integer."""
             self._p = parent
-        def __enter__(self) -> "AtomicInt":
+
+        def __enter__(self) -> AtomicInt:
             self._p._lock.acquire()
             return self._p
+
         def __exit__(self, exc_type, exc, tb):
             self._p._lock.release()
 
-    def atomic(self) -> "_Atomic":
+    def atomic(self) -> _Atomic:
         """Return a context manager for batched lock-held operations."""
         return AtomicInt._Atomic(self)
 

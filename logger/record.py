@@ -28,11 +28,10 @@ This module exports two utilities:
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
 
-
-_LEVEL_NUMERIC: Dict[str, int] = {
+_LEVEL_NUMERIC: dict[str, int] = {
     "DEBUG": 10,
     "INFO": 20,
     "WARNING": 30,
@@ -72,7 +71,7 @@ def numeric_level(level: Any) -> int:
     return _LEVEL_NUMERIC[normalize_level(level)]
 
 
-def _coerce_id(value: Any) -> Optional[str]:
+def _coerce_id(value: Any) -> str | None:
     """Convert any identifiable-like object to a string global_id."""
     if value is None:
         return None
@@ -88,26 +87,26 @@ def build_record(
     event: str,
     *,
     level: str = "INFO",
-    message: Optional[str] = None,
+    message: str | None = None,
     policy_id: Any = None,
     pool_id: Any = None,
-    pool_nickname: Optional[str] = None,
+    pool_nickname: str | None = None,
     entry_id: Any = None,
-    entry_nickname: Optional[str] = None,
+    entry_nickname: str | None = None,
     future_id: Any = None,
     future_group_id: Any = None,
     precedence: Any = None,
-    purpose: Optional[str] = None,
+    purpose: str | None = None,
     taskforce_id: Any = None,
     logger_id: Any = None,
-    status: Optional[str] = None,
-    prev_status: Optional[str] = None,
+    status: str | None = None,
+    prev_status: str | None = None,
     result_id: Any = None,
-    child_future_ids: Optional[list] = None,
-    child_results: Optional[list] = None,
+    child_future_ids: list | None = None,
+    child_results: list | None = None,
     peer_id: Any = None,
-    extra: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Build a structured LAILA log record dict.
 
     All ``*_id`` fields accept either a string global_id or any
@@ -122,8 +121,8 @@ def build_record(
         ``level``, ``event``, and ``extra``.
     """
     now = time.time()
-    record: Dict[str, Any] = {
-        "ts": datetime.fromtimestamp(now, tz=timezone.utc).isoformat().replace("+00:00", "Z"),
+    record: dict[str, Any] = {
+        "ts": datetime.fromtimestamp(now, tz=UTC).isoformat().replace("+00:00", "Z"),
         "ts_unix": now,
         "level": normalize_level(level),
         "event": event,

@@ -24,7 +24,7 @@ receiving ``["central", "memory", "remember"]`` plus
 
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .schema.base import _LAILA_IDENTIFIABLE_COMMUNICATION
@@ -55,7 +55,7 @@ class RemotePolicyProxy:
     the start of a remote attribute chain!).
     """
 
-    __slots__ = ("_peer_id", "_comm")
+    __slots__ = ("_comm", "_peer_id")
 
     def __init__(self, peer_id: str, communication: _LAILA_IDENTIFIABLE_COMMUNICATION) -> None:
         object.__setattr__(self, "_peer_id", peer_id)
@@ -100,9 +100,11 @@ class _RemoteAttrChain:
         in place by callers; a new list is created per ``__getattr__``.
     """
 
-    __slots__ = ("_comm", "_peer_id", "_path")
+    __slots__ = ("_comm", "_path", "_peer_id")
 
-    def __init__(self, communication: _LAILA_IDENTIFIABLE_COMMUNICATION, peer_id: str, path: list[str]) -> None:
+    def __init__(
+        self, communication: _LAILA_IDENTIFIABLE_COMMUNICATION, peer_id: str, path: list[str]
+    ) -> None:
         object.__setattr__(self, "_comm", communication)
         object.__setattr__(self, "_peer_id", peer_id)
         object.__setattr__(self, "_path", path)

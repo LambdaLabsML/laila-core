@@ -17,11 +17,11 @@ nest critical sections (e.g. ``with self.atomic(): self.helper()``
 where ``helper`` also calls ``with self.atomic(): ...``) without
 dead-locking.
 """
+
 from __future__ import annotations
 
-from contextlib import contextmanager
 import threading
-from typing import Optional
+from contextlib import contextmanager
 
 from pydantic import BaseModel, ConfigDict
 
@@ -68,7 +68,7 @@ class _LAILA_LOCALLY_ATOMIC_OBJECT(BaseModel):
         return lock
 
     @contextmanager
-    def atomic(self, *, scope: str = "local", timeout_s: Optional[float] = None):
+    def atomic(self, *, scope: str = "local", timeout_s: float | None = None):
         """Hold the local lock for the duration of the ``with`` block.
 
         Subclasses such as :class:`_LAILA_GLOBALLY_ATOMIC_IDENTIFIABLE_OBJECT`
@@ -108,7 +108,7 @@ class _LAILA_LOCALLY_ATOMIC_OBJECT(BaseModel):
         finally:
             self.unlock()
 
-    def lock(self, timeout_s: Optional[float] = None) -> bool:
+    def lock(self, timeout_s: float | None = None) -> bool:
         """Acquire the per-instance reentrant lock.
 
         Parameters

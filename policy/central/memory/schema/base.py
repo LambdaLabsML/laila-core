@@ -28,25 +28,24 @@ entire async pipelines on a daemon thread so the work proceeds
 concurrently without polluting the caller's event loop.
 """
 
-from typing import Dict, Optional, Any, List
 import asyncio
 import threading
-from pydantic import BaseModel, Field, PrivateAttr
 from contextlib import contextmanager
-from collections.abc import Sequence
+from typing import Any
 
-from .....pool.schema.base import _LAILA_IDENTIFIABLE_POOL
-from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+from pydantic import ConfigDict, Field, PrivateAttr
+
 from .....basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS
-from ...command.schema.future.future.group_future import GroupFuture
-from ...command.schema.future.future.future_status import FutureStatus
-from ...command.taskforce.thread_pool_executor.future import ConcurrentPackageFuture
-from ..hint.hint import MemoryHint
-from ..record.record import Record
-from .....utils.decorators.typecheck import ensure_list
-from .....macros.strings import _CENTRAL_MEMORY_SCOPE, _DEFAULT_POOL_NICKNAME
-from ..router.pool_router import _LAILA_IDENTIFIABLE_POOL_ROUTER
+from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from .....entry import Entry
+from .....macros.strings import _CENTRAL_MEMORY_SCOPE, _DEFAULT_POOL_NICKNAME
+from .....pool.schema.base import _LAILA_IDENTIFIABLE_POOL
+from .....utils.decorators.typecheck import ensure_list
+from ...command.schema.future.future.future_status import FutureStatus
+from ...command.schema.future.future.group_future import GroupFuture
+from ...command.taskforce.thread_pool_executor.future import ConcurrentPackageFuture
+from ..record.record import Record
+from ..router.pool_router import _LAILA_IDENTIFIABLE_POOL_ROUTER
 
 
 class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
@@ -67,12 +66,12 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
     pass either a single entry / id or a list and get uniform
     list-shaped behavior internally.
     """
-    _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_CENTRAL_MEMORY_SCOPE]))
-    pool_router: Optional[_LAILA_IDENTIFIABLE_POOL_ROUTER] = Field(default=None)
-    alpha_pool: Optional[str] = Field(default=None)
 
-    class Config:
-        arbitrary_types_allowed = True
+    _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_CENTRAL_MEMORY_SCOPE]))
+    pool_router: _LAILA_IDENTIFIABLE_POOL_ROUTER | None = Field(default=None)
+    alpha_pool: str | None = Field(default=None)
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def model_post_init(self, __context: Any) -> None:
         """Wire a default :class:`PoolRouter` and pick an alpha pool.
@@ -91,6 +90,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         """
         if self.pool_router is None:
             from .....macros.defaults import DefaultPoolRouter
+
             self.pool_router = DefaultPoolRouter()
 
         if self.alpha_pool is None:
@@ -98,14 +98,18 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
                 self.alpha_pool = self.pool_router.pools_nicknames[_DEFAULT_POOL_NICKNAME]
             else:
                 from .....macros.defaults import DefaultPool
+
                 alpha = DefaultPool()
-                self.pool_router.extend(
-                    alpha, affinity=1, pool_nickname=_DEFAULT_POOL_NICKNAME
-                )
+                self.pool_router.extend(alpha, affinity=1, pool_nickname=_DEFAULT_POOL_NICKNAME)
                 self.alpha_pool = alpha.global_id
 
-    
-    def extend(self, pool: _LAILA_IDENTIFIABLE_POOL, *, affinity: Optional[float] = None, pool_nickname: Optional[str] = None):
+    def extend(
+        self,
+        pool: _LAILA_IDENTIFIABLE_POOL,
+        *,
+        affinity: float | None = None,
+        pool_nickname: str | None = None,
+    ):
         """Forward pool registration to :meth:`PoolRouter.extend`.
 
         Convenience pass-through so user code can write
@@ -114,7 +118,9 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         """
         self.pool_router.extend(pool, affinity=affinity, pool_nickname=pool_nickname)
 
-    def _resolve_pool_ref(self, pool_ref: _LAILA_IDENTIFIABLE_POOL | str) -> _LAILA_IDENTIFIABLE_POOL:
+    def _resolve_pool_ref(
+        self, pool_ref: _LAILA_IDENTIFIABLE_POOL | str
+    ) -> _LAILA_IDENTIFIABLE_POOL:
         """Resolve a pool object, gid string, or nickname to a live pool instance.
 
         Lookup order
@@ -146,12 +152,12 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
 
         raise TypeError("pool_ref must be a pool object, pool id, or pool nickname.")
 
-    #TODO: need to make sure cross-borrowing does not lead to stall
+    # TODO: need to make sure cross-borrowing does not lead to stall
     @contextmanager
     def borrow(
         self,
-        keys = [],
-        global_borrow = False,
+        keys=None,
+        global_borrow=False,
     ):
         """Context manager that lends entries to the caller for the
         scope of a ``with`` block. Not yet implemented.
@@ -162,6 +168,8 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         so they avoid double-fetching the same artefacts during the
         same window.
         """
+        if keys is None:
+            keys = []
         raise NotImplementedError
 
     def _duplicate_pool(
@@ -285,7 +293,11 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
                 asyncio.run(_duplicate_all())
             except Exception as exc:
                 for child_future in duplicate_futures.values():
-                    if child_future.status in [FutureStatus.FINISHED, FutureStatus.ERROR, FutureStatus.CANCELLED]:
+                    if child_future.status in [
+                        FutureStatus.FINISHED,
+                        FutureStatus.ERROR,
+                        FutureStatus.CANCELLED,
+                    ]:
                         continue
                     child_future.exception = exc
                     child_future.result = None
@@ -299,16 +311,14 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
 
         return group_future
 
-
-
     @ensure_list("entries")
     def memorize(
-        self, 
+        self,
         entries: Any,
         *,
-        pool_id: Optional[str] = None,
-        pool_nickname: Optional[str] = None,
-        affinity: Optional[float] = None,
+        pool_id: str | None = None,
+        pool_nickname: str | None = None,
+        affinity: float | None = None,
     ):
         """Persist *entries* to the routed pool.
 
@@ -340,22 +350,24 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         from ..... import active_policy
 
         pool = self.pool_router.route(
-            entries = entries,
-            pool_id = pool_id,
-            pool_nickname = pool_nickname,
-            affinity = affinity,
+            entries=entries,
+            pool_id=pool_id,
+            pool_nickname=pool_nickname,
+            affinity=affinity,
         )
 
         try:
             from .....logger import get_logger
+
             get_logger().record_memorize(
-                entries=entries, pool=pool, policy=active_policy,
+                entries=entries,
+                pool=pool,
+                policy=active_policy,
             )
         except Exception:
             pass
 
         return self._record(entries, pool)
-
 
     def _record(
         self,
@@ -408,30 +420,25 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             await p._write_async(e.global_id, blob)
             return e.global_id
 
-        factories = [
-            (lambda e=entry: _memorize_one(e=e))
-            for entry in entries
-        ]
+        factories = [(lambda e=entry: _memorize_one(e=e)) for entry in entries]
         return cmd.submit(tasks=factories, taskforce_id=alpha_id)
-
 
     def _batch_accelerated_record(
         self,
-        entries: List[Entry],
+        entries: list[Entry],
         pool: _LAILA_IDENTIFIABLE_POOL,
     ):
         """Batch-record entries (not yet implemented)."""
         raise NotImplementedError
 
-
     @ensure_list("entry_ids")
     def remember(
-        self, 
-        entry_ids: List[Entry]|List[str],
+        self,
+        entry_ids: list[Entry] | list[str],
         *,
-        pool_id: Optional[str] = None,
-        pool_nickname: Optional[str] = None,
-        affinity: Optional[float] = None,
+        pool_id: str | None = None,
+        pool_nickname: str | None = None,
+        affinity: float | None = None,
         persist: bool = True,
     ):
         """Fetch entries from the routed pool, optionally caching them
@@ -470,19 +477,21 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             entries.
         """
         from ..... import active_policy
-        from .....entry import Entry
 
         pool = self.pool_router.route(
-            entries = entry_ids,
-            pool_id = pool_id,
-            pool_nickname = pool_nickname,
-            affinity = affinity,
+            entries=entry_ids,
+            pool_id=pool_id,
+            pool_nickname=pool_nickname,
+            affinity=affinity,
         )
 
         try:
             from .....logger import get_logger
+
             get_logger().record_remember(
-                entry_ids=entry_ids, pool=pool, policy=active_policy,
+                entry_ids=entry_ids,
+                pool=pool,
+                policy=active_policy,
             )
         except Exception:
             pass
@@ -492,10 +501,9 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
 
         return self._remember_with_persist(entry_ids, pool=pool)
 
-
     def _remember_with_persist(
         self,
-        entry_ids: List[str],
+        entry_ids: list[str],
         *,
         pool: _LAILA_IDENTIFIABLE_POOL,
     ):
@@ -548,18 +556,15 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
                     entries = [fetched]
 
                 from .....entry.entry_state import EntryState
+
                 ready_entries = [e for e in entries if e.state == EntryState.READY]
                 if ready_entries:
-                    memorize_ref = self.memorize(
-                        entries=ready_entries, pool_id=alpha_pool_id
-                    )
+                    memorize_ref = self.memorize(entries=ready_entries, pool_id=alpha_pool_id)
                     if memorize_ref is not None:
                         memorize_fut = active_policy.future_bank[memorize_ref.global_id]
                         await memorize_fut
 
-                for entry, (entry_id, child_future) in zip(
-                    entries, child_futures.items()
-                ):
+                for entry, (entry_id, child_future) in zip(entries, child_futures.items()):
                     child_future.exception = None
                     child_future.result = entry
                     child_future.status = FutureStatus.FINISHED
@@ -607,12 +612,11 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         single = next(iter(child_futures.values()))
         return single.future_identity
 
-
     def _fetch(
-        self, 
-        entry_ids: List[str],
+        self,
+        entry_ids: list[str],
         *,
-        pool: Optional[Dict[str, _LAILA_IDENTIFIABLE_POOL]] = None,
+        pool: dict[str, _LAILA_IDENTIFIABLE_POOL] | None = None,
         borrow: bool = False,
     ):
         """Dispatch fetching to batch or non-batch path based on pool capability."""
@@ -623,12 +627,11 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         else:
             return self._parallel_individual_fetch(entry_ids, pool=pool)
 
-    
     def _parallel_individual_fetch(
         self,
-        entry_ids: List[str],
+        entry_ids: list[str],
         *,
-        pool: Optional[Dict[str, _LAILA_IDENTIFIABLE_POOL]] = None,
+        pool: dict[str, _LAILA_IDENTIFIABLE_POOL] | None = None,
     ):
         r"""Fetch and deserialize each entry via a single per-entry coroutine.
 
@@ -656,30 +659,26 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             record = await Record._build_async(raw)
             return record["entry"]
 
-        factories = [
-            (lambda eid=entry_id: _remember_one(eid=eid))
-            for entry_id in entry_ids
-        ]
+        factories = [(lambda eid=entry_id: _remember_one(eid=eid)) for entry_id in entry_ids]
         return cmd.submit(tasks=factories, taskforce_id=alpha_id)
 
     def _batch_accelerated_fetch(
         self,
-        keys: List[str],
+        keys: list[str],
         *,
-        pool: Optional[Dict[str, _LAILA_IDENTIFIABLE_POOL]] = None,
+        pool: dict[str, _LAILA_IDENTIFIABLE_POOL] | None = None,
     ):
         """Batch-accelerated fetch path (not yet implemented)."""
         raise NotImplementedError
-            
 
     @ensure_list("entry_ids")
     def forget(
-        self, 
-        entry_ids: List[Entry]|List[str],
+        self,
+        entry_ids: list[Entry] | list[str],
         *,
-        pool_id: Optional[str] = None,
-        pool_nickname: Optional[str] = None,
-        affinity: Optional[float] = None,
+        pool_id: str | None = None,
+        pool_nickname: str | None = None,
+        affinity: float | None = None,
     ):
         """Delete *entry_ids* from the routed pool.
 
@@ -696,17 +695,20 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             Future-like handle resolving when deletion finishes.
         """
         pool = self.pool_router.route(
-            entries = entry_ids,
-            pool_id = pool_id,
-            pool_nickname = pool_nickname,
-            affinity = affinity,
+            entries=entry_ids,
+            pool_id=pool_id,
+            pool_nickname=pool_nickname,
+            affinity=affinity,
         )
 
         try:
             from ..... import active_policy
             from .....logger import get_logger
+
             get_logger().record_forget(
-                entry_ids=entry_ids, pool=pool, policy=active_policy,
+                entry_ids=entry_ids,
+                pool=pool,
+                policy=active_policy,
             )
         except Exception:
             pass
@@ -715,7 +717,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
 
     def _delete(
         self,
-        entry_ids: List[str],
+        entry_ids: list[str],
         pool: _LAILA_IDENTIFIABLE_POOL,
     ):
         """Dispatch deletion to batch or non-batch path based on pool capability."""
@@ -726,16 +728,15 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
 
     def _batch_accelerated_delete(
         self,
-        entry_ids: List[str],
+        entry_ids: list[str],
         pool: _LAILA_IDENTIFIABLE_POOL,
     ):
         """Batch-delete entries (not yet implemented)."""
         raise NotImplementedError
 
-
     def _parallel_individual_delete(
         self,
-        entry_ids: List[str],
+        entry_ids: list[str],
         pool: _LAILA_IDENTIFIABLE_POOL,
     ):
         """Delete each entry via a single per-entry async coroutine."""
@@ -748,8 +749,5 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             await p._delete_async(eid)
             return eid
 
-        factories = [
-            (lambda eid=entry_id: _delete_one(eid=eid))
-            for entry_id in entry_ids
-        ]
+        factories = [(lambda eid=entry_id: _delete_one(eid=eid)) for entry_id in entry_ids]
         return cmd.submit(tasks=factories, taskforce_id=alpha_id)

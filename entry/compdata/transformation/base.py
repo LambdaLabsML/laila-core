@@ -26,9 +26,11 @@ special-casing on the call sites.
 """
 
 from __future__ import annotations
-from typing import Any, Dict, ClassVar, Type, List
+
 from abc import ABC, abstractmethod
-from pydantic import BaseModel, Field, ConfigDict
+from typing import Any, ClassVar
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class _data_transformation(BaseModel, ABC):
@@ -56,10 +58,10 @@ class _data_transformation(BaseModel, ABC):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     name: str = Field(default_factory=str)
-    forward_kwargs: Dict[str, Any] = Field(default_factory=dict)
-    backward_kwargs: Dict[str, Any] = Field(default_factory=dict)
+    forward_kwargs: dict[str, Any] = Field(default_factory=dict)
+    backward_kwargs: dict[str, Any] = Field(default_factory=dict)
     backward_code: str = Field(default_factory=str)
-    REGISTRY: ClassVar[Dict[str, Type["_data_transformation"]]] = {}
+    REGISTRY: ClassVar[dict[str, type[_data_transformation]]] = {}
 
     def __init_subclass__(cls, **kwargs):
         """Register the subclass in ``REGISTRY`` when *name* is set."""
@@ -73,7 +75,6 @@ class _data_transformation(BaseModel, ABC):
 
     @abstractmethod
     def backward(self, data: Any) -> Any: ...
-
 
 
 class TransformationSequence(BaseModel):
@@ -100,7 +101,7 @@ class TransformationSequence(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    transformations: List[_data_transformation] = Field(default_factory=list)
+    transformations: list[_data_transformation] = Field(default_factory=list)
 
     def forward(self, data: Any) -> Any:
         """Apply every contained transformation in order and collect their inverses.
@@ -128,7 +129,7 @@ class TransformationSequence(BaseModel):
             second element is already reversed for replay.
         """
         current = data
-        inverse_codes: List[str] = []
+        inverse_codes: list[str] = []
 
         for transformation in self.transformations:
             current = transformation.forward(current)
@@ -136,11 +137,9 @@ class TransformationSequence(BaseModel):
 
         return current, inverse_codes[::-1]
 
-
     def __iter__(self):
         """Iterate over the contained transformations."""
         return iter(self.transformations)
-    
 
     def append(self, t) -> Any:
         """Append one or more transformations to the pipeline.
@@ -160,11 +159,11 @@ class TransformationSequence(BaseModel):
         TypeError
             If *t* is not a valid transformation or list thereof.
         """
-        if isinstance (t, _data_transformation):
+        if isinstance(t, _data_transformation):
             self.transformations.append(t)
             return self
 
-        if isinstance (t, list):
+        if isinstance(t, list):
             for _t in t:
                 if not isinstance(_t, _data_transformation):
                     raise TypeError("All elements must be _data_transformation instances.")
@@ -173,12 +172,9 @@ class TransformationSequence(BaseModel):
 
         raise TypeError("append expects a _data_transformation or list of them.")
 
-    
     def __repr__(self) -> str:
         """Return a human-readable pipeline summary."""
         if not self.transformations:
             return f"{self.__class__.__name__}(identity)"
         names = " -> ".join(getattr(t, "name", t.__class__.__name__) for t in self.transformations)
         return f"{self.__class__.__name__}({names})"
-
-

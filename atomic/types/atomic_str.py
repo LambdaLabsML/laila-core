@@ -11,14 +11,19 @@ re-bind of the underlying ``value`` field; the lock ensures readers
 always see a consistent snapshot rather than a partially-updated
 intermediate.
 """
+
 from __future__ import annotations
+
 from threading import RLock
-from pydantic import BaseModel, Field, PrivateAttr, ConfigDict
+
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+
 from ..definitions.locally_atomic_object import _LAILA_LOCALLY_ATOMIC_OBJECT
 
 
 class AtomicStr(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel):
     """Thread-safe string with atomic set, append, clear, and get operations."""
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     value: str = Field(default="")
@@ -53,16 +58,18 @@ class AtomicStr(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel):
     class _Atomic:
         """Context manager that holds the string's lock."""
 
-        def __init__(self, parent: "AtomicStr"):
+        def __init__(self, parent: AtomicStr):
             """Initialize with the parent string."""
             self._p = parent
-        def __enter__(self) -> "AtomicStr":
+
+        def __enter__(self) -> AtomicStr:
             self._p._lock.acquire()
             return self._p
+
         def __exit__(self, exc_type, exc, tb):
             self._p._lock.release()
 
-    def atomic(self) -> "_Atomic":
+    def atomic(self) -> _Atomic:
         """Return a context manager for batched lock-held operations."""
         return AtomicStr._Atomic(self)
 

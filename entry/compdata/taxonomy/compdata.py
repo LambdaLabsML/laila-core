@@ -28,18 +28,14 @@ automatically -- subclasses with bespoke serialization
 
 from __future__ import annotations
 
-import copy
-from typing import Any, Dict, Tuple, Type, Optional
-import numpy as np
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from ..transformation.serialization import PickleSerializer
 
-
 # ---------------------------------------------------------------------
 # Mapping: python type ➜ wrapper subclass
 # ---------------------------------------------------------------------
-TYPE_TO_WRAPPER: dict[type, Type["ComputationalData"]] = {}
+TYPE_TO_WRAPPER: dict[type, type[ComputationalData]] = {}
 
 
 def register_cdtype(*payload_types: type):
@@ -58,10 +54,12 @@ def register_cdtype(*payload_types: type):
     *payload_types : type
         Python types that should resolve to this wrapper subclass.
     """
-    def deco(cls: Type["ComputationalData"]):
+
+    def deco(cls: type[ComputationalData]):
         for t in payload_types:
             TYPE_TO_WRAPPER[t] = cls
         return cls
+
     return deco
 
 
@@ -194,6 +192,7 @@ class ComputationalData(BaseModel):
         # Fallback
         if chosen is None:
             from .cd_object import CD_generic
+
             chosen = CD_generic
 
         return super().__new__(chosen)

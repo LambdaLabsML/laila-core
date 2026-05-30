@@ -9,19 +9,22 @@ attempts to pool a tensor will fall back to :class:`CD_generic`
 (pickle), which works but is much slower and not GPU-aware.
 """
 
-from .compdata import ComputationalData, register_cdtype, _scalar_len
-from ..transformation.serialization import TorchSerializer
 from pydantic import PrivateAttr
+
+from ..transformation.serialization import TorchSerializer
+from .compdata import ComputationalData, _scalar_len, register_cdtype
 
 try:
     import torch
+
     _HAVE_TORCH = True
-except ModuleNotFoundError:            # pragma: no cover
-    torch = None                       # type: ignore
+except ModuleNotFoundError:  # pragma: no cover
+    torch = None  # type: ignore
     _HAVE_TORCH = False
 
 
 if _HAVE_TORCH:
+
     @register_cdtype(torch.Tensor)
     class CD_torchtensor(ComputationalData):
         """Computational-data wrapper for :class:`torch.Tensor` payloads.
@@ -46,9 +49,7 @@ if _HAVE_TORCH:
         def serializer(self, value: TorchSerializer):
             """Set a new serializer instance."""
             if not isinstance(value, TorchSerializer):
-                raise TypeError(
-                    f"serializer must be a TorchSerializer, got {type(value).__name__}"
-                )
+                raise TypeError(f"serializer must be a TorchSerializer, got {type(value).__name__}")
             self._serializer = value
 
         def __len__(self):

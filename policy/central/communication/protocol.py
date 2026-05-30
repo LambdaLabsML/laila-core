@@ -30,8 +30,7 @@ from __future__ import annotations
 
 import json
 import uuid as _uuid
-from typing import Any, Dict, List, Optional
-
+from typing import Any
 
 JSONRPC_VERSION = "2.0"
 
@@ -60,10 +59,10 @@ class LailaJSONEncoder(json.JSONEncoder):
 
     def default(self, o: Any) -> Any:
         """Encode *o* using the resolution order documented on the class."""
-        from ..command.schema.future.future.group_future import GroupFuture
         from ..command.schema.future.future.future_identity import (
             _LAILA_IDENTIFIABLE_FUTURE,
         )
+        from ..command.schema.future.future.group_future import GroupFuture
 
         if isinstance(o, GroupFuture):
             return {
@@ -128,7 +127,9 @@ def decode(raw: str) -> Any:
     return json.loads(raw)
 
 
-def make_request(method: str, params: Dict[str, Any], request_id: Optional[str] = None) -> Dict[str, Any]:
+def make_request(
+    method: str, params: dict[str, Any], request_id: str | None = None
+) -> dict[str, Any]:
     """Build a JSON-RPC 2.0 request dict.
 
     Parameters
@@ -155,7 +156,7 @@ def make_request(method: str, params: Dict[str, Any], request_id: Optional[str] 
     }
 
 
-def make_result(request_id: str, result: Any) -> Dict[str, Any]:
+def make_result(request_id: str, result: Any) -> dict[str, Any]:
     """Build a JSON-RPC 2.0 success response.
 
     Parameters
@@ -177,7 +178,7 @@ def make_result(request_id: str, result: Any) -> Dict[str, Any]:
     }
 
 
-def make_error(request_id: Optional[str], code: int, message: str, data: Any = None) -> Dict[str, Any]:
+def make_error(request_id: str | None, code: int, message: str, data: Any = None) -> dict[str, Any]:
     """Build a JSON-RPC 2.0 error response.
 
     Parameters
@@ -196,7 +197,7 @@ def make_error(request_id: Optional[str], code: int, message: str, data: Any = N
     dict
         JSON-RPC error response.
     """
-    error: Dict[str, Any] = {"code": code, "message": message}
+    error: dict[str, Any] = {"code": code, "message": message}
     if data is not None:
         error["data"] = data
     return {
@@ -206,7 +207,7 @@ def make_error(request_id: Optional[str], code: int, message: str, data: Any = N
     }
 
 
-def is_request(msg: Dict[str, Any]) -> bool:
+def is_request(msg: dict[str, Any]) -> bool:
     """Return ``True`` if *msg* is a JSON-RPC request.
 
     Distinguishing requests from responses uses the JSON-RPC 2.0
@@ -215,7 +216,7 @@ def is_request(msg: Dict[str, Any]) -> bool:
     return "method" in msg
 
 
-def is_response(msg: Dict[str, Any]) -> bool:
+def is_response(msg: dict[str, Any]) -> bool:
     """Return ``True`` if *msg* is a JSON-RPC response.
 
     Per JSON-RPC 2.0, responses are identified by the presence of

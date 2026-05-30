@@ -8,9 +8,11 @@ on the wire.
 """
 
 import copy
-from .compdata import ComputationalData, register_cdtype, _scalar_len
-from ..transformation.serialization import PickleSerializer
+
 from pydantic import PrivateAttr
+
+from ..transformation.serialization import PickleSerializer
+from .compdata import ComputationalData, _scalar_len, register_cdtype
 
 
 @register_cdtype(object)  # final catch-all
@@ -36,9 +38,7 @@ class CD_generic(ComputationalData):
     def serializer(self, value: PickleSerializer):
         """Set a new serializer instance."""
         if not isinstance(value, PickleSerializer):
-            raise TypeError(
-                f"serializer must be a PickleSerializer, got {type(value).__name__}"
-            )
+            raise TypeError(f"serializer must be a PickleSerializer, got {type(value).__name__}")
         self._serializer = value
 
     def __len__(self):

@@ -7,12 +7,13 @@ representation is identical (msgpack arrays). The original Python type
 (tuples are immutable so shallow-copy returns the same object).
 """
 
-from typing import Any, Union
-from pydantic import PrivateAttr
 import copy
+from typing import Any
 
-from .compdata import ComputationalData, register_cdtype, _scalar_len
+from pydantic import PrivateAttr
+
 from ..transformation.serialization import MsgpackSerializer
+from .compdata import ComputationalData, register_cdtype
 
 
 @register_cdtype(list, tuple)
@@ -24,7 +25,7 @@ class CD_list(ComputationalData):
     and array-like compdata can use a uniform interface.
     """
 
-    data: Union[list[Any], tuple[Any, ...]]
+    data: list[Any] | tuple[Any, ...]
     _serializer: MsgpackSerializer = PrivateAttr(default_factory=MsgpackSerializer)
 
     # --- Serializer getter/setter ---

@@ -26,10 +26,12 @@ Module-level singletons :data:`guarantee` and :data:`guarantee_async`
 are the user-facing handles -- the classes themselves are private
 because there's no point in instantiating more than one.
 """
+
 from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+
 import laila
 
 
@@ -83,6 +85,34 @@ class _Guarantee:
         return False
 
 
+class _AsyncGuaranteeScope:
+    """Per-entry state for one open ``async with guarantee_async`` frame.
+
+    A fresh instance is created on every :meth:`_AsyncGuarantee.__aenter__`
+    and discarded on the matching :meth:`_AsyncGuarantee.__aexit__`. Keeping
+    state here (rather than on the singleton ``_AsyncGuarantee``) is what
+    makes :data:`guarantee_async` safely reentrant: nested or concurrent
+    ``async with`` blocks each get their own watcher task and their own
+    background-exception slot, so the inner frame can no longer clobber
+    the outer frame's watcher reference.
+    """
+
+    __slots__ = (
+        "background_exception",
+        "command",
+        "parent_task",
+        "scope",
+        "watcher_task",
+    )
+
+    def __init__(self) -> None:
+        self.command = None
+        self.scope = None
+        self.parent_task = None
+        self.watcher_task = None
+        self.background_exception = None
+
+
 class _AsyncGuarantee:
     """Asynchronous context manager that awaits futures created in its scope.
 
@@ -99,40 +129,62 @@ class _AsyncGuarantee:
       first wait-error or background-error is re-raised.
 
     Use as ``async with laila.guarantee_async: ...``. Like
-    :class:`_Guarantee`, multiple nested scopes compose cleanly.
+    :class:`_Guarantee`, multiple nested scopes compose cleanly: each
+    entry allocates its own :class:`_AsyncGuaranteeScope`, kept on a
+    per-task stack so concurrent ``async with`` blocks from different
+    asyncio tasks never share state.
     """
 
     def __init__(self) -> None:
-        """Initialise empty tracking state.
+        """Initialise the per-task stack used to make the singleton reentrant.
 
-        All real work happens in :meth:`__aenter__`. This constructor
-        exists only so the singleton :data:`guarantee_async` can be
-        built at import time.
+        All real per-scope state lives on :class:`_AsyncGuaranteeScope`
+        instances; this dict only tracks which scope belongs to which
+        asyncio task so :meth:`__aexit__` can pop the right one.
         """
-        self._command = None
-        self._scope = None
-        self._parent_task = None
-        self._watcher_task = None
-        self._background_exception = None
+        self._task_stacks: dict[asyncio.Task, list[_AsyncGuaranteeScope]] = {}
 
     async def __aenter__(self):
         """Enter the async guarantee scope and start the background watcher."""
-        self._command = laila.get_active_policy().central.command
-        self._command._guarantee_enter()
-        self._scope = self._command._guarantee_stack()[-1]
-        self._parent_task = asyncio.current_task()
-        self._background_exception = None
-        self._watcher_task = asyncio.create_task(self._watch_for_future_errors())
+        state = _AsyncGuaranteeScope()
+        state.command = laila.get_active_policy().central.command
+        state.command._guarantee_enter()
+        state.scope = state.command._guarantee_stack()[-1]
+        state.parent_task = asyncio.current_task()
+        state.watcher_task = asyncio.create_task(self._watch_for_future_errors(state))
+
+        self._task_stacks.setdefault(state.parent_task, []).append(state)
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
         """Exit the scope, cancel the watcher, and await all enclosed futures."""
-        created_inside = self._command._guarantee_exit()
+        task = asyncio.current_task()
+        stack = self._task_stacks.get(task)
+        if not stack:
+            return False
+        state = stack.pop()
+        if not stack:
+            self._task_stacks.pop(task, None)
 
-        if self._watcher_task is not None and not self._watcher_task.done():
-            self._watcher_task.cancel()
+        created_inside = state.command._guarantee_exit()
+
+        if state.watcher_task is not None and not state.watcher_task.done():
+            state.watcher_task.cancel()
             with suppress(asyncio.CancelledError):
-                await self._watcher_task
+                await state.watcher_task
+
+        # If the watcher saw an in-scope future error it cancelled our
+        # parent task (see `_watch_for_future_errors`). On Python 3.11+
+        # the task stays in cancelled state even after we suppress the
+        # first CancelledError, so the next `await` below would re-raise
+        # it -- and CancelledError (BaseException) would skip past the
+        # caller's `except Exception` handlers and replace the real error.
+        # Clear that pending cancellation so the original exception
+        # surfaces from `background_exception` instead.
+        if state.background_exception is not None:
+            current = asyncio.current_task()
+            if current is not None and hasattr(current, "uncancel"):
+                current.uncancel()
 
         wait_errors = []
         for future in created_inside:
@@ -144,8 +196,8 @@ class _AsyncGuarantee:
             except Exception as wait_exc:
                 wait_errors.append(wait_exc)
 
-        if self._background_exception is not None:
-            raise self._background_exception
+        if state.background_exception is not None:
+            raise state.background_exception
 
         if exc_type is not None:
             return False
@@ -155,12 +207,12 @@ class _AsyncGuarantee:
 
         return False
 
-    async def _watch_for_future_errors(self) -> None:
+    async def _watch_for_future_errors(self, state: _AsyncGuaranteeScope) -> None:
         """Poll for newly registered futures and cancel the parent on error."""
         watched: dict[str, asyncio.Task] = {}
 
         while True:
-            for future_id, future in list(self._scope.items()):
+            for future_id, future in list(state.scope.items()):
                 if future_id in watched:
                     continue
                 watched[future_id] = asyncio.create_task(self._await_future(future))
@@ -182,9 +234,9 @@ class _AsyncGuarantee:
                 try:
                     await task
                 except Exception as exc:
-                    self._background_exception = exc
-                    if self._parent_task is not None and not self._parent_task.done():
-                        self._parent_task.cancel()
+                    state.background_exception = exc
+                    if state.parent_task is not None and not state.parent_task.done():
+                        state.parent_task.cancel()
                     return
 
     async def _await_future(self, future):

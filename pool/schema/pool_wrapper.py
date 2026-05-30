@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .base import _LAILA_IDENTIFIABLE_POOL
@@ -64,7 +64,7 @@ class PoolWrapper:
     already takes the pool's own lock.
     """
 
-    __slots__ = ("pool", "manifest")
+    __slots__ = ("manifest", "pool")
 
     def __init__(self, pool: _LAILA_IDENTIFIABLE_POOL, manifest: Any) -> None:
         self.pool = pool
@@ -107,10 +107,13 @@ class PoolWrapper:
         if not isinstance(other, PoolWrapper):
             return NotImplemented
 
-        from ...policy.central.command.schema.future.future.group_future import GroupFuture
-        from ...policy.central.command.schema.future.future.future_status import FutureStatus
-        from ...policy.central.command.taskforce.thread_pool_executor.future import ConcurrentPackageFuture
         import laila
+
+        from ...policy.central.command.schema.future.future.future_status import FutureStatus
+        from ...policy.central.command.schema.future.future.group_future import GroupFuture
+        from ...policy.central.command.taskforce.thread_pool_executor.future import (
+            ConcurrentPackageFuture,
+        )
 
         active_policy = laila.get_active_policy()
 
@@ -153,9 +156,7 @@ class PoolWrapper:
                         pool_id=src_pool.global_id,
                     )
                     if remember_ref is None:
-                        raise RuntimeError(
-                            "Manifest pool copy requires a non-default source pool."
-                        )
+                        raise RuntimeError("Manifest pool copy requires a non-default source pool.")
 
                     remember_fut = active_policy.future_bank[remember_ref.global_id]
                     entry = await remember_fut
@@ -179,10 +180,7 @@ class PoolWrapper:
 
         async def _copy_all() -> None:
             await asyncio.gather(
-                *(
-                    _copy_one(eid, cf)
-                    for eid, cf in duplicate_futures.items()
-                ),
+                *(_copy_one(eid, cf) for eid, cf in duplicate_futures.items()),
                 return_exceptions=True,
             )
 

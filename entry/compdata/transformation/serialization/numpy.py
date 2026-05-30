@@ -1,9 +1,11 @@
 """NumPy array serialisation / deserialisation transformation."""
 
 import io
-import numpy as np
 import textwrap
 from typing import Any
+
+import numpy as np
+
 from ..base import _data_transformation
 
 

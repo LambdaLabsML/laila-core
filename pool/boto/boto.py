@@ -31,19 +31,22 @@ Optional simple per-call sleep (:meth:`_throttle` / :meth:`_athrottle`)
 to keep the pool under a request-per-second cap. Defaults to no
 throttling.
 """
+
 from __future__ import annotations
 
 import asyncio
-import time
-from contextlib import asynccontextmanager
-from typing import Optional, Any, Iterable, Iterator, Dict, Tuple
-from pydantic import Field, PrivateAttr
-from urllib.parse import quote, unquote
 import json
+import time
+from collections.abc import Iterable, Iterator
+from contextlib import asynccontextmanager
+from typing import Any
+from urllib.parse import quote, unquote
 
-from ..schema.base import _LAILA_IDENTIFIABLE_POOL
-from ...entry.compdata.transformation import TransformationSequence
+from pydantic import ConfigDict, Field, PrivateAttr
+
 from ...entry import transformation_base64
+from ...entry.compdata.transformation import TransformationSequence
+from ..schema.base import _LAILA_IDENTIFIABLE_POOL
 
 try:
     import boto3
@@ -89,8 +92,8 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
     """
 
     bucket_name: str = Field(...)
-    max_req_per_second: Optional[float] = Field(default=None)
-    transformations: Optional[TransformationSequence] = Field(default=transformation_base64)
+    max_req_per_second: float | None = Field(default=None)
+    transformations: TransformationSequence | None = Field(default=transformation_base64)
     async_default: bool = Field(
         default=True,
         description=(
@@ -114,13 +117,12 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
     _aio_session_lock: Any = PrivateAttr(default=None)
     # Per-event-loop cached aioboto3 clients: loop_id -> (client, ctx_mgr, loop).
     # Cached in the loop's own thread, drained on close().
-    _aio_clients: Dict[int, Tuple[Any, Any, Any]] = PrivateAttr(default_factory=dict)
-    _aio_client_locks: Dict[int, Any] = PrivateAttr(default_factory=dict)
+    _aio_clients: dict[int, tuple[Any, Any, Any]] = PrivateAttr(default_factory=dict)
+    _aio_client_locks: dict[int, Any] = PrivateAttr(default_factory=dict)
 
     _no_such_key_codes: set[str] = {"NoSuchKey"}
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def _get_client(self):
         """Return a configured boto3 S3 client.
@@ -236,9 +238,7 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
         for loop_id, (client, ctx, loop) in list(self._aio_clients.items()):
             try:
                 if loop is not None and loop.is_running():
-                    fut = asyncio.run_coroutine_threadsafe(
-                        ctx.__aexit__(None, None, None), loop
-                    )
+                    fut = asyncio.run_coroutine_threadsafe(ctx.__aexit__(None, None, None), loop)
                     try:
                         fut.result(timeout=5)
                     except Exception:
@@ -250,9 +250,7 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
                     try:
                         tmp_loop = asyncio.new_event_loop()
                         try:
-                            tmp_loop.run_until_complete(
-                                ctx.__aexit__(None, None, None)
-                            )
+                            tmp_loop.run_until_complete(ctx.__aexit__(None, None, None))
                         finally:
                             tmp_loop.close()
                     except Exception:
@@ -263,7 +261,7 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
         self._aio_client_locks.clear()
         self._aio_session = None
 
-    def _read(self, key: str) -> Optional[Any]:
+    def _read(self, key: str) -> Any | None:
         """Retrieve the JSON value for *key*, or ``None`` if absent."""
         self._throttle()
         try:
@@ -327,7 +325,7 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
 
     # -------- Async hooks: true async via aioboto3 when async_default=True --------
 
-    async def _read_async(self, key: str) -> Optional[Any]:
+    async def _read_async(self, key: str) -> Any | None:
         """Retrieve the JSON value for *key* asynchronously, or ``None`` if absent."""
         if not self.async_default or aioboto3 is None:
             return await super()._read_async(key)

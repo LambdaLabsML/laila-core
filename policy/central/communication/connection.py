@@ -29,11 +29,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import websockets
-from websockets.asyncio.server import serve, ServerConnection
 from websockets.asyncio.client import connect
+from websockets.asyncio.server import ServerConnection, serve
 
 from . import protocol
 
@@ -62,7 +62,9 @@ async def start_server(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL) -> None:
     log.info("Communication server listening on %s:%s", proto.host, proto.bound_port)
 
 
-async def _handle_inbound(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, ws: ServerConnection) -> None:
+async def _handle_inbound(
+    proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, ws: ServerConnection
+) -> None:
     """Handle a freshly accepted inbound WebSocket connection.
 
     Expects the first message to be a ``peer.connect`` JSON-RPC request.
@@ -78,14 +80,15 @@ async def _handle_inbound(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, ws: Se
     """
     try:
         raw = await asyncio.wait_for(ws.recv(), timeout=10.0)
-    except (asyncio.TimeoutError, websockets.ConnectionClosed):
+    except (TimeoutError, websockets.ConnectionClosed):
         return
 
     msg = protocol.decode(raw)
 
     if not protocol.is_request(msg) or msg.get("method") != "peer.connect":
         resp = protocol.make_error(
-            msg.get("id"), protocol.ERR_INVALID_REQUEST,
+            msg.get("id"),
+            protocol.ERR_INVALID_REQUEST,
             "First message must be a peer.connect request.",
         )
         await ws.send(protocol.encode(resp))
@@ -98,7 +101,9 @@ async def _handle_inbound(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, ws: Se
 
     if secret != proto.peer_secret_key:
         resp = protocol.make_error(
-            msg["id"], protocol.ERR_AUTH_FAILED, "Invalid peer secret key.",
+            msg["id"],
+            protocol.ERR_AUTH_FAILED,
+            "Invalid peer secret key.",
         )
         await ws.send(protocol.encode(resp))
         await ws.close()
@@ -114,7 +119,9 @@ async def _handle_inbound(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, ws: Se
     await _receive_loop(proto, ws, peer_id)
 
 
-async def connect_outbound(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, uri: str, secret: str) -> str:
+async def connect_outbound(
+    proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, uri: str, secret: str
+) -> str:
     """Initiate an outbound peering connection.
 
     Connects to *uri*, performs the ``peer.connect`` handshake, registers
@@ -142,15 +149,18 @@ async def connect_outbound(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, uri: 
     ws = await connect(uri)
 
     policy_id = proto._communication.policy_id if proto._communication else None
-    req = protocol.make_request("peer.connect", {
-        "from_id": policy_id,
-        "secret": secret,
-    })
+    req = protocol.make_request(
+        "peer.connect",
+        {
+            "from_id": policy_id,
+            "secret": secret,
+        },
+    )
     await ws.send(protocol.encode(req))
 
     try:
         raw = await asyncio.wait_for(ws.recv(), timeout=10.0)
-    except (asyncio.TimeoutError, websockets.ConnectionClosed) as exc:
+    except (TimeoutError, websockets.ConnectionClosed) as exc:
         await ws.close()
         raise ConnectionError("Peer handshake timed out or connection lost.") from exc
 
@@ -174,7 +184,9 @@ async def connect_outbound(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, uri: 
     return peer_id
 
 
-async def _receive_loop(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, ws: Any, peer_id: str) -> None:
+async def _receive_loop(
+    proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, ws: Any, peer_id: str
+) -> None:
     """Read messages from *ws* and dispatch requests / responses.
 
     This loop runs identically on both the initiator and acceptor side of
@@ -205,7 +217,9 @@ async def _receive_loop(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, ws: Any,
         proto._unregister_peer(peer_id)
 
 
-async def _handle_rpc_request(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, ws: Any, msg: dict) -> None:
+async def _handle_rpc_request(
+    proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, ws: Any, msg: dict
+) -> None:
     """Execute an inbound ``rpc.call`` and send the result back.
 
     Parameters
@@ -222,7 +236,8 @@ async def _handle_rpc_request(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, ws
 
     if method != "rpc.call":
         resp = protocol.make_error(
-            request_id, protocol.ERR_METHOD_NOT_FOUND,
+            request_id,
+            protocol.ERR_METHOD_NOT_FOUND,
             f"Unknown method: {method}",
         )
         await ws.send(protocol.encode(resp))
@@ -238,7 +253,8 @@ async def _handle_rpc_request(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, ws
         resp = protocol.make_result(request_id, result)
     except Exception as exc:
         resp = protocol.make_error(
-            request_id, protocol.ERR_EXECUTION,
+            request_id,
+            protocol.ERR_EXECUTION,
             f"{type(exc).__name__}: {exc}",
         )
 

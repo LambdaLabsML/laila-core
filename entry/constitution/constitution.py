@@ -35,12 +35,12 @@ by reading the ``_kind`` tag baked into every serialized constitution
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, Optional, Type
+from collections.abc import Callable
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-
-_REGISTRY: Dict[str, Type["Constitution"]] = {}
+_REGISTRY: dict[str, type[Constitution]] = {}
 
 
 def _register_kind(kind: str):
@@ -59,7 +59,7 @@ def _register_kind(kind: str):
         ``"complex"``, ...).
     """
 
-    def deco(cls: Type["Constitution"]) -> Type["Constitution"]:
+    def deco(cls: type[Constitution]) -> type[Constitution]:
         _REGISTRY[kind] = cls
         cls._kind = kind  # type: ignore[attr-defined]
         return cls
@@ -100,13 +100,11 @@ def _exec_one_fn(code: str) -> Callable[[Any], Any]:
     code self-contained and survives the round-trip through pool
     storage on machines with different installed packages.
     """
-    namespace: Dict[str, Any] = {}
+    namespace: dict[str, Any] = {}
     exec(code, namespace)
     fns = [v for k, v in namespace.items() if not k.startswith("__") and callable(v)]
     if len(fns) != 1:
-        raise ValueError(
-            "constitution code must define exactly one callable function"
-        )
+        raise ValueError("constitution code must define exactly one callable function")
     return fns[0]
 
 
@@ -128,7 +126,7 @@ class Constitution(BaseModel, ABC):
     _kind: str = ""
 
     @abstractmethod
-    def build(self, payload_input: Optional[Any] = None) -> Any:
+    def build(self, payload_input: Any | None = None) -> Any:
         """Produce and return the entry's payload value.
 
         Parameters
@@ -149,7 +147,7 @@ class Constitution(BaseModel, ABC):
         """
 
     @classmethod
-    def from_dict(cls, in_dict: Optional[dict]) -> Optional["Constitution"]:
+    def from_dict(cls, in_dict: dict | None) -> Constitution | None:
         """Reconstruct a :class:`Constitution` from its serialized dict.
 
         Reads the ``_kind`` tag, looks up the registered subclass in
@@ -193,7 +191,7 @@ class Constitution(BaseModel, ABC):
 
     @classmethod
     @abstractmethod
-    def _from_dict(cls, in_dict: dict) -> "Constitution":
+    def _from_dict(cls, in_dict: dict) -> Constitution:
         """Subclass-specific dict -> instance hook used by :meth:`from_dict`.
 
         Implementations should NOT re-check the ``_kind`` tag (the

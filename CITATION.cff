@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+title: "laila-core"
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - given-names: Amir
+    family-names: Zadeh
+    affiliation: Lambda Labs
+repository-code: "https://github.com/LambdaLabsML/laila-core"
+url: "https://github.com/LambdaLabsML/laila-core"
+abstract: >-
+  Lambda's Interdisciplinary Large Atlas (LAILA) is a Python platform for
+  unifying training, simulation, and data management into a single
+  computational workflow. It wraps heterogeneous storage backends behind a
+  consistent API so that memorizing data, recalling it, and orchestrating
+  compute feels the same regardless of where things live.
+keywords:
+  - machine-learning
+  - data-management
+  - storage
+  - distributed-systems
+  - python
+license: MIT
+version: "1.0.6"

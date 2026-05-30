@@ -1,4 +1,5 @@
 """Backblaze B2 pool implementation using the S3-compatible API."""
+
 from __future__ import annotations
 
 from pydantic import Field

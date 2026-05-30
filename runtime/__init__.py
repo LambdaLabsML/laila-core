@@ -24,6 +24,7 @@ raise :class:`KeyError`.
 """
 
 from __future__ import annotations
+
 from typing import Any, Optional
 
 
@@ -44,10 +45,12 @@ def _resolve_future(future_ref: Any) -> Any:
     TypeError
         If *future_ref* is none of the supported reference types.
     """
-    from ..policy.central.command.schema.future.future.remote_future import RemoteFuture
     from ..policy.central.command.schema.future.future.future import Future
+    from ..policy.central.command.schema.future.future.future_identity import (
+        _LAILA_IDENTIFIABLE_FUTURE,
+    )
     from ..policy.central.command.schema.future.future.group_future import GroupFuture
-    from ..policy.central.command.schema.future.future.future_identity import _LAILA_IDENTIFIABLE_FUTURE
+    from ..policy.central.command.schema.future.future.remote_future import RemoteFuture
 
     if isinstance(future_ref, RemoteFuture):
         return future_ref
@@ -58,6 +61,7 @@ def _resolve_future(future_ref: Any) -> Any:
 
     if isinstance(future_ref, str):
         from .. import _local_policies
+
         for policy in _local_policies.values():
             if future_ref in policy.future_bank:
                 return policy.future_bank[future_ref]
@@ -65,6 +69,7 @@ def _resolve_future(future_ref: Any) -> Any:
 
     if isinstance(future_ref, _LAILA_IDENTIFIABLE_FUTURE):
         from .. import _local_policies
+
         gid = future_ref.global_id
         for policy in _local_policies.values():
             if gid in policy.future_bank:
@@ -106,7 +111,7 @@ def result(future_ref: Any) -> Any:
     return _resolve_future(future_ref).result
 
 
-def exception(future_ref: Any) -> Optional[Exception]:
+def exception(future_ref: Any) -> Exception | None:
     """Return the exception captured by *future_ref*, or ``None``.
 
     Returns ``None`` for futures that completed successfully or are
@@ -121,7 +126,7 @@ def exception(future_ref: Any) -> Optional[Exception]:
     return _resolve_future(future_ref).exception
 
 
-def wait(future_ref: Any, timeout: Optional[float] = None) -> Any:
+def wait(future_ref: Any, timeout: float | None = None) -> Any:
     """Block until *future_ref* terminates and return its result.
 
     The wait honours the same timeout semantics as

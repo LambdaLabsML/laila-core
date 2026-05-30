@@ -29,7 +29,7 @@ remember.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pydantic import ConfigDict, PrivateAttr
 
@@ -67,7 +67,7 @@ class RemoteFuture(_LAILA_IDENTIFIABLE_FUTURE):
 
     def bind(
         self,
-        communication: "_LAILA_IDENTIFIABLE_COMMUNICATION",
+        communication: _LAILA_IDENTIFIABLE_COMMUNICATION,
         *,
         is_group: bool = False,
     ) -> None:
@@ -137,7 +137,7 @@ class RemoteFuture(_LAILA_IDENTIFIABLE_FUTURE):
         )
 
     @property
-    def exception(self) -> Optional[dict]:
+    def exception(self) -> dict | None:
         """Return a serialized representation of the remote exception, if any."""
         return self._comm._send_rpc(
             str(self.policy_id),
@@ -146,7 +146,7 @@ class RemoteFuture(_LAILA_IDENTIFIABLE_FUTURE):
             {},
         )
 
-    def wait(self, timeout: Optional[float] = None) -> Any:
+    def wait(self, timeout: float | None = None) -> Any:
         """Block until the remote future completes, returning the result id.
 
         Raises
@@ -155,6 +155,7 @@ class RemoteFuture(_LAILA_IDENTIFIABLE_FUTURE):
             If called from a thread that owns an async event loop.
         """
         from ...exceptions import _check_not_loop_thread
+
         _check_not_loop_thread()
 
         return self._comm._send_rpc(

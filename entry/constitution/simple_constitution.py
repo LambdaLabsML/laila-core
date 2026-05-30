@@ -23,7 +23,7 @@ list applied left-to-right.)
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any
 
 from pydantic import PrivateAttr
 
@@ -40,7 +40,7 @@ class SimpleConstitution(Constitution):
     returns ``payload_input`` unchanged.
     """
 
-    _codes: List[str] = PrivateAttr(default_factory=list)
+    _codes: list[str] = PrivateAttr(default_factory=list)
 
     def __init__(self, **data: Any):
         """Accept ``codes=`` as the list of source strings.
@@ -60,7 +60,7 @@ class SimpleConstitution(Constitution):
         self._codes = list(codes)
 
     @property
-    def codes(self) -> List[str]:
+    def codes(self) -> list[str]:
         """A defensive copy of the ordered list of source strings.
 
         Returning a copy means callers cannot accidentally mutate the
@@ -70,7 +70,7 @@ class SimpleConstitution(Constitution):
         """
         return list(self._codes)
 
-    def build(self, payload_input: Optional[Any] = None) -> Any:
+    def build(self, payload_input: Any | None = None) -> Any:
         """Thread *payload_input* through every code in order.
 
         Each step compiles its source string via :func:`_exec_one_fn`
@@ -101,7 +101,7 @@ class SimpleConstitution(Constitution):
         return {"_kind": "simple", "codes": list(self._codes)}
 
     @classmethod
-    def _from_dict(cls, in_dict: dict) -> "SimpleConstitution":
+    def _from_dict(cls, in_dict: dict) -> SimpleConstitution:
         """Rebuild a :class:`SimpleConstitution` from its serialized dict.
 
         Missing ``codes`` is treated as an empty chain (a valid no-op

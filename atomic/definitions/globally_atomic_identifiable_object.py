@@ -15,11 +15,12 @@ single-policy case, prefer
 machinery here adds overhead that is wasted unless multiple policies
 genuinely contend for the same object.
 """
+
 from __future__ import annotations
 
-from contextlib import contextmanager
 import secrets
-from typing import Optional, Any
+from contextlib import contextmanager
+from typing import Any
 
 from pydantic import PrivateAttr
 
@@ -50,10 +51,10 @@ class _LAILA_GLOBALLY_ATOMIC_IDENTIFIABLE_OBJECT(_LAILA_LOCALLY_ATOMIC_IDENTIFIA
     """
 
     _global_lock: bool = PrivateAttr(default=False)
-    _holder_policy_id: Optional[str] = PrivateAttr(default=None)
-    _holder_secret: Optional[str] = PrivateAttr(default=None)
+    _holder_policy_id: str | None = PrivateAttr(default=None)
+    _holder_secret: str | None = PrivateAttr(default=None)
 
-    def lock_global(self, policy_id: str, *, timeout_s: Optional[float] = None) -> Optional[str]:
+    def lock_global(self, policy_id: str, *, timeout_s: float | None = None) -> str | None:
         """Acquire the global lock for a given policy.
 
         Parameters
@@ -94,7 +95,7 @@ class _LAILA_GLOBALLY_ATOMIC_IDENTIFIABLE_OBJECT(_LAILA_LOCALLY_ATOMIC_IDENTIFIA
             self._holder_policy_id = None
             self._holder_secret = None
 
-    def global_locked(self, *, timeout_s: Optional[float] = None) -> bool:
+    def global_locked(self, *, timeout_s: float | None = None) -> bool:
         """Return ``True`` if the global lock is held (or local lock times out)."""
         try:
             with self.atomic(scope="local", timeout_s=timeout_s):
@@ -102,7 +103,7 @@ class _LAILA_GLOBALLY_ATOMIC_IDENTIFIABLE_OBJECT(_LAILA_LOCALLY_ATOMIC_IDENTIFIA
         except TimeoutError:
             return True
 
-    def _verify_secret(self, secret: Optional[str], *, timeout_s: Optional[float] = None) -> bool:
+    def _verify_secret(self, secret: str | None, *, timeout_s: float | None = None) -> bool:
         """Verify that *secret* matches the current holder token."""
         try:
             with self.atomic(scope="local", timeout_s=timeout_s):
@@ -117,8 +118,8 @@ class _LAILA_GLOBALLY_ATOMIC_IDENTIFIABLE_OBJECT(_LAILA_LOCALLY_ATOMIC_IDENTIFIA
         self,
         *,
         scope: str = "local",
-        timeout_s: Optional[float] = None,
-        policy_id: Optional[str] = None,
+        timeout_s: float | None = None,
+        policy_id: str | None = None,
     ):
         """Context manager for local or global atomic sections.
 
@@ -149,7 +150,9 @@ class _LAILA_GLOBALLY_ATOMIC_IDENTIFIABLE_OBJECT(_LAILA_LOCALLY_ATOMIC_IDENTIFIA
                 yield self
             return
         if scope != "global":
-            raise ValueError("Invalid scope for _LAILA_GLOBALLY_ATOMIC_IDENTIFIABLE_OBJECT.atomic() call.")
+            raise ValueError(
+                "Invalid scope for _LAILA_GLOBALLY_ATOMIC_IDENTIFIABLE_OBJECT.atomic() call."
+            )
         if policy_id is None:
             raise ValueError("policy_id is required for global atomic scope.")
 

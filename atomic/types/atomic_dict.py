@@ -25,17 +25,22 @@ future-bank tables, taskforce queues, and the central memory hint /
 record indexes -- anywhere a plain dict would be a race-condition
 waiting to happen.
 """
+
 from __future__ import annotations
-from collections.abc import MutableMapping, Iterable, Mapping
-from threading import RLock
-from typing import TypeVar, Generic, Iterator, Callable, Any, Optional, ClassVar
+
+from collections.abc import Callable, Iterable, Iterator, Mapping, MutableMapping
 from contextvars import ContextVar
-from pydantic import BaseModel, PrivateAttr, Field, ConfigDict
+from threading import RLock
+from typing import Any, ClassVar, Generic, TypeVar
+
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+
 from ..definitions.locally_atomic_object import _LAILA_LOCALLY_ATOMIC_OBJECT
 
 K = TypeVar("K")
 V = TypeVar("V")
 T = TypeVar("T")
+
 
 class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], Generic[K, V]):
     """
@@ -54,7 +59,7 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
     _order: list[K] = PrivateAttr(default_factory=list)
 
     # context-local "current" AtomicDict (thread- & async-task-safe)
-    _current: ClassVar[ContextVar[Optional["AtomicDict[Any, Any]"]]] = ContextVar(
+    _current: ClassVar[ContextVar[AtomicDict[Any, Any] | None]] = ContextVar(
         "AtomicDict_current", default=None
     )
 
@@ -158,7 +163,7 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
             ordered = {k: self.data[k] for k in self._order}
             return f"AtomicDict({ordered!r})"
 
-    def get(self, key: K, default: Optional[V] = None) -> Optional[V]:  # type: ignore[override]
+    def get(self, key: K, default: V | None = None) -> V | None:  # type: ignore[override]
         """Return the value for *key*, or *default* if absent."""
         with self._lock:
             return self.data.get(key, default)
@@ -209,8 +214,7 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
             self._order.clear()
 
     def update(
-        self,
-        other: Optional[Iterable[tuple[K, V]] | Mapping[K, V]] = None, /, **kwargs: V
+        self, other: Iterable[tuple[K, V]] | Mapping[K, V] | None = None, /, **kwargs: V
     ) -> None:  # type: ignore[override]
         """Merge items from *other* and/or keyword arguments."""
         with self._lock:
@@ -288,11 +292,13 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
             n = len(self._order)
 
             s = 0 if start is None else start
-            e = n if end   is None else end
-            if s < 0: s += n
-            if e < 0: e += n
-            if s < 0: s = 0
-            if e > n: e = n
+            e = n if end is None else end
+            if s < 0:
+                s += n
+            if e < 0:
+                e += n
+            s = max(s, 0)
+            e = min(e, n)
 
             if s >= e:
                 self.data.clear()
@@ -306,7 +312,7 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
                     del self.data[k]
             self._order[:] = keep_keys
 
-    def compute(self, key: K, fn: Callable[[Optional[V]], Optional[V]]) -> Optional[V]:
+    def compute(self, key: K, fn: Callable[[V | None], V | None]) -> V | None:
         """Atomically compute a new value for *key*.
 
         Parameters
@@ -353,14 +359,19 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
     class _AtomicView:
         """Proxy object yielded by ``AtomicDict.atomic()`` for lock-held mutations."""
 
-        def __init__(self, parent: "AtomicDict[K, V]"):
+        def __init__(self, parent: AtomicDict[K, V]):
             """Initialize with a reference to the parent dict."""
             self._p = parent
+
         def __setitem__(self, key: K, value: V) -> None:
             self._p._set_nolock(key, value)
+
         def __delitem__(self, key: K) -> None:
             self._p._del_nolock(key)
-        def update(self, other: Optional[Iterable[tuple[K, V]] | Mapping[K, V]] = None, /, **kwargs: V) -> None:
+
+        def update(
+            self, other: Iterable[tuple[K, V]] | Mapping[K, V] | None = None, /, **kwargs: V
+        ) -> None:
             if other is not None:
                 if hasattr(other, "keys"):
                     for k in other:  # type: ignore[assignment]
@@ -374,15 +385,15 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
     class _Atomic:
         """Context manager that holds the dict lock and exposes an ``_AtomicView``."""
 
-        def __init__(self, parent: "AtomicDict[K, V]", hint: str = ""):
+        def __init__(self, parent: AtomicDict[K, V], hint: str = ""):
             """Initialize with parent dict and optional hint."""
             if not isinstance(hint, str):
                 raise TypeError("hint must be a str")
             self._p = parent
             self.hint: str = hint
-            self._token: Optional[Any] = None
+            self._token: Any | None = None
 
-        def __enter__(self) -> "AtomicDict._AtomicView":
+        def __enter__(self) -> AtomicDict._AtomicView:
             self._p._lock.acquire()
             self._p._ensure_order_synced()
             # expose this instance as "current"
@@ -395,7 +406,7 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
                 self._token = None
             self._p._lock.release()
 
-    def atomic(self, hint: str = "") -> "_Atomic":
+    def atomic(self, hint: str = "") -> _Atomic:
         """Return a context manager for batched, lock-held operations.
 
         Parameters
@@ -413,7 +424,7 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
         return AtomicDict._Atomic(self, hint)
 
     @classmethod
-    def current(cls) -> "AtomicDict[Any, Any]":
+    def current(cls) -> AtomicDict[Any, Any]:
         """Return the ``AtomicDict`` currently held in an atomic block.
 
         Raises

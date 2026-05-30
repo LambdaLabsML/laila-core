@@ -1,11 +1,14 @@
 """Pydantic-wrapped ``concurrent.futures.Future`` with Laila status lifecycle."""
 
 from __future__ import annotations
-from typing import Optional, Any, Callable
-from concurrent.futures import Future as _ConcurrentFuture, TimeoutError as FutureTimeoutError
-from pydantic import PrivateAttr
-import time
+
 import asyncio
+import time
+from concurrent.futures import Future as _ConcurrentFuture
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from typing import Any
+
+from pydantic import PrivateAttr
 
 from ...schema.future.future.future import Future
 from ...schema.future.future.future_status import FutureStatus
@@ -22,13 +25,13 @@ class ConcurrentPackageFuture(Future):
       - ERROR        → after exception set or raised
     """
 
-    _native_future: Optional[_ConcurrentFuture] = PrivateAttr(default=None)
-
+    _native_future: _ConcurrentFuture | None = PrivateAttr(default=None)
 
     def model_post_init(self, __context: Any) -> None:
         """Register with the active local policy and attach done-callback if native future exists."""
         self._setup_default_callbacks()
         from ...... import _get_active_local_policy
+
         policy = _get_active_local_policy()
         policy.central.command._register_future_with_active_guarantees(self)
         policy.future_bank[self.global_id] = self
@@ -36,16 +39,15 @@ class ConcurrentPackageFuture(Future):
             self._add_default_concurrent_future_done_callback()
         try:
             from ......logger import get_logger
+
             get_logger().record_future_created(self)
         except Exception:
             pass
-
 
     @property
     def native_future(self) -> _ConcurrentFuture:
         """Return the underlying ``concurrent.futures.Future``."""
         return self._native_future
-
 
     @native_future.setter
     def native_future(self, native_future: _ConcurrentFuture) -> None:
@@ -55,9 +57,9 @@ class ConcurrentPackageFuture(Future):
         self._native_future = native_future
         self._add_default_concurrent_future_done_callback()
 
-
     def _add_default_concurrent_future_done_callback(self) -> None:
         """Attach a done-callback that syncs native future outcome to Laila status."""
+
         def _default_done_callback(n_fut: _ConcurrentFuture) -> None:
             if n_fut.cancelled():
                 self.result = None
@@ -74,9 +76,7 @@ class ConcurrentPackageFuture(Future):
 
         self._native_future.add_done_callback(_default_done_callback)
 
-
-
-    def wait(self, timeout: Optional[float] = None) -> Any:
+    def wait(self, timeout: float | None = None) -> Any:
         """Block until the future completes or *timeout* seconds elapse.
 
         Raises
@@ -85,6 +85,7 @@ class ConcurrentPackageFuture(Future):
             If called from a thread that owns an async event loop.
         """
         from ...schema.exceptions import _check_not_loop_thread
+
         _check_not_loop_thread()
 
         deadline = None if timeout is None else time.monotonic() + timeout
@@ -114,9 +115,9 @@ class ConcurrentPackageFuture(Future):
 
             time.sleep(poll_interval_s)
 
-
     def __await__(self):
         """Await the native future or poll until a terminal status is reached."""
+
         async def _await_native_or_terminal():
             poll_interval_s = 0.01
 

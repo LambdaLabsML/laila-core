@@ -1,20 +1,24 @@
 """Redis pool implementation with a managed private redis-server."""
+
 from __future__ import annotations
 
-from typing import Optional, Any, Iterable, Iterator
-from contextlib import contextmanager, suppress
-from pydantic import Field, PrivateAttr
-import os
-import subprocess
-import time
 import atexit
 import hashlib
 import json
-import redis
+import os
+import subprocess
+import time
+from collections.abc import Iterable, Iterator
+from contextlib import suppress
+from typing import Any
 
-from ..schema.base import _LAILA_IDENTIFIABLE_POOL
-from ...entry.compdata.transformation import TransformationSequence
+import redis
+from pydantic import ConfigDict, Field, PrivateAttr
+
 from ...entry import transformation_base64
+from ...entry.compdata.transformation import TransformationSequence
+from ..schema.base import _LAILA_IDENTIFIABLE_POOL
+
 
 class RedisPool(_LAILA_IDENTIFIABLE_POOL):
     """
@@ -37,26 +41,22 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
     lock_prefix: str = Field(default="pool_lock")
 
     # Optional auth
-    redis_password: Optional[str] = Field(default=None)
+    redis_password: str | None = Field(default=None)
 
     # Behavior
     server_start_timeout_s: float = Field(default=3.0)
     lock_timeout: int = Field(default=30)
 
-    redis_dir: Optional[str] = Field(default=None)
+    redis_dir: str | None = Field(default=None)
 
-    _client: Optional[redis.Redis] = PrivateAttr(default=None)
-    _redis_proc: Optional[subprocess.Popen] = PrivateAttr(default=None)
+    _client: redis.Redis | None = PrivateAttr(default=None)
+    _redis_proc: subprocess.Popen | None = PrivateAttr(default=None)
     _db_dump_name: str = PrivateAttr(default="laila_pool.rdb")
     _redis_socket_name: str = PrivateAttr(default="laila_redis.sock")
 
-    transformations: Optional[TransformationSequence] = Field(default=transformation_base64)
+    transformations: TransformationSequence | None = Field(default=transformation_base64)
 
-
-    class Config:
-        """Pydantic model configuration."""
-
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     # ---------------- lifecycle ----------------
     def model_post_init(self, __context: Any) -> None:
@@ -68,6 +68,7 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
         """
         super().model_post_init(__context)
         from ...macros.defaults import LAILA_DEFAULT_DIRECTORIES
+
         pool_dir = os.path.join(LAILA_DEFAULT_DIRECTORIES["pools"], self.uuid)
         self.redis_dir = pool_dir
         os.makedirs(self.redis_dir, exist_ok=True)
@@ -128,16 +129,26 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
 
         cmd = [
             "redis-server",
-            "--port", "0",  # disable TCP
-            "--unixsocket", self._redis_socket_path,
-            "--unixsocketperm", "700",
-            "--dir", self.redis_dir,
-            "--dbfilename", self._db_dump_name,
-            "--save", "900 1",
-            "--save", "300 10",
-            "--save", "60 10000",
-            "--appendonly", "no",
-            "--protected-mode", "yes",
+            "--port",
+            "0",  # disable TCP
+            "--unixsocket",
+            self._redis_socket_path,
+            "--unixsocketperm",
+            "700",
+            "--dir",
+            self.redis_dir,
+            "--dbfilename",
+            self._db_dump_name,
+            "--save",
+            "900 1",
+            "--save",
+            "300 10",
+            "--save",
+            "60 10000",
+            "--appendonly",
+            "no",
+            "--protected-mode",
+            "yes",
         ]
 
         if self.redis_password:
@@ -151,7 +162,7 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
         )
 
         deadline = time.time() + self.server_start_timeout_s
-        last_err: Optional[Exception] = None
+        last_err: Exception | None = None
 
         while time.time() < deadline:
             if self._redis_proc.poll() is not None:
@@ -215,8 +226,7 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
         """Redis key used for distributed locking."""
         return self.lock_prefix
 
-
-    def _read(self, key: str) -> Optional[Any]:
+    def _read(self, key: str) -> Any | None:
         """Retrieve the JSON value for *key*, or ``None`` if absent."""
         if self._client is None:
             raise RuntimeError("Redis client not initialized.")

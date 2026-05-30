@@ -15,5 +15,6 @@ Two small, frequently-used decorators live here:
   item or an iterable" callers; saves boilerplate at the top of
   every such function.
 """
+
 from .synchronized import synchronized
 from .typecheck import ensure_list

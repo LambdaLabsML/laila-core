@@ -8,10 +8,6 @@ log consumer that hard-codes the value.
 """
 
 from enum import Enum
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
-import uuid
-from typing import Dict, Optional, Callable, Any, List
-import json
 
 
 class FutureStatus(str, Enum):
@@ -43,6 +39,7 @@ class FutureStatus(str, Enum):
     Subclassing :class:`str` makes JSON / log serialization trivial --
     ``json.dumps(FutureStatus.RUNNING)`` produces ``"running"`` directly.
     """
+
     UNKNOWN = "unknown"
     NOT_STARTED = "not_started"
     RUNNING = "running"
@@ -50,5 +47,3 @@ class FutureStatus(str, Enum):
     FINISHED = "finished"
     ERROR = "error"
     CANCELLED = "cancelled"
-
-

@@ -32,15 +32,15 @@ to the originating peer (see :meth:`_maybe_wrap_remote_future`).
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
-from pydantic import PrivateAttr, ConfigDict
-from .....basics.definitions.cli_capable import CLIExempt, _LAILA_CLI_CAPABLE_CLASS
+from pydantic import ConfigDict, PrivateAttr
 
+from .....basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS, CLIExempt
 from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from .....macros.strings import _CENTRAL_COMMUNICATION_SCOPE
-from ..proxy import RemotePolicyProxy
 from ..protocols.base import _LAILA_IDENTIFIABLE_COMM_PROTOCOL
+from ..proxy import RemotePolicyProxy
 
 log = logging.getLogger(__name__)
 
@@ -85,9 +85,9 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    policy_id: Optional[str] = CLIExempt(default=None)
-    peers: Dict[str, RemotePolicyProxy] = CLIExempt(default_factory=dict)
-    connections: Dict[str, _LAILA_IDENTIFIABLE_COMM_PROTOCOL] = CLIExempt(
+    policy_id: str | None = CLIExempt(default=None)
+    peers: dict[str, RemotePolicyProxy] = CLIExempt(default_factory=dict)
+    connections: dict[str, _LAILA_IDENTIFIABLE_COMM_PROTOCOL] = CLIExempt(
         default_factory=dict,
     )
 
@@ -97,9 +97,7 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
     # Protocol management
     # ------------------------------------------------------------------
 
-    def add_connection(
-        self, protocol: _LAILA_IDENTIFIABLE_COMM_PROTOCOL
-    ) -> None:
+    def add_connection(self, protocol: _LAILA_IDENTIFIABLE_COMM_PROTOCOL) -> None:
         """Register and start a transport protocol.
 
         Sets the protocol's back-reference, adds it to the registry,
@@ -116,9 +114,7 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         self.connections[protocol.global_id] = protocol
         protocol.start()
 
-    def remove_connection(
-        self, protocol: _LAILA_IDENTIFIABLE_COMM_PROTOCOL
-    ) -> None:
+    def remove_connection(self, protocol: _LAILA_IDENTIFIABLE_COMM_PROTOCOL) -> None:
         """Stop a transport protocol and remove it from this communication instance.
 
         The protocol is responsible for all its own cleanup — closing
@@ -153,8 +149,7 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         """
         if not self.connections:
             raise ConnectionError(
-                "No communication protocols configured. "
-                "Call add_connection() first."
+                "No communication protocols configured. Call add_connection() first."
             )
         for proto in self.connections.values():
             if type(proto).can_handle_uri(uri):
@@ -250,6 +245,7 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
             proxy = RemotePolicyProxy(peer_id, self)
             self.peers[peer_id] = proxy
             from ..... import _remote_policies
+
             _remote_policies[peer_id] = proxy
 
     def _unregister_peer(self, peer_id: str) -> None:
@@ -264,6 +260,7 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         """
         self.peers.pop(peer_id, None)
         from ..... import _remote_policies
+
         _remote_policies.pop(peer_id, None)
 
     # ------------------------------------------------------------------
@@ -363,9 +360,9 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         if not isinstance(result, dict) or not result.get("__laila_future__"):
             return result
 
-        from ...command.schema.future.future.remote_future import RemoteFuture
         from .....basics.definitions.identifiable_object import GLOBAL_ID_REGEX_PATTERN
         from .....macros.strings import _FUTURE_SCOPE, _GROUP_FUTURE_SCOPE
+        from ...command.schema.future.future.remote_future import RemoteFuture
 
         remote_gid = result["global_id"]
         match = GLOBAL_ID_REGEX_PATTERN.match(remote_gid)

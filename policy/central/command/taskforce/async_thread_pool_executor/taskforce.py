@@ -21,24 +21,27 @@ Reuses :class:`ConcurrentPackageFuture` for the per-task future state;
 the runner coroutine sets ``fut.exception``, ``fut.result``, and
 ``fut.status`` directly.
 """
+
 from __future__ import annotations
+
 import asyncio
 import inspect
 import os
 import threading
-from typing import Callable, Any, Iterable, List, Union, Optional
+from collections.abc import Callable, Iterable
+from typing import Any
 
-from pydantic import Field, PrivateAttr, ConfigDict
+from pydantic import ConfigDict, Field, PrivateAttr
 
-from ..thread_pool_executor.future import ConcurrentPackageFuture
-from ...schema.future.future.group_future import GroupFuture
-from ...schema.future.future.future_status import FutureStatus
 from ...schema.exceptions import (
     _register_async_loop_thread,
     _unregister_async_loop_thread,
 )
-from ..status import TaskForceStatus
+from ...schema.future.future.future_status import FutureStatus
+from ...schema.future.future.group_future import GroupFuture
 from ..base import _LAILA_IDENTIFIABLE_TASK_FORCE
+from ..status import TaskForceStatus
+from ..thread_pool_executor.future import ConcurrentPackageFuture
 
 
 class _LoopThread:
@@ -59,7 +62,7 @@ class _LoopThread:
         self._inflight: int = 0
         self._inflight_lock = threading.Lock()
         self._ready = threading.Event()
-        self._thread_ident: Optional[int] = None
+        self._thread_ident: int | None = None
         self.thread = threading.Thread(target=self._run, name=name, daemon=True)
         self.thread.start()
         self._ready.wait()
@@ -99,7 +102,7 @@ class _LoopThread:
     def submit_coro(self, coro):
         return asyncio.run_coroutine_threadsafe(coro, self.loop)
 
-    def stop(self, timeout: Optional[float] = None) -> None:
+    def stop(self, timeout: float | None = None) -> None:
         try:
             self.loop.call_soon_threadsafe(self.loop.stop)
         except RuntimeError:
@@ -121,7 +124,9 @@ class PythonAsyncThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    backend: str = Field(default="async_threads", description="Execution backend (async_threads only).")
+    backend: str = Field(
+        default="async_threads", description="Execution backend (async_threads only)."
+    )
     num_workers: int = Field(
         default_factory=lambda: max(1, os.cpu_count() or 1),
         ge=1,
@@ -133,11 +138,11 @@ class PythonAsyncThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
         description="Maximum concurrent in-flight tasks per loop thread.",
     )
 
-    _cv: Optional[threading.Condition] = PrivateAttr(default=None)
-    _capacity_cv: Optional[threading.Condition] = PrivateAttr(default=None)
-    _stop: Optional[threading.Event] = PrivateAttr(default=None)
-    _dispatcher: Optional[threading.Thread] = PrivateAttr(default=None)
-    _loops: List[_LoopThread] = PrivateAttr(default_factory=list)
+    _cv: threading.Condition | None = PrivateAttr(default=None)
+    _capacity_cv: threading.Condition | None = PrivateAttr(default=None)
+    _stop: threading.Event | None = PrivateAttr(default=None)
+    _dispatcher: threading.Thread | None = PrivateAttr(default=None)
+    _loops: list[_LoopThread] = PrivateAttr(default_factory=list)
 
     def _on_start(self) -> None:
         if self.backend.lower() != "async_threads":
@@ -216,10 +221,10 @@ class PythonAsyncThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
         self,
         tasks: Iterable[Callable[[], Any]],
         wait: bool = False,
-    ) -> Union[GroupFuture, Any]:
+    ) -> GroupFuture | Any:
         tasks = list(tasks)
 
-        futures: List[ConcurrentPackageFuture] = []
+        futures: list[ConcurrentPackageFuture] = []
         for task in tasks:
             fut = self._queue_submit(task)
             fut.taskforce_id = self.global_id
@@ -248,10 +253,10 @@ class PythonAsyncThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
     # Dispatcher
     # =========================================================
 
-    def _pick_loop(self) -> Optional[_LoopThread]:
+    def _pick_loop(self) -> _LoopThread | None:
         """Return the loop with the lowest in-flight count under the cap, or None."""
         cap = self.max_async_per_thread
-        best: Optional[_LoopThread] = None
+        best: _LoopThread | None = None
         best_count = cap
         for lt in self._loops:
             c = lt.inflight_count()
@@ -274,7 +279,7 @@ class PythonAsyncThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
                 _, item = self._q.pop_next()
                 _, args, kwargs = item
 
-            picked: Optional[_LoopThread] = None
+            picked: _LoopThread | None = None
             while not stop.is_set() and picked is None:
                 picked = self._pick_loop()
                 if picked is not None:

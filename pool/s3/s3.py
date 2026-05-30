@@ -6,9 +6,9 @@ delete logic lives in the parent class -- this file just plugs in
 the right :func:`boto3.client` factory and the matching
 :class:`aioboto3.Session` for the async path.
 """
+
 from __future__ import annotations
 
-from typing import Optional
 from pydantic import Field
 
 from ..boto.boto import BotoPool
@@ -49,9 +49,9 @@ class S3Pool(BotoPool):
         region from its standard configuration sources.
     """
 
-    access_key_id: Optional[str] = Field(default=None)
-    secret_access_key: Optional[str] = Field(default=None)
-    region_name: Optional[str] = Field(default=None)
+    access_key_id: str | None = Field(default=None)
+    secret_access_key: str | None = Field(default=None)
+    region_name: str | None = Field(default=None)
 
     def _get_client(self):
         """Return a cached :class:`boto3.client` instance for AWS S3.

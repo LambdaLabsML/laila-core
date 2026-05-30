@@ -1,8 +1,10 @@
 """Msgpack serialisation / deserialisation transformation."""
 
-import msgpack
 import textwrap
 from typing import Any
+
+import msgpack
+
 from ..base import _data_transformation
 
 

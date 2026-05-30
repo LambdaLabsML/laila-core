@@ -27,9 +27,9 @@ TorchSerializer   Optimised for :class:`torch.Tensor`. Imported
 ============    ===============================================
 """
 
-from .pickle import PickleSerializer
 from .msgpack import MsgpackSerializer
 from .numpy import NumpySerializer
+from .pickle import PickleSerializer
 
 try:
     from .torch import TorchSerializer

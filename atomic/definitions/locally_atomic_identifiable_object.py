@@ -8,6 +8,7 @@ base class so subclasses can pick up both concerns by inheriting from
 a single name. This is the most-used base class in laila -- pools,
 taskforces, comm protocols, futures and many more inherit from it.
 """
+
 from __future__ import annotations
 
 from ...basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT

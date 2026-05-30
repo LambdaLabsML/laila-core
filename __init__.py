@@ -68,35 +68,42 @@ applications which never call :func:`laila.enable_logging` do not see
 machinery.
 """
 
+import os
 import sys
 import types
 import uuid
-import os
+from importlib import metadata as _metadata
 from typing import Optional
+
 from dotmap import DotMap
 
+try:
+    __version__ = _metadata.version("laila-core")
+except _metadata.PackageNotFoundError:
+    __version__ = "0.0.0+local"
+
+from . import entry, policy
 from .entry import Entry
-from . import entry
-from . import policy
 from .policy.central.memory.schema.manifest import Manifest
+
 manifest = Manifest
-from .macros.aliases import *
-from .policy.schema.base import _LAILA_IDENTIFIABLE_POLICY
-from .policy.central.command import taskforce as TaskForce
-
-from .macros.defaults import *
-from .macros.strings import _ENTRY_SCOPE
-
-from .utils.args import ArgReader
-from .utils import guarantee, guarantee_async
 from .logger import (
     Logger,
-    get_logger,
-    enable_logging,
     disable_logging,
+    enable_logging,
+    get_logger,
     set_log_level,
+)
+from .logger import (
     _install_null_handler as _install_logger_null_handler,
 )
+from .macros.aliases import *
+from .macros.defaults import *
+from .macros.strings import _ENTRY_SCOPE
+from .policy.central.command import taskforce as TaskForce
+from .policy.schema.base import _LAILA_IDENTIFIABLE_POLICY
+from .utils import guarantee, guarantee_async
+from .utils.args import ArgReader
 
 _install_logger_null_handler()
 
@@ -210,6 +217,7 @@ class _LailaArgs(DotMap):
     def __setattr__(self, key, value):
         if key == "environment" and _is_env_load_trigger(value):
             from .basics.definitions.cli_capable import _load_environment
+
             _load_environment(value)
             return
         if isinstance(value, dict) and not isinstance(value, DotMap):
@@ -219,6 +227,7 @@ class _LailaArgs(DotMap):
     def __setitem__(self, key, value):
         if key == "environment" and _is_env_load_trigger(value):
             from .basics.definitions.cli_capable import _load_environment
+
             _load_environment(value)
             return
         if isinstance(value, dict) and not isinstance(value, DotMap):
@@ -305,23 +314,23 @@ def terminate(*, wait: bool = True, cancel_pending: bool = False) -> list:
     global _active_policy_gid
     errors: list = []
 
-    for gid, policy in list(_local_policies.items()):
+    for gid, pol in list(_local_policies.items()):
         try:
-            comm = getattr(getattr(policy, "central", None), "communication", None)
+            comm = getattr(getattr(pol, "central", None), "communication", None)
             if comm is not None:
                 comm.stop()
         except Exception as e:
             errors.append(f"communication.stop[{gid}]: {e!r}")
 
         try:
-            cmd = getattr(getattr(policy, "central", None), "command", None)
+            cmd = getattr(getattr(pol, "central", None), "command", None)
             if cmd is not None:
                 cmd.shutdown(wait=wait, cancel_pending=cancel_pending)
         except Exception as e:
             errors.append(f"command.shutdown[{gid}]: {e!r}")
 
         try:
-            mem = getattr(getattr(policy, "central", None), "memory", None)
+            mem = getattr(getattr(pol, "central", None), "memory", None)
             router = getattr(mem, "pool_router", None) if mem is not None else None
             if router is not None:
                 for pool_id, pool in list(getattr(router, "pools", {}).items()):
@@ -342,6 +351,7 @@ def terminate(*, wait: bool = True, cancel_pending: bool = False) -> list:
         from .policy.central.command.taskforce.base import (
             _live_taskforces_snapshot,
         )
+
         for tf in _live_taskforces_snapshot():
             try:
                 tf.shutdown(wait=wait, cancel_pending=cancel_pending)
@@ -421,8 +431,10 @@ def read_args(source, *, terminal_args=None) -> None:
     """
     arg_reader.load(source, terminal_args=terminal_args)
 
+
 _active_policy_gid: "str | None" = None
 _active_namespace = None
+
 
 def get_active_namespace():
     """Return the UUID-5 namespace used to derive deterministic IDs from nicknames.
@@ -449,8 +461,10 @@ def get_active_namespace():
     global _active_namespace
     if _active_namespace is None:
         from .macros.defaults import LAILA_UNIVERSAL_NAMESPACE
+
         _active_namespace = LAILA_UNIVERSAL_NAMESPACE
     return _active_namespace
+
 
 def set_active_namespace(namespace_key: str):
     """Replace the active UUID-5 namespace with one derived from *namespace_key*.
@@ -481,6 +495,7 @@ def set_active_namespace(namespace_key: str):
     """
     global _active_namespace
     _active_namespace = uuid.uuid5(uuid.NAMESPACE_DNS, namespace_key)
+
 
 def get_active_policy():
     """Return the active policy, lazily creating a ``DefaultPolicy`` on first access.
@@ -519,10 +534,12 @@ def get_active_policy():
     global _active_policy_gid
     if _active_policy_gid is None:
         from .macros.defaults import DefaultPolicy
+
         activate_policy(DefaultPolicy())
     if _active_policy_gid in _local_policies:
         return _local_policies[_active_policy_gid]
     return _remote_policies[_active_policy_gid]
+
 
 def activate_policy(policy):
     """Replace the active policy with *policy*.
@@ -567,12 +584,12 @@ def activate_policy(policy):
     new_gid = str(policy.global_id)
     _active_policy_gid = new_gid
 
-    from .policy.schema.base import _LAILA_IDENTIFIABLE_POLICY
     if isinstance(policy, _LAILA_IDENTIFIABLE_POLICY):
         _local_policies[new_gid] = policy
 
     try:
         from .basics.definitions.cli_capable import _refresh_args_environment
+
         _refresh_args_environment(policy)
     except Exception:
         pass
@@ -731,6 +748,7 @@ class _LailaModule(types.ModuleType):
         :func:`status` / :func:`wait` shims).
         """
         import importlib
+
         return importlib.import_module("laila.runtime")
 
     @property
@@ -884,6 +902,7 @@ def memorize(*args, **kwargs):
     """
     return get_active_policy().central.memory.memorize(*args, **kwargs)
 
+
 def __resolve_nickname(kwargs):
     """Translate a ``nickname=`` (and optional ``evolution=``) kwarg pair
     into the canonical ``[global_id]`` shape consumed by
@@ -914,14 +933,15 @@ def __resolve_nickname(kwargs):
     if isinstance(kwargs["nickname"], str):
         args = [
             Entry.to_global_id(
-                nickname = kwargs["nickname"],
-                scopes = [_ENTRY_SCOPE],
-                evolution = kwargs.get("evolution", None)
+                nickname=kwargs["nickname"],
+                scopes=[_ENTRY_SCOPE],
+                evolution=kwargs.get("evolution", None),
             )
         ]
         return args
     else:
         raise ValueError("nickname must be a string")
+
 
 def remember(*args, persist: bool = True, **kwargs):
     """Retrieve one or more entries from the active policy's memory.
@@ -986,11 +1006,9 @@ def remember(*args, persist: bool = True, **kwargs):
         args = []
         kwargs["entry_ids"] = __resolve_nickname(kwargs)
         del kwargs["nickname"]
-        if "evolution" in kwargs:
-            del kwargs["evolution"]
-    return get_active_policy().central.memory.remember(
-        *args, persist=persist, **kwargs
-    )
+        kwargs.pop("evolution", None)
+    return get_active_policy().central.memory.remember(*args, persist=persist, **kwargs)
+
 
 def forget(*args, **kwargs):
     """Delete one or more entries from the active policy's memory.
@@ -1032,8 +1050,7 @@ def forget(*args, **kwargs):
         args = []
         kwargs["entry_ids"] = __resolve_nickname(kwargs)
         del kwargs["nickname"]
-        if "evolution" in kwargs:
-            del kwargs["evolution"]
+        kwargs.pop("evolution", None)
     return get_active_policy().central.memory.forget(*args, **kwargs)
 
 
@@ -1127,10 +1144,12 @@ def _resolve_future(future_ref):
     TypeError
         If *future_ref* is not one of the accepted types.
     """
-    from .policy.central.command.schema.future.future.remote_future import RemoteFuture
-    from .policy.central.command.schema.future.future.future_identity import _LAILA_IDENTIFIABLE_FUTURE
-    from .policy.central.command.schema.future.future.group_future import GroupFuture
     from .policy.central.command.schema.future.future.future import Future
+    from .policy.central.command.schema.future.future.future_identity import (
+        _LAILA_IDENTIFIABLE_FUTURE,
+    )
+    from .policy.central.command.schema.future.future.group_future import GroupFuture
+    from .policy.central.command.schema.future.future.remote_future import RemoteFuture
 
     if isinstance(future_ref, RemoteFuture):
         return future_ref
@@ -1168,6 +1187,7 @@ def status(future_ref):
         exists only so older notebooks and tutorials keep working.
     """
     from . import runtime
+
     return runtime.status(future_ref)
 
 
@@ -1187,6 +1207,7 @@ def wait(future_ref, timeout=None):
         Use :func:`laila.runtime.wait` directly.
     """
     from . import runtime
+
     return runtime.wait(future_ref, timeout)
 
 
@@ -1220,9 +1241,11 @@ def set_default_directory(directory):
     immediately after ``import laila``.
     """
     directory = os.path.expanduser(directory)
-    LAILA_DEFAULT_DIRECTORIES.update({
-        "root": directory,
-        "pools": os.path.join(directory, "pools"),
-        "logs": os.path.join(directory, "logs"),
-        "secrets": os.path.join(directory, "secrets"),
-    })
+    LAILA_DEFAULT_DIRECTORIES.update(
+        {
+            "root": directory,
+            "pools": os.path.join(directory, "pools"),
+            "logs": os.path.join(directory, "logs"),
+            "secrets": os.path.join(directory, "secrets"),
+        }
+    )

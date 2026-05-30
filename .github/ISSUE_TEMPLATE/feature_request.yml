@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest a new capability or API for laila-core
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: >-
+        Describe the use case in concrete terms. What are you trying to do
+        today that is awkward or impossible?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How would you like laila to behave? API sketch welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you've tried, or other libraries that solve this.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context

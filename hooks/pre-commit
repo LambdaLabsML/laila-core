@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pre-commit hook: reject staged files that contain hardcoded secrets.
-# Installed automatically by `make init` / conftest.py.
+# Installed automatically by `make init` via the `pre-commit` framework.
 
 set -euo pipefail
 
