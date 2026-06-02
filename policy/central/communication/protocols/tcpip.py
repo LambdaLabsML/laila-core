@@ -27,7 +27,7 @@ import asyncio
 import logging
 import threading
 import uuid as _uuid
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import Field, PrivateAttr
 
@@ -67,6 +67,11 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
     is hidden behind :func:`asyncio.run_coroutine_threadsafe`.
     """
 
+    protocol_name: ClassVar[str] = "tcpip"
+    _TOKEN_ALIASES: ClassVar[frozenset[str]] = frozenset(
+        {"tcpip", "tcp", "tcp-ip", "tcp/ip", "ws", "websocket"}
+    )
+
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=0)
     peer_secret_key: str = Field(default_factory=lambda: _uuid.uuid4().hex)
@@ -93,6 +98,11 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
     # ------------------------------------------------------------------
     # URI routing
     # ------------------------------------------------------------------
+
+    @classmethod
+    def matches_token(cls, token: str) -> bool:
+        """Accept ``"tcpip"`` plus common aliases (``tcp``, ``tcp-ip``, ``ws``...)."""
+        return token.lower() in cls._TOKEN_ALIASES
 
     @classmethod
     def can_handle_uri(cls, uri: str) -> bool:

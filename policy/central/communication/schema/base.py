@@ -156,6 +156,48 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
                 return proto
         return next(iter(self.connections.values()))
 
+    def _resolve_protocol_for_token(
+        self, token: str | None
+    ) -> _LAILA_IDENTIFIABLE_COMM_PROTOCOL:
+        """Find a registered protocol matching a transport *token*.
+
+        Drives the ``comm_protocol`` argument of :func:`laila.request`.
+        Each protocol class implements
+        :meth:`_LAILA_IDENTIFIABLE_COMM_PROTOCOL.matches_token` (e.g.
+        TCP/IP answers to ``"tcpip"`` / ``"tcp"`` / ``"ws"``). When
+        *token* is ``None`` it defaults to ``"tcpip"`` so callers get a
+        TCP-IP connection out of the box.
+
+        Parameters
+        ----------
+        token : str | None
+            Transport token such as ``"tcpip"``, ``"lora"``,
+            ``"bluetooth"``. ``None`` is treated as ``"tcpip"``.
+
+        Returns
+        -------
+        _LAILA_IDENTIFIABLE_COMM_PROTOCOL
+            The first registered protocol whose ``matches_token``
+            accepts *token*.
+
+        Raises
+        ------
+        ConnectionError
+            If no protocols are registered, or none matches *token*.
+        """
+        if not self.connections:
+            raise ConnectionError(
+                "No communication protocols configured. Call add_connection() first."
+            )
+        resolved = token if token is not None else "tcpip"
+        for proto in self.connections.values():
+            if type(proto).matches_token(resolved):
+                return proto
+        raise ConnectionError(
+            f"No registered communication protocol matches {resolved!r}. "
+            "Register one with add_connection()."
+        )
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------

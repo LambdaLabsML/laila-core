@@ -11,8 +11,12 @@ returns a nested dict of ``Entry`` objects mirroring the blueprint.
 from __future__ import annotations
 
 import copy
-from collections.abc import Iterator
-from typing import Any
+import os
+import re
+import sqlite3
+from collections.abc import Hashable, Iterable, Iterator
+from dataclasses import dataclass
+from typing import Any, Optional
 
 from pydantic import PrivateAttr
 
@@ -20,6 +24,44 @@ from .....entry import Entry
 from .....entry.compdata import ComputationalData
 from .....entry.entry_state import EntryState
 from .....macros.strings import _MANIFEST_SCOPE
+
+# ----------------------------------------------------------------------
+# Non-memorizing algorithmic help: SQL index
+# ----------------------------------------------------------------------
+# The Manifest SQL index is a *non-memorizing algorithmic helper* — a
+# lightweight, temporary, query-side convenience that a manifest owns
+# directly while it is being operated on.  It deliberately bypasses
+# ``central.memory`` (see ``vault/agent/memory.md`` for the sanctioned
+# exemption): it is never memorized, never registered with a pool
+# router, and never travels with the manifest on the wire.  It is a
+# plain ``sqlite3`` database file under ``<laila_root>/indices`` that can
+# be cleared or invalidated at any time.
+
+_PRIMITIVE_TYPES = (str, int, float, bool, bytes, type(None))
+_FORBIDDEN_SQL = ("ORDER BY", "LIMIT", "GROUP BY", "HAVING", "JOIN", "UNION")
+_SQL_INDEX_TABLE = "manifest"
+_SQL_ROW_IDX_COL = "__row_idx__"
+_SQL_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+@dataclass
+class _SqlState:
+    """In-memory handle for a manifest's non-memorizing SQL index.
+
+    Holds the owned ``sqlite3`` connection plus the data-side metadata
+    needed to map query results back to blueprint keys.  Stored on the
+    manifest as a ``PrivateAttr`` so it never affects the manifest's
+    on-the-wire serialization.
+    """
+
+    conn: sqlite3.Connection
+    db_path: str
+    is_persistent: bool
+    table_name: str
+    columns: list
+    indexed: set
+    row_keys: list
+    stale: bool = False
 
 
 class Manifest(Entry):
@@ -35,6 +77,16 @@ class Manifest(Entry):
     synchronously fetches every referenced entry via the active policy's
     central memory and returns a nested dict of ``Entry`` objects mirroring
     the blueprint structure.
+
+    SQL filtering
+    -------------
+    ``manifest.sql("SELECT … FROM … WHERE …")`` filters the blueprint via
+    a small sqlite-backed index built on demand.  This index is a
+    *non-memorizing algorithmic helper*: a lightweight, temporary,
+    query-side convenience that the manifest owns directly and that
+    deliberately bypasses ``central.memory`` (it is never memorized,
+    never routed, and never travels with the manifest).  Subclasses can
+    customise it by overriding :meth:`_sql_rows` and :meth:`_sql_project`.
 
     Parameters
     ----------
@@ -55,6 +107,8 @@ class Manifest(Entry):
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: [_MANIFEST_SCOPE])
     _pending_entries: list | None = PrivateAttr(default=None)
+    _sql_state: Optional[_SqlState] = PrivateAttr(default=None)
+    _sql_finalizer: Any = PrivateAttr(default=None)
 
     def __init__(self, **data: Any):
         raw_data = data.pop("data", None)
@@ -294,6 +348,508 @@ class Manifest(Entry):
         )
 
     # ------------------------------------------------------------------
+    # SQL index  (non-memorizing algorithmic help)
+    # ------------------------------------------------------------------
+
+    def sql(self, query: str) -> Manifest:
+        """Filter the manifest with ``SELECT … FROM … [WHERE …]``.
+
+        A small, regex-based SQL surface over a *non-memorizing* sqlite
+        index that this manifest owns directly (it bypasses
+        ``central.memory`` entirely — it is never memorized and never
+        leaves the local machine).  The index is built lazily on first
+        use and reused until :meth:`invalidate_index` /
+        :meth:`clear_index` is called or the blueprint mutates.
+
+        Supported surface
+        ------------------
+        - ``SELECT <items> FROM <name> [WHERE <predicate>]`` only.
+        - ``ORDER BY`` / ``LIMIT`` / ``GROUP BY`` / ``HAVING`` / ``JOIN``
+          / ``UNION`` are rejected up front with a ``ValueError``.
+        - ``==`` is normalized to ``=`` so casual queries work.
+        - The table name in ``FROM`` is treated as an alias and ignored
+          (any identifier is accepted).
+        - ``SELECT`` items may be ``*``, ``<name>``, or ``<alias>.<name>``;
+          the alias prefix is stripped.  Items beyond ``*`` are ignored
+          by the default projection.
+        - String literals in ``WHERE`` must be single-quoted
+          (``WHERE owner = 'alice'``).  A bareword right-hand side is
+          interpreted by sqlite as a column name; if it can't be
+          resolved the resulting error is re-raised as a ``ValueError``
+          suggesting single quotes.
+
+        Returns
+        -------
+        Manifest
+            A fresh, same-type manifest containing the matched rows.
+            ``sql()`` never mutates ``self`` in place.
+        """
+        select_items, _from_alias, where = Manifest._parse_sql(query)
+
+        if self._sql_state is None:
+            self.build_index()
+        elif self._sql_state.stale:
+            self._sql_rebuild_in_place(widen=True)
+
+        state = self._sql_state
+        sql_text = f'SELECT "{_SQL_ROW_IDX_COL}" FROM "{state.table_name}"'
+        if where:
+            sql_text += f" WHERE {where}"
+
+        try:
+            cursor = state.conn.execute(sql_text)
+            matched_idx = [row[0] for row in cursor.fetchall()]
+        except sqlite3.OperationalError as exc:
+            message = str(exc)
+            if "no such column" in message:
+                raise ValueError(
+                    f"{message}. If you meant a string literal, wrap it in single "
+                    "quotes (e.g. WHERE owner = 'alice'); unquoted barewords are "
+                    "treated as column names by SQL."
+                ) from exc
+            raise
+
+        matched_keys = [state.row_keys[i] for i in matched_idx]
+        return self._sql_project(matched_keys, select_items)
+
+    def build_index(
+        self,
+        *,
+        on: Iterable[str] = (),
+        composite: Iterable[tuple[str, ...]] = (),
+        persist: Optional[str] = None,
+        widen: bool = True,
+    ) -> None:
+        """Materialize the manifest into a sqlite table + indexes.
+
+        Idempotent: a subsequent call is a no-op while the cached index
+        is fresh, and triggers an in-place rebuild if the index was
+        invalidated.  Subsequent :meth:`sql` calls reuse the same
+        connection until :meth:`invalidate_index` is called or the
+        blueprint mutates.
+
+        ``persist``, if provided, is the path to a file-backed sqlite db
+        that survives process restarts (and is attached without a
+        rebuild when it already holds a matching table); otherwise the
+        index lives under ``<laila_root>/indices/<manifest-uuid>/``.
+        """
+        if self._sql_state is not None:
+            if self._sql_state.stale:
+                self._sql_rebuild_in_place(widen=widen)
+            return
+        self._sql_build_fresh(on=on, composite=composite, persist=persist)
+
+    def invalidate_index(self) -> None:
+        """Mark the cached index stale without closing the connection.
+
+        Cheap: the next :meth:`sql` does an in-place rebuild
+        (``DELETE FROM …`` then re-INSERT, indexes preserved).  Called
+        automatically by :meth:`extend` / ``+=``; subclasses that mutate
+        their own blueprint should call this after writing.
+        """
+        if self._sql_state is not None:
+            self._sql_state.stale = True
+
+    def clear_index(self, *, remove_persisted: bool = False) -> None:
+        """Close the sqlite connection and drop the cached index.
+
+        A non-persistent (temporary) index file is disposable and is
+        always unlinked here.  A user-chosen ``persist=`` file is left in
+        place unless ``remove_persisted`` is true.  After
+        ``clear_index()`` the next :meth:`sql` rebuilds from scratch.
+        """
+        finalizer = self._sql_finalizer
+        if finalizer is not None:
+            finalizer.detach()
+            self._sql_finalizer = None
+
+        state = self._sql_state
+        if state is None:
+            return
+        try:
+            state.conn.close()
+        except Exception:
+            pass
+        if (not state.is_persistent) or remove_persisted:
+            Manifest._sql_unlink_db(state.db_path)
+        self._sql_state = None
+
+    # ----- Subclass hooks --------------------------------------------
+
+    def _sql_rows(self) -> tuple[list[tuple[Hashable, dict]], set]:
+        """Return ``(rows, columns)`` for the SQL index.
+
+        Each row is ``(row_key, row_dict)``.  ``row_key`` uniquely
+        addresses the row inside the blueprint (any hashable; tuples
+        allowed).  ``row_dict`` is the flat column→value map used for
+        filtering.  ``columns`` is the union of queryable keys.
+
+        Default implementation: one row per top-level key, using the
+        value as the row dict if it is a dict, otherwise wrapping it as
+        ``{"value": <scalar>}``.  Columns are the union of inner dict
+        keys (or ``{"value"}`` for scalar entries).
+
+        IMPORTANT: ``row_dict`` values must be primitive scalars
+        (``str``, ``int``, ``float``, ``bool``, ``bytes``, ``None``).
+        ``_LAILA_IDENTIFIABLE_OBJECT`` instances and non-primitive
+        containers are rejected at :meth:`build_index` time.  If your
+        blueprint references Entries, pass ``.global_id`` (a ``str``)
+        instead; if it contains lists/dicts, flatten them here (e.g.
+        ``",".join(tags)`` or ``json.dumps(meta)``).
+
+        The row order must be deterministic for a given blueprint so a
+        reattached on-disk index can remap rows back to keys without a
+        rebuild.
+        """
+        blueprint = self.data or {}
+        rows: list[tuple[Hashable, dict]] = []
+        columns: set = set()
+        for key, value in blueprint.items():
+            if isinstance(value, dict):
+                row = dict(value)
+            else:
+                row = {"value": value}
+            rows.append((key, row))
+            columns.update(row.keys())
+        return rows, columns
+
+    def _sql_project(self, matched_keys: list, select_items: list[str]) -> Manifest:
+        """Build a new same-type manifest from matched row keys.
+
+        Default implementation keeps the top-level entries whose key
+        appears in ``matched_keys`` and ignores ``SELECT`` items beyond
+        ``*``.
+        """
+        blueprint = self.data or {}
+        subset = {k: copy.deepcopy(blueprint[k]) for k in matched_keys if k in blueprint}
+        return type(self)(blueprint=subset)
+
+    # ----- SQL parser helpers ----------------------------------------
+
+    @staticmethod
+    def _parse_sql(query: str) -> tuple[list[str], str, Optional[str]]:
+        """Parse a tiny ``SELECT … FROM … [WHERE …]`` query.
+
+        Strips a trailing ``;``, normalizes ``==`` to ``=``, rejects
+        forbidden clauses, and returns ``(select_items, from_alias,
+        where_clause_or_none)``.
+        """
+        if not isinstance(query, str):
+            raise ValueError("sql() query must be a string.")
+
+        normalized = query.strip().rstrip(";").strip().replace("==", "=")
+        upper = normalized.upper()
+        for clause in _FORBIDDEN_SQL:
+            pattern = r"\b" + clause.replace(" ", r"\s+") + r"\b"
+            if re.search(pattern, upper):
+                raise ValueError(
+                    f"Unsupported SQL clause: {clause}. Only "
+                    "'SELECT <items> FROM <name> [WHERE <predicate>]' is supported."
+                )
+
+        match = re.match(
+            r"^\s*SELECT\s+(?P<items>.+?)\s+FROM\s+"
+            r"(?P<from>[`\"']?[A-Za-z_][A-Za-z0-9_]*[`\"']?)\s*"
+            r"(?:WHERE\s+(?P<where>.+))?$",
+            normalized,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            raise ValueError(
+                "Only 'SELECT <items> FROM <name> [WHERE <predicate>]' is supported."
+            )
+
+        select_items = [
+            Manifest._strip_table_prefix(item.strip())
+            for item in match.group("items").split(",")
+        ]
+        from_alias = match.group("from").strip("`\"'")
+        where = match.group("where")
+        if where is not None:
+            where = where.strip()
+        return select_items, from_alias, where
+
+    @staticmethod
+    def _strip_table_prefix(item: str) -> str:
+        """Drop an ``alias.`` prefix and surrounding quotes from a SELECT item."""
+        stripped = item.strip().strip("`\"")
+        if stripped == "*":
+            return stripped
+        if "." in stripped:
+            stripped = stripped.split(".", 1)[1]
+        return stripped.strip("`\"")
+
+    @staticmethod
+    def _validate_primitive_rows(rows: list[tuple[Hashable, dict]]) -> None:
+        """Reject non-primitive row values before any sqlite state exists."""
+        from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+
+        for row_key, row_dict in rows:
+            for col, val in row_dict.items():
+                if isinstance(val, _LAILA_IDENTIFIABLE_OBJECT):
+                    raise TypeError(
+                        f"Cannot index column {col!r}: row {row_key!r} has value "
+                        f"of type {type(val).__name__} (Laila identifiable object). "
+                        f"Index columns must be primitive scalars "
+                        f"(str, int, float, bool, bytes, None). "
+                        f"Pass `.global_id` instead."
+                    )
+                if not isinstance(val, _PRIMITIVE_TYPES):
+                    raise TypeError(
+                        f"Cannot index column {col!r}: row {row_key!r} has value "
+                        f"of type {type(val).__name__}. Index columns must be "
+                        f"primitive scalars. Flatten lists/dicts in your "
+                        f"_sql_rows() override (e.g. ','.join(tags) or "
+                        f"json.dumps(meta))."
+                    )
+
+    # ----- SQL index internals ---------------------------------------
+
+    def _index_db_path(self) -> str:
+        """Default on-disk path for this manifest's index file."""
+        from .....macros.defaults import LAILA_DEFAULT_DIRECTORIES
+
+        base = os.path.join(LAILA_DEFAULT_DIRECTORIES["indices"], self.uuid)
+        os.makedirs(base, exist_ok=True)
+        return os.path.join(base, "sql_index.laila_sqlitedb")
+
+    def _sql_build_fresh(
+        self,
+        *,
+        on: Iterable[str],
+        composite: Iterable[tuple[str, ...]],
+        persist: Optional[str],
+    ) -> None:
+        """Build the index from scratch (or attach a matching on-disk file)."""
+        rows, columns = self._sql_rows()
+        Manifest._validate_primitive_rows(rows)
+        columns = sorted(columns)
+        row_keys = [row_key for row_key, _ in rows]
+
+        is_persistent = persist is not None
+        if persist is not None:
+            db_path = os.path.expanduser(persist)
+            parent = os.path.dirname(db_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+        else:
+            db_path = self._index_db_path()
+
+        conn = sqlite3.connect(db_path, check_same_thread=False)
+
+        if Manifest._index_table_exists(conn) and Manifest._index_row_count(conn) == len(
+            rows
+        ):
+            existing_columns = Manifest._existing_columns(conn)
+            if set(existing_columns) == set(columns):
+                self._sql_state = _SqlState(
+                    conn=conn,
+                    db_path=db_path,
+                    is_persistent=is_persistent,
+                    table_name=_SQL_INDEX_TABLE,
+                    columns=existing_columns,
+                    indexed=Manifest._existing_indexes(conn),
+                    row_keys=row_keys,
+                    stale=False,
+                )
+                self._sql_register_gc_cleanup()
+                return
+
+        Manifest._create_and_populate(conn, columns, rows)
+        indexed = Manifest._apply_indexes(conn, on, composite)
+        self._sql_state = _SqlState(
+            conn=conn,
+            db_path=db_path,
+            is_persistent=is_persistent,
+            table_name=_SQL_INDEX_TABLE,
+            columns=columns,
+            indexed=indexed,
+            row_keys=row_keys,
+            stale=False,
+        )
+        self._sql_register_gc_cleanup()
+
+    def _sql_rebuild_in_place(self, *, widen: bool = True) -> None:
+        """Re-materialize rows into the existing table, preserving indexes."""
+        state = self._sql_state
+        if state is None:
+            return
+
+        rows, columns = self._sql_rows()
+        Manifest._validate_primitive_rows(rows)
+        columns = sorted(columns)
+        conn = state.conn
+
+        new_columns = [c for c in columns if c not in state.columns]
+        if new_columns:
+            if not widen:
+                raise ValueError(
+                    f"Index rebuild needs new columns {new_columns} but widen=False."
+                )
+            for col in new_columns:
+                conn.execute(
+                    f'ALTER TABLE "{state.table_name}" ADD COLUMN "{col}"'
+                )
+
+        all_columns = list(state.columns) + new_columns
+        conn.execute(f'DELETE FROM "{state.table_name}"')
+        Manifest._insert_rows(conn, state.table_name, all_columns, rows)
+        conn.commit()
+
+        state.columns = all_columns
+        state.row_keys = [row_key for row_key, _ in rows]
+        state.stale = False
+
+    @staticmethod
+    def _index_table_exists(conn: sqlite3.Connection) -> bool:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (_SQL_INDEX_TABLE,),
+        ).fetchone()
+        return row is not None
+
+    @staticmethod
+    def _index_row_count(conn: sqlite3.Connection) -> int:
+        return conn.execute(f'SELECT COUNT(*) FROM "{_SQL_INDEX_TABLE}"').fetchone()[0]
+
+    @staticmethod
+    def _existing_columns(conn: sqlite3.Connection) -> list[str]:
+        rows = conn.execute(f'PRAGMA table_info("{_SQL_INDEX_TABLE}")').fetchall()
+        return [r[1] for r in rows if r[1] != _SQL_ROW_IDX_COL]
+
+    @staticmethod
+    def _existing_indexes(conn: sqlite3.Connection) -> set:
+        rows = conn.execute(f'PRAGMA index_list("{_SQL_INDEX_TABLE}")').fetchall()
+        return {r[1] for r in rows}
+
+    @staticmethod
+    def _create_and_populate(
+        conn: sqlite3.Connection,
+        columns: list[str],
+        rows: list[tuple[Hashable, dict]],
+    ) -> None:
+        for col in columns:
+            Manifest._validate_ident(col)
+        col_defs = "".join(f', "{c}"' for c in columns)
+        conn.execute(f'DROP TABLE IF EXISTS "{_SQL_INDEX_TABLE}"')
+        conn.execute(
+            f'CREATE TABLE "{_SQL_INDEX_TABLE}" '
+            f'("{_SQL_ROW_IDX_COL}" INTEGER PRIMARY KEY{col_defs})'
+        )
+        Manifest._insert_rows(conn, _SQL_INDEX_TABLE, columns, rows)
+        conn.commit()
+
+    @staticmethod
+    def _insert_rows(
+        conn: sqlite3.Connection,
+        table: str,
+        columns: list[str],
+        rows: list[tuple[Hashable, dict]],
+    ) -> None:
+        if columns:
+            col_names = ", ".join(f'"{c}"' for c in columns)
+            placeholders = ", ".join(["?"] * (len(columns) + 1))
+            statement = (
+                f'INSERT INTO "{table}" ("{_SQL_ROW_IDX_COL}", {col_names}) '
+                f"VALUES ({placeholders})"
+            )
+            data = [
+                [idx] + [row.get(c) for c in columns]
+                for idx, (_row_key, row) in enumerate(rows)
+            ]
+        else:
+            statement = f'INSERT INTO "{table}" ("{_SQL_ROW_IDX_COL}") VALUES (?)'
+            data = [[idx] for idx in range(len(rows))]
+        if data:
+            conn.executemany(statement, data)
+
+    @staticmethod
+    def _apply_indexes(
+        conn: sqlite3.Connection,
+        on: Iterable[str],
+        composite: Iterable[tuple[str, ...]],
+    ) -> set:
+        indexed: set = set()
+        for col in on:
+            Manifest._validate_ident(col)
+            conn.execute(
+                f'CREATE INDEX IF NOT EXISTS "idx_{_SQL_INDEX_TABLE}_{col}" '
+                f'ON "{_SQL_INDEX_TABLE}" ("{col}")'
+            )
+            indexed.add(col)
+        for tup in composite:
+            cols = tuple(tup)
+            for col in cols:
+                Manifest._validate_ident(col)
+            name = "idx_" + _SQL_INDEX_TABLE + "_" + "_".join(cols)
+            cols_sql = ", ".join(f'"{c}"' for c in cols)
+            conn.execute(
+                f'CREATE INDEX IF NOT EXISTS "{name}" '
+                f'ON "{_SQL_INDEX_TABLE}" ({cols_sql})'
+            )
+            indexed.add(cols)
+        conn.commit()
+        return indexed
+
+    @staticmethod
+    def _validate_ident(name: str) -> None:
+        if not isinstance(name, str) or not _SQL_IDENT_RE.match(name):
+            raise ValueError(f"Invalid column identifier for indexing: {name!r}")
+
+    # ----- GC cleanup of temporary index files -----------------------
+
+    def _sql_register_gc_cleanup(self) -> None:
+        """Ensure the manifest's temporary index file is nuked on GC.
+
+        ``laila.forget`` cannot cover this — the manifest object may
+        outlive (or live elsewhere than) the entry that was forgotten —
+        so a per-instance ``weakref.finalize`` removes the temporary
+        index file when the manifest is garbage-collected (and at
+        interpreter exit).  Only non-persistent (temporary) indexes are
+        finalized; a user-chosen ``persist=`` file is left untouched.
+        """
+        import weakref
+
+        finalizer = self._sql_finalizer
+        if finalizer is not None:
+            finalizer.detach()
+            self._sql_finalizer = None
+
+        state = self._sql_state
+        if state is None or state.is_persistent:
+            return
+
+        self._sql_finalizer = weakref.finalize(
+            self, Manifest._sql_finalize, state.conn, state.db_path
+        )
+
+    @staticmethod
+    def _sql_finalize(conn: sqlite3.Connection, db_path: str) -> None:
+        """Close the connection and delete a temporary index file."""
+        try:
+            conn.close()
+        except Exception:
+            pass
+        Manifest._sql_unlink_db(db_path)
+
+    @staticmethod
+    def _sql_unlink_db(db_path: str) -> None:
+        """Remove an index db file and its (now-empty) per-manifest dir."""
+        if not db_path:
+            return
+        try:
+            if os.path.exists(db_path):
+                os.remove(db_path)
+        except OSError:
+            pass
+        try:
+            parent = os.path.dirname(db_path)
+            if parent and os.path.isdir(parent) and not os.listdir(parent):
+                os.rmdir(parent)
+        except OSError:
+            pass
+
+    # ------------------------------------------------------------------
     # Mapping-like API  (top-level blueprint keys for dict(manifest))
     # ------------------------------------------------------------------
 
@@ -355,6 +911,10 @@ class Manifest(Entry):
                 self._pending_entries = list(other._pending_entries)
             else:
                 self._pending_entries.extend(other._pending_entries)
+
+        # The blueprint changed: mark any cached SQL index stale so the
+        # next sql() rebuilds in place (non-memorizing algorithmic help).
+        self.invalidate_index()
 
     def __iadd__(self, other: Any) -> Manifest:
         """``manifest += other`` — merge *other* in-place and return self."""

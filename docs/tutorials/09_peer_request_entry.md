@@ -176,6 +176,46 @@ print("Remote subprocess retrieved from main:")
 print(" ", remote_got)
 ```
 
+## Step 5b: One-liner peer access with `laila.request` and `policy_id`
+
+Morphing the active policy works, but for a quick "ask a peer for an entry"
+you can skip it entirely. `laila.request` takes the peer's `global_id` and
+an optional transport (`comm_protocol`, default TCP-IP) and reads the entry
+straight from the peer — the active policy is left untouched:
+
+```python
+result = laila.request(
+    remote_id,
+    entry_ids=remote_entry_id,
+    pool_nickname="remote-store",
+)
+print("Requested from remote:", result.wait())
+```
+
+Symmetrically, `laila.remember` and `laila.memorize` accept a `policy_id`
+argument that points at a connected peer. `remember` reads from the peer,
+`memorize` writes into the peer's pool (selected by `pool_id` /
+`pool_nickname` on the peer):
+
+```python
+# read from the peer
+peer_value = laila.remember(
+    entry_ids=remote_entry_id,
+    pool_nickname="remote-store",
+    policy_id=remote_id,
+)
+
+# write into the peer's pool
+laila.memorize(
+    entries=local_entry,
+    pool_nickname="remote-store",
+    policy_id=remote_id,
+)
+```
+
+`comm_protocol` is a transport token. TCP-IP (`"tcpip"`) is the default;
+`"lora"` and `"bluetooth"` are reserved for the planned radio transports.
+
 ## Step 6: Clean up
 
 Remove the local TCP connection and terminate the remote subprocess:

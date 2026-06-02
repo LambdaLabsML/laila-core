@@ -22,7 +22,7 @@ layer when peers connect or disconnect.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import ConfigDict, PrivateAttr
 
@@ -64,9 +64,30 @@ class _LAILA_IDENTIFIABLE_COMM_PROTOCOL(
 
     _communication: Any = PrivateAttr(default=None)
 
+    #: Short, stable token identifying this transport family (e.g.
+    #: ``"tcpip"``, ``"lora"``, ``"bluetooth"``). It is the value users
+    #: pass as ``comm_protocol`` to :func:`laila.request` and the key
+    #: :meth:`_LAILA_IDENTIFIABLE_COMMUNICATION._resolve_protocol_for_token`
+    #: matches against. Subclasses MUST override it.
+    protocol_name: ClassVar[str] = "base"
+
     # ------------------------------------------------------------------
     # Abstract interface
     # ------------------------------------------------------------------
+
+    @classmethod
+    def matches_token(cls, token: str) -> bool:
+        """Return ``True`` if this protocol answers to the transport *token*.
+
+        The default compares *token* case-insensitively against
+        :attr:`protocol_name`. Subclasses may override to accept
+        aliases (e.g. ``"tcp"`` / ``"tcp-ip"`` for the TCP/IP protocol).
+
+        Used by
+        :meth:`_LAILA_IDENTIFIABLE_COMMUNICATION._resolve_protocol_for_token`
+        to dispatch :func:`laila.request` over the requested transport.
+        """
+        return token.lower() == cls.protocol_name.lower()
 
     @classmethod
     def can_handle_uri(cls, uri: str) -> bool:

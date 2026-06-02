@@ -32,10 +32,13 @@ Major surface
   -- enumerate every policy reachable from this process.
 
 **High-level memory operations** (delegate to the active policy's central
-memory):
+memory; ``memorize`` / ``remember`` also accept ``policy_id=`` to target a
+connected peer's memory):
 
-- :func:`memorize` -- write entries to the routed pool.
-- :func:`remember` -- read entries (optionally caching into the alpha pool).
+- :func:`memorize` -- write entries to the routed pool (or a peer's pool
+  via ``policy_id=``).
+- :func:`remember` -- read entries (optionally caching into the alpha pool;
+  read from a peer via ``policy_id=``).
 - :func:`forget`  -- delete entries.
 - :func:`build`   -- materialize an entry by running its constitution.
 
@@ -53,6 +56,8 @@ memory):
 **Networking helpers**:
 
 - :func:`add_peer` -- handshake with a remote policy and return its gid.
+- :func:`request` -- ask a connected peer (by gid) for an entry, over an
+  optional transport (``comm_protocol`` token, default TCP-IP).
 
 Implementation notes
 --------------------
@@ -847,8 +852,80 @@ def build(entry, *, taskforce_id: Optional["str"] = None):
     return command.submit([entry._build_async], taskforce_id=taskforce_id)
 
 
-def memorize(*args, **kwargs):
-    """Persist one or more entries into the active policy's memory.
+def _route_to_policy(policy_id, op: str, args: tuple, kwargs: dict):
+    """Run a central-memory operation against an arbitrary policy by ``global_id``.
+
+    This is the engine behind the ``policy_id=`` argument on
+    :func:`memorize` / :func:`remember` and behind :func:`request`. The
+    target may be:
+
+    - a *remote* peer (a :class:`RemotePolicyProxy` registered in
+      :data:`_remote_policies` after a successful handshake), in which
+      case the operation is dispatched as a single RPC over the peer's
+      transport via the proxy's attribute-chain. The local active policy
+      is intentionally left *unchanged* so the :class:`RemoteFuture`
+      returned by the RPC registers into the local policy's
+      ``future_bank`` (a proxy has no bank to register into); using the
+      peer's proxy is itself the sanctioned remote-access path, so the
+      golden rule in ``vault/agent/policy.md`` is satisfied without a
+      global morph.
+    - another *local* policy in this process (registered in
+      :data:`_local_policies`), in which case the active policy is
+      *transiently* morphed into the target -- honouring the golden rule
+      "to access a policy's elements it must become the active policy" --
+      and restored afterwards.
+
+    Parameters
+    ----------
+    policy_id : str
+        ``global_id`` of the target policy. Resolved against
+        ``laila.universe`` (locals take precedence over remotes when a
+        gid appears in both).
+    op : str
+        The central-memory method to invoke -- one of ``"memorize"``,
+        ``"remember"``, ``"forget"``.
+    args : tuple
+        Positional arguments forwarded to the operation.
+    kwargs : dict
+        Keyword arguments forwarded to the operation.
+
+    Returns
+    -------
+    Any
+        Whatever the underlying memory operation returns -- a
+        :class:`Future` / :class:`GroupFuture` for a local target, or a
+        :class:`RemoteFuture` when the target is a peer.
+
+    Raises
+    ------
+    ConnectionError
+        If *policy_id* does not name any known local or remote policy.
+    """
+    global _active_policy_gid
+    from .policy.central.communication.proxy import RemotePolicyProxy
+
+    pid = str(policy_id)
+    target = {**_remote_policies, **_local_policies}.get(pid)
+    if target is None:
+        raise ConnectionError(
+            f"Unknown policy_id {pid!r}: not a local policy or a connected peer. "
+            "Connect to the peer first with laila.add_peer()/add_tcpip_peer()."
+        )
+
+    if isinstance(target, RemotePolicyProxy):
+        return getattr(target.central.memory, op)(*args, **kwargs)
+
+    previous_gid = _active_policy_gid
+    activate_policy(target)
+    try:
+        memory = get_active_policy().central.memory
+        return getattr(memory, op)(*args, **kwargs)
+    finally:
+        _active_policy_gid = previous_gid
+
+
+def memorize(*args, policy_id=None, **kwargs):
+    """Persist one or more entries into a policy's memory.
 
     Thin top-level shim that forwards to
     :meth:`policy.central.memory.memorize`. The work performed there:
@@ -888,18 +965,29 @@ def memorize(*args, **kwargs):
         ``pool_id`` nor ``pool_nickname`` is given.
     affinity : float, optional
         Reserved for future affinity-based routing.
+    policy_id : str, optional
+        ``global_id`` of a *peer* (or another local policy) to write
+        into. When supplied, the entries are stored in that policy's
+        pool (selected by ``pool_id`` / ``pool_nickname`` *on the peer*)
+        rather than in the active policy's memory. The active policy is
+        transiently morphed into the target for the duration of the call
+        and restored afterwards. See :func:`_route_to_policy`.
 
     Returns
     -------
     Future or GroupFuture or None
-        Future-like handle resolving when the write(s) finish.
+        Future-like handle resolving when the write(s) finish. A
+        :class:`RemoteFuture` when ``policy_id`` names a peer.
 
     See Also
     --------
     laila.remember : the inverse operation.
+    laila.request : ask a peer for an entry.
     laila.policy.central.memory.schema.base._LAILA_IDENTIFIABLE_CENTRAL_MEMORY.memorize :
         the concrete implementation invoked by this shim.
     """
+    if policy_id is not None:
+        return _route_to_policy(policy_id, "memorize", args, kwargs)
     return get_active_policy().central.memory.memorize(*args, **kwargs)
 
 
@@ -943,8 +1031,8 @@ def __resolve_nickname(kwargs):
         raise ValueError("nickname must be a string")
 
 
-def remember(*args, persist: bool = True, **kwargs):
-    """Retrieve one or more entries from the active policy's memory.
+def remember(*args, persist: bool = True, policy_id=None, **kwargs):
+    """Retrieve one or more entries from a policy's memory.
 
     Thin top-level shim that forwards to
     :meth:`policy.central.memory.remember`. The work performed there:
@@ -995,18 +1083,30 @@ def remember(*args, persist: bool = True, **kwargs):
         Optional evolution suffix to append to the nickname-derived gid.
     persist : bool, default True
         Cache-back into the alpha pool. See "persist semantics" above.
+        When ``policy_id`` names a peer, the cache-back happens on the
+        *peer's* alpha pool, not the local one -- pass ``persist=False``
+        (as :func:`request` does) for a clean one-shot peer read.
+    policy_id : str, optional
+        ``global_id`` of a *peer* (or another local policy) to read
+        from. When supplied, the entries are fetched from that policy's
+        memory rather than the active policy's. The active policy is
+        transiently morphed into the target for the duration of the call
+        and restored afterwards. See :func:`_route_to_policy`.
 
     Returns
     -------
     Future or GroupFuture
         Future-like handle resolving to the rebuilt :class:`Entry` (or
-        list of entries for multiple ids).
+        list of entries for multiple ids). A :class:`RemoteFuture` when
+        ``policy_id`` names a peer.
     """
     if "nickname" in kwargs:
         args = []
         kwargs["entry_ids"] = __resolve_nickname(kwargs)
         del kwargs["nickname"]
         kwargs.pop("evolution", None)
+    if policy_id is not None:
+        return _route_to_policy(policy_id, "remember", args, {"persist": persist, **kwargs})
     return get_active_policy().central.memory.remember(*args, persist=persist, **kwargs)
 
 
@@ -1101,6 +1201,106 @@ def add_peer(uri: str, secret: str) -> str:
         If the *secret* is rejected by the remote's protocol.
     """
     return get_active_policy().central.communication.add_peer(uri, secret)
+
+
+def request(
+    peer_name: str,
+    comm_protocol: Optional[str] = None,
+    *,
+    entry_ids=None,
+    nickname: Optional[str] = None,
+    evolution: Optional[int] = None,
+    pool_id: Optional[str] = None,
+    pool_nickname: Optional[str] = None,
+    persist: bool = False,
+):
+    """Ask a connected peer policy for an entry.
+
+    ``request`` is the high-level "fetch from a peer" verb: the active
+    policy asks the peer named by *peer_name* (its ``global_id``) for
+    one or more entries and returns them. It is thin sugar over
+    :func:`remember` with ``policy_id=peer_name`` -- the active policy is
+    transiently morphed into the peer's :class:`RemotePolicyProxy`, the
+    read runs as a single RPC over the peer's transport, and the active
+    policy is restored afterwards (see :func:`_route_to_policy`).
+
+    The peer must already be connected (via :func:`add_peer` /
+    :meth:`Communication.add_tcpip_peer`); ``request`` does *not* dial
+    out on its own.
+
+    Parameters
+    ----------
+    peer_name : str
+        ``global_id`` of the peer to ask. Must be present in
+        ``laila.peers`` (i.e. a completed handshake).
+    comm_protocol : str, optional
+        Transport to route the request over -- a registered protocol
+        token such as ``"tcpip"`` (the default when ``None``),
+        ``"lora"``, or ``"bluetooth"``. When more than one transport
+        currently holds the peer, this selects which one is used. A
+        ``ConnectionError`` is raised if no live transport matching the
+        token holds the peer.
+    entry_ids : str | list[str], optional
+        Explicit ``global_id``(s) of the entries to fetch.
+    nickname : str, optional
+        Convenience alias resolved to a deterministic ``global_id`` via
+        :func:`Entry.to_global_id` against the active namespace.
+    evolution : int, optional
+        Optional evolution suffix for the nickname form.
+    pool_id : str, optional
+        Explicit pool ``global_id`` *on the peer* to read from.
+    pool_nickname : str, optional
+        Pool alias *on the peer* to read from.
+    persist : bool, default False
+        Cache-back behaviour, forwarded to :func:`remember`. Defaults to
+        ``False`` here so a peer request is a clean one-shot read that
+        does not grow the peer's alpha pool.
+
+    Returns
+    -------
+    Future or GroupFuture
+        A future-like handle (a :class:`RemoteFuture`) resolving to the
+        requested :class:`Entry` (or list of entries).
+
+    Raises
+    ------
+    ConnectionError
+        If *peer_name* is not a connected peer, or no transport matching
+        *comm_protocol* currently holds the peer.
+    ValueError
+        If neither ``entry_ids`` nor ``nickname`` is supplied.
+    """
+    comm = get_active_policy().central.communication
+    peer_id = str(peer_name)
+    if peer_id not in comm.peers:
+        raise ConnectionError(
+            f"{peer_id!r} is not a connected peer. Connect first with "
+            "laila.add_peer()/add_tcpip_peer()."
+        )
+
+    proto = comm._resolve_protocol_for_token(comm_protocol)
+    if not proto.has_peer(peer_id):
+        token = comm_protocol if comm_protocol is not None else proto.protocol_name
+        raise ConnectionError(
+            f"No live {token!r} transport currently holds peer {peer_id!r}."
+        )
+
+    kwargs: dict = {"policy_id": peer_id, "persist": persist}
+    if entry_ids is not None:
+        kwargs["entry_ids"] = entry_ids
+    if nickname is not None:
+        kwargs["nickname"] = nickname
+        if evolution is not None:
+            kwargs["evolution"] = evolution
+    if pool_id is not None:
+        kwargs["pool_id"] = pool_id
+    if pool_nickname is not None:
+        kwargs["pool_nickname"] = pool_nickname
+
+    if "entry_ids" not in kwargs and "nickname" not in kwargs:
+        raise ValueError("request requires either entry_ids= or nickname=.")
+
+    return remember(**kwargs)
 
 
 def _resolve_future(future_ref):
@@ -1226,6 +1426,8 @@ def set_default_directory(directory):
     - ``pools``   -- per-pool data folders (``pools/<pool_uuid>/``)
     - ``logs``    -- log files written by :class:`Logger`
     - ``secrets`` -- key material loaded by the ``crypto`` extras
+    - ``indices`` -- non-memorizing query helpers (e.g. Manifest SQL
+      indices), per-manifest folders (``indices/<manifest_uuid>/``)
 
     ``~`` and ``~user`` are expanded via :func:`os.path.expanduser`.
 
@@ -1247,5 +1449,6 @@ def set_default_directory(directory):
             "pools": os.path.join(directory, "pools"),
             "logs": os.path.join(directory, "logs"),
             "secrets": os.path.join(directory, "secrets"),
+            "indices": os.path.join(directory, "indices"),
         }
     )

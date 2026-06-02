@@ -32,6 +32,8 @@ different host. It is structured around four collaborating pieces:
 """
 
 from .protocols.base import _LAILA_IDENTIFIABLE_COMM_PROTOCOL
+from .protocols.bluetooth import _LAILA_IDENTIFIABLE_BLUETOOTH_COMM_PROTOCOL
+from .protocols.lora import _LAILA_IDENTIFIABLE_LORA_COMM_PROTOCOL
 from .protocols.tcpip import _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL
 from .proxy import RemotePolicyProxy
 from .schema.base import _LAILA_IDENTIFIABLE_COMMUNICATION
