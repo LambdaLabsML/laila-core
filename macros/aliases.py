@@ -8,9 +8,10 @@ for in everyday code:
   rewritten.
 - :func:`variable` -- alias for :meth:`Entry.variable`. Build an
   evolution-tracking entry whose identity bumps on each rewrite.
-- :func:`contingent` -- alias for :meth:`Entry.contingent`. Build a
-  manifest-derived entry that is materialised lazily by replaying the
-  recorded constitution.
+- :func:`contingent` -- alias for :meth:`Entry.contingent`. Escape
+  hatch that forwards raw keyword arguments straight to the
+  :class:`Entry` constructor, bypassing the consistency checks done by
+  :meth:`Entry.constant` / :meth:`Entry.variable`.
 - :class:`future` -- alias for :class:`Future`. Lower-case spelling
   for the common case of "I want a Future-type annotation in user
   code".
