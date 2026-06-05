@@ -46,6 +46,14 @@ test-fast:
 test-cloud:
 	python -m pytest tests/ -m "cloud"
 
+transports-emulators-up:
+	docker compose -f tests/transports/emulators/docker-compose.yml up -d
+	@echo "Run 'sudo tests/transports/emulators/provision.sh up' for kernel/serial interfaces."
+
+transports-emulators-down:
+	docker compose -f tests/transports/emulators/docker-compose.yml down
+	-sudo tests/transports/emulators/provision.sh down
+
 cov:
 	python -m pytest tests/ -m "not cloud and not slow" \
 		--cov=laila --cov-report=term-missing --cov-report=html

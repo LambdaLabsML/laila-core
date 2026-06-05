@@ -18,23 +18,18 @@ What lands here so the rest of laila can already "see" Bluetooth:
 
 Implementation notes for a future contributor
 ----------------------------------------------
-A real implementation should:
-
-- Use an RFCOMM (Bluetooth Classic) socket or a GATT characteristic
-  (BLE) as the byte stream, owned by a background thread mirroring the
-  dedicated-event-loop pattern in
-  :class:`_LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL`.
-- Map a device address (``bt://<MAC>``) to a peer ``global_id`` via the
-  same ``peer.connect`` handshake used by the TCP/IP transport.
-- Chunk RPC frames to the negotiated MTU (small for BLE) and handle
-  pairing / bonding out of band.
+A real implementation should build on the
+:class:`_P2PStreamRPCProtocol` carrier: use an RFCOMM (Bluetooth
+Classic) socket or a GATT characteristic (BLE) as the byte stream, and
+map a device address (``bt://<MAC>``) to a peer ``global_id`` via the
+shared ``peer.connect`` handshake.
 """
 
 from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from .base import _LAILA_IDENTIFIABLE_COMM_PROTOCOL
+from ..base import _LAILA_IDENTIFIABLE_COMM_PROTOCOL
 
 _NOT_IMPLEMENTED = (
     "The Bluetooth transport is a planned protocol and is not implemented yet. "
@@ -70,10 +65,14 @@ class _LAILA_IDENTIFIABLE_BLUETOOTH_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTO
         raise NotImplementedError(_NOT_IMPLEMENTED)
 
     def stop(self) -> None:
-        """Tear down the Bluetooth link. Not implemented yet."""
-        raise NotImplementedError(_NOT_IMPLEMENTED)
+        """Tear down the Bluetooth link. No-op (nothing is ever started).
 
-    def add_peer(self, uri: str, secret: str) -> str:
+        ``stop`` must be idempotent and safe per the base contract, so
+        the scaffold returns cleanly rather than raising.
+        """
+        return None
+
+    def connect(self, uri: str, secret: str) -> str:
         """Peer with a remote device over Bluetooth. Not implemented yet."""
         raise NotImplementedError(_NOT_IMPLEMENTED)
 

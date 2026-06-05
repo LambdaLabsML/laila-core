@@ -68,8 +68,12 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
     """
 
     protocol_name: ClassVar[str] = "tcpip"
+    #: WebSocket-focused tokens. Raw TCP/UDP/TLS now have dedicated
+    #: transports under ``protocols/ip_app/`` that own the ``tcp`` /
+    #: ``udp`` / ``tls`` tokens, so ``tcpip`` claims only the
+    #: WebSocket family to keep the token map globally disjoint.
     _TOKEN_ALIASES: ClassVar[frozenset[str]] = frozenset(
-        {"tcpip", "tcp", "tcp-ip", "tcp/ip", "ws", "websocket"}
+        {"tcpip", "ws", "wss", "websocket"}
     )
 
     host: str = Field(default="0.0.0.0")
@@ -214,7 +218,7 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
     # Peer management
     # ------------------------------------------------------------------
 
-    def add_peer(self, uri: str, secret: str) -> str:
+    def connect(self, uri: str, secret: str) -> str:
         """Open an outbound WebSocket connection to *uri* and complete the handshake.
 
         Auto-starts the protocol if needed (so users don't need to

@@ -55,16 +55,37 @@ class RemotePolicyProxy:
     the start of a remote attribute chain!).
     """
 
-    __slots__ = ("_comm", "_peer_id")
+    __slots__ = ("_comm", "_peer_id", "_comm_selector")
 
-    def __init__(self, peer_id: str, communication: _LAILA_IDENTIFIABLE_COMMUNICATION) -> None:
+    def __init__(
+        self,
+        peer_id: str,
+        communication: _LAILA_IDENTIFIABLE_COMMUNICATION,
+        comm_selector: Any = None,
+    ) -> None:
         object.__setattr__(self, "_peer_id", peer_id)
         object.__setattr__(self, "_comm", communication)
+        object.__setattr__(self, "_comm_selector", comm_selector)
 
     @property
     def global_id(self) -> str:
         """The remote policy's ``global_id`` (resolved without I/O)."""
         return self._peer_id
+
+    def via(self, comm: Any) -> "RemotePolicyProxy":
+        """Return a proxy bound to a specific transport *comm*.
+
+        *comm* is a *communication id* -- a registered connection's
+        ``global_id`` or a protocol token (``"tcp"``, ``"lora"``, ...).
+        Every RPC issued through the returned proxy (and every follow-up
+        call on the futures it returns) travels over that channel. The
+        original proxy is unchanged.
+
+        Example
+        -------
+        ``laila.peers[gid].via("lora").central.memory.remember(eid)``
+        """
+        return RemotePolicyProxy(self._peer_id, self._comm, comm_selector=comm)
 
     def __getattr__(self, name: str) -> _RemoteAttrChain:
         """Begin a remote attribute chain rooted at *name*.
@@ -74,9 +95,11 @@ class RemotePolicyProxy:
         :class:`_RemoteAttrChain`; further attribute accesses extend
         the path, ``__call__`` materialises the RPC.
         """
-        return _RemoteAttrChain(self._comm, self._peer_id, [name])
+        return _RemoteAttrChain(self._comm, self._peer_id, [name], self._comm_selector)
 
     def __repr__(self) -> str:
+        if self._comm_selector is not None:
+            return f"RemotePolicyProxy({self._peer_id!r}, via={self._comm_selector!r})"
         return f"RemotePolicyProxy({self._peer_id!r})"
 
 
@@ -100,18 +123,25 @@ class _RemoteAttrChain:
         in place by callers; a new list is created per ``__getattr__``.
     """
 
-    __slots__ = ("_comm", "_path", "_peer_id")
+    __slots__ = ("_comm", "_path", "_peer_id", "_comm_selector")
 
     def __init__(
-        self, communication: _LAILA_IDENTIFIABLE_COMMUNICATION, peer_id: str, path: list[str]
+        self,
+        communication: _LAILA_IDENTIFIABLE_COMMUNICATION,
+        peer_id: str,
+        path: list[str],
+        comm_selector: Any = None,
     ) -> None:
         object.__setattr__(self, "_comm", communication)
         object.__setattr__(self, "_peer_id", peer_id)
         object.__setattr__(self, "_path", path)
+        object.__setattr__(self, "_comm_selector", comm_selector)
 
     def __getattr__(self, name: str) -> _RemoteAttrChain:
         """Return a *new* chain whose path is the current path plus *name*."""
-        return _RemoteAttrChain(self._comm, self._peer_id, self._path + [name])
+        return _RemoteAttrChain(
+            self._comm, self._peer_id, self._path + [name], self._comm_selector
+        )
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Dispatch the accumulated path + arguments as a single RPC.
@@ -119,9 +149,13 @@ class _RemoteAttrChain:
         Blocks the calling thread until the remote responds. If the
         remote returns a future-shaped envelope, the communication
         layer transparently wraps it in a :class:`RemoteFuture`
-        before returning.
+        before returning. The bound transport selector (if any) is
+        passed through so the call -- and the future it yields -- stay
+        on the chosen channel.
         """
-        return self._comm._send_rpc(self._peer_id, self._path, args, kwargs)
+        return self._comm._send_rpc(
+            self._peer_id, self._path, args, kwargs, comm=self._comm_selector
+        )
 
     def __repr__(self) -> str:
         dotted = ".".join(self._path)

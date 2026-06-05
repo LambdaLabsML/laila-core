@@ -850,7 +850,86 @@ def build(entry, *, taskforce_id: Optional["str"] = None):
     return command.submit([entry._build_async], taskforce_id=taskforce_id)
 
 
-def _route_to_policy(policy_id, op: str, args: tuple, kwargs: dict):
+def _route_memory_to_peer(proxy, op: str, args: tuple, kwargs: dict):
+    """Route a memory op to a remote peer as a LOCAL (A-owned) Future.
+
+    With the *current* active policy A (not morphed), asking peer B to
+    memorize/remember produces a normal local :class:`Future` /
+    :class:`GroupFuture` owned by A -- not a :class:`RemoteFuture`. The
+    over-the-wire transfer runs inside one A-side task per entry; each
+    task offloads the blocking wire RPC with :func:`asyncio.to_thread` so
+    it never blocks the taskforce event loop.
+
+    Entries cross the wire as their canonical, self-describing
+    ``Entry.serialize(transformation_base64)`` blob and are rebuilt via
+    :func:`build_by_scope` -- real entry data moves, no shared pool needed.
+    (``RemoteFuture`` is reserved for *morph* mode, when A's active policy
+    has been switched to B.)
+    """
+    import asyncio as _asyncio
+
+    pool = kwargs.get("pool")
+    if pool is not None and not isinstance(pool, str):
+        raise TypeError(
+            "Remote memory ops need a pool gid or nickname *string* for the "
+            "peer-side pool; a standalone pool object cannot be shipped to a peer."
+        )
+    mem_kwargs = {"pool": pool} if pool is not None else {}
+    command = get_active_policy().central.command
+
+    if op == "memorize":
+        entries = args[0] if args else kwargs.get("entries")
+        entries_list = entries if isinstance(entries, list) else [entries]
+        from .entry import transformation_base64
+
+        def _make_store(entry):
+            blob = entry.serialize(transformations=transformation_base64)
+
+            async def _store():
+                gids = await _asyncio.to_thread(
+                    proxy.central.memory._remote_memorize, [blob], **mem_kwargs
+                )
+                return gids[0]
+
+            return _store
+
+        return command.submit([_make_store(e) for e in entries_list])
+
+    if op == "remember":
+        entry_ids = args[0] if args else kwargs.get("entry_ids")
+        ids_list = entry_ids if isinstance(entry_ids, list) else [entry_ids]
+        ids = [x.global_id if hasattr(x, "global_id") else str(x) for x in ids_list]
+        from .entry.constitution.build_maps import build_by_scope
+
+        def _make_fetch(eid):
+            async def _fetch():
+                blobs = await _asyncio.to_thread(
+                    proxy.central.memory._remote_remember, [eid], **mem_kwargs
+                )
+                return build_by_scope(blobs[0], asynchronous=False)
+
+            return _fetch
+
+        return command.submit([_make_fetch(eid) for eid in ids])
+
+    if op == "forget":
+        entry_ids = args[0] if args else kwargs.get("entry_ids")
+        ids_list = entry_ids if isinstance(entry_ids, list) else [entry_ids]
+        ids = [x.global_id if hasattr(x, "global_id") else str(x) for x in ids_list]
+
+        def _delete():
+            return proxy.central.memory._remote_forget(ids, **mem_kwargs)
+
+        async def _delete_async():
+            return await _asyncio.to_thread(_delete)
+
+        return command.submit([_delete_async])
+
+    # Any other op: pass straight through (gids are JSON-safe).
+    return getattr(proxy.central.memory, op)(*args, **kwargs)
+
+
+def _route_to_policy(policy_id, op: str, args: tuple, kwargs: dict, comm=None):
     """Run a central-memory operation against an arbitrary policy by ``global_id``.
 
     This is the engine behind the ``policy_id=`` argument on
@@ -910,7 +989,9 @@ def _route_to_policy(policy_id, op: str, args: tuple, kwargs: dict):
         )
 
     if isinstance(target, RemotePolicyProxy):
-        return getattr(target.central.memory, op)(*args, **kwargs)
+        if comm is not None:
+            target = target.via(comm)
+        return _route_memory_to_peer(target, op, args, kwargs)
 
     previous_gid = _active_policy_gid
     activate_policy(target)
@@ -921,7 +1002,109 @@ def _route_to_policy(policy_id, op: str, args: tuple, kwargs: dict):
         _active_policy_gid = previous_gid
 
 
-def memorize(*args, policy_id=None, **kwargs):
+def _resolve_policy_ref(ref):
+    """Resolve a policy reference to a ``global_id`` string, or ``None``.
+
+    Accepts any of:
+
+    - ``None`` -> ``None`` (means "the active policy" for src, or "no
+      remote target" for dst).
+    - a live policy / :class:`RemotePolicyProxy` (anything exposing
+      ``global_id``) -> its ``global_id``.
+    - a global-id string (recognised via
+      :meth:`_LAILA_IDENTIFIABLE_OBJECT.is_laila_resource`) -> returned
+      as-is.
+    - any other string -> treated as a *nickname* and turned into a
+      deterministic policy gid via
+      :meth:`to_global_id(nickname=..., scopes=[POLICY])`. Two processes
+      in the same namespace derive the same gid from the same nickname,
+      which is what makes nicknames usable for cross-process routing.
+    """
+    if ref is None:
+        return None
+    gid = getattr(ref, "global_id", None)
+    if isinstance(gid, str):
+        return gid
+    from .basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+    from .macros.strings import _POLICY_SCOPE
+
+    s = str(ref)
+    if _LAILA_IDENTIFIABLE_OBJECT.is_laila_resource(s):
+        return s
+    return _LAILA_IDENTIFIABLE_OBJECT.to_global_id(nickname=s, scopes=[_POLICY_SCOPE])
+
+
+def _extract_gids(args, kwargs):
+    """Pull a list of entry global_ids out of a ``(entry_ids,)`` arg shape."""
+    val = args[0] if args else kwargs.get("entry_ids", kwargs.get("entries"))
+    items = val if isinstance(val, list) else [val]
+    return [x.global_id if hasattr(x, "global_id") else str(x) for x in items]
+
+
+def _relay_transfer(verb, src_gid, args, kwargs, *, src_pool, dst_gid, dst_pool, comm, persist=True):
+    """Drive a 3-party transfer by commanding the *source* policy.
+
+    With active policy A, ``src_gid`` = B, ``dst_gid`` = C: A reaches B
+    (A must be peered to B) and asks B to move the entries to/from C over
+    B's *own* B<->C link. A never brokers the B<->C connection.
+
+    - ``verb == "memorize"``: B pushes ``entry_ids`` from its ``src_pool``
+      into C's ``dst_pool``.
+    - ``verb == "remember"``: B pulls ``entry_ids`` from C's ``dst_pool``
+      and stores them into B's ``src_pool``.
+    """
+    from .policy.central.communication.proxy import RemotePolicyProxy
+
+    src = {**_remote_policies, **_local_policies}.get(src_gid)
+    if src is None:
+        raise ConnectionError(
+            f"src_policy {src_gid!r} is not a connected peer or a local policy. "
+            "The active policy must be peered to the source policy "
+            "(connect first with laila.add_peer())."
+        )
+    gids = _extract_gids(args, kwargs)
+
+    if isinstance(src, RemotePolicyProxy):
+        relay = (src.via(comm) if comm is not None else src).central.memory
+        if verb == "memorize":
+            return relay._relay_memorize(
+                gids, src_pool=src_pool, dst_policy=dst_gid, dst_pool=dst_pool, comm=comm
+            )
+        return relay._relay_remember(
+            gids, dst_policy=dst_gid, dst_pool=dst_pool, src_pool=src_pool,
+            comm=comm, persist=persist,
+        )
+
+    global _active_policy_gid
+    previous_gid = _active_policy_gid
+    activate_policy(src)
+    try:
+        memory = get_active_policy().central.memory
+        if verb == "memorize":
+            return memory._relay_memorize(
+                gids, src_pool=src_pool, dst_policy=dst_gid, dst_pool=dst_pool, comm=comm
+            )
+        return memory._relay_remember(
+            gids, dst_policy=dst_gid, dst_pool=dst_pool, src_pool=src_pool,
+            comm=comm, persist=persist,
+        )
+    finally:
+        _active_policy_gid = previous_gid
+
+
+def memorize(
+    *args,
+    src_policy=None,
+    src_pool=None,
+    dst_policy=None,
+    dst_pool=None,
+    comm=None,
+    policy_id=None,
+    pool_id=None,
+    pool_nickname=None,
+    affinity=None,
+    **kwargs,
+):
     """Persist one or more entries into a policy's memory.
 
     Thin top-level shim that forwards to
@@ -981,9 +1164,38 @@ def memorize(*args, policy_id=None, **kwargs):
     laila.policy.central.memory.schema.base._LAILA_IDENTIFIABLE_CENTRAL_MEMORY.memorize :
         the concrete implementation invoked by this shim.
     """
-    if policy_id is not None:
-        return _route_to_policy(policy_id, "memorize", args, kwargs)
-    return get_active_policy().central.memory.memorize(*args, **kwargs)
+    # Accept the leading positional via the ``entries=`` keyword too.
+    if not args and "entries" in kwargs:
+        args = (kwargs.pop("entries"),)
+
+    # Back-compat: policy_id -> dst_policy, pool_id/pool_nickname -> dst_pool.
+    if dst_policy is None:
+        dst_policy = policy_id
+    if dst_pool is None:
+        dst_pool = pool_id if pool_id is not None else pool_nickname
+
+    src_gid = _resolve_policy_ref(src_policy)
+    dst_gid = _resolve_policy_ref(dst_policy)
+    active_gid = get_active_policy().global_id
+
+    # Source is another policy -> 3-party relay (B pushes src->dst).
+    if src_gid is not None and src_gid != active_gid:
+        return _relay_transfer(
+            "memorize", src_gid, args, kwargs,
+            src_pool=src_pool, dst_gid=dst_gid, dst_pool=dst_pool, comm=comm,
+        )
+
+    # Source is the active policy.
+    if dst_gid is not None and dst_gid != active_gid:
+        # active -> peer push (2-party).
+        return _route_to_policy(
+            dst_gid, "memorize", args, {"pool": dst_pool}, comm=comm
+        )
+
+    # Purely local / standalone write into the active policy's pool.
+    return get_active_policy().central.memory.memorize(
+        *args, pool=dst_pool, affinity=affinity, **kwargs
+    )
 
 
 def __resolve_nickname(kwargs):
@@ -1026,7 +1238,19 @@ def __resolve_nickname(kwargs):
         raise ValueError("nickname must be a string")
 
 
-def remember(*args, persist: bool = True, policy_id=None, **kwargs):
+def remember(
+    *args,
+    persist: bool = True,
+    src_policy=None,
+    src_pool=None,
+    dst_policy=None,
+    dst_pool=None,
+    comm=None,
+    policy_id=None,
+    pool_id=None,
+    pool_nickname=None,
+    **kwargs,
+):
     """Retrieve one or more entries from a policy's memory.
 
     Thin top-level shim that forwards to
@@ -1094,16 +1318,55 @@ def remember(*args, persist: bool = True, policy_id=None, **kwargs):
         ``policy_id`` names a peer.
     """
     if "nickname" in kwargs:
-        args = []
+        args = ()
         kwargs["entry_ids"] = __resolve_nickname(kwargs)
         del kwargs["nickname"]
         kwargs.pop("evolution", None)
-    if policy_id is not None:
-        return _route_to_policy(policy_id, "remember", args, {"persist": persist, **kwargs})
-    return get_active_policy().central.memory.remember(*args, persist=persist, **kwargs)
+
+    # Accept the leading positional via the ``entry_ids=`` keyword too.
+    if not args and "entry_ids" in kwargs:
+        args = (kwargs.pop("entry_ids"),)
+
+    # Back-compat: policy_id -> dst_policy, pool_id/pool_nickname -> dst_pool.
+    if dst_policy is None:
+        dst_policy = policy_id
+    if dst_pool is None:
+        dst_pool = pool_id if pool_id is not None else pool_nickname
+
+    src_gid = _resolve_policy_ref(src_policy)
+    dst_gid = _resolve_policy_ref(dst_policy)
+    active_gid = get_active_policy().global_id
+
+    # Source policy is another policy -> 3-party relay (B pulls from dst).
+    if src_gid is not None and src_gid != active_gid:
+        return _relay_transfer(
+            "remember", src_gid, args, kwargs,
+            src_pool=src_pool, dst_gid=dst_gid, dst_pool=dst_pool, comm=comm,
+            persist=persist,
+        )
+
+    # Active policy pulls from a peer (2-party).
+    if dst_gid is not None and dst_gid != active_gid:
+        return _route_to_policy(
+            dst_gid, "remember", args, {"persist": persist, "pool": dst_pool}, comm=comm
+        )
+
+    # Purely local / standalone read from the active policy's pool.
+    return get_active_policy().central.memory.remember(
+        *args, persist=persist, pool=dst_pool, **kwargs
+    )
 
 
-def forget(*args, **kwargs):
+def forget(
+    *args,
+    policy=None,
+    pool=None,
+    comm=None,
+    policy_id=None,
+    pool_id=None,
+    pool_nickname=None,
+    **kwargs,
+):
     """Delete one or more entries from the active policy's memory.
 
     Thin top-level shim that forwards to
@@ -1140,11 +1403,29 @@ def forget(*args, **kwargs):
         Future-like handle resolving when the delete(s) finish.
     """
     if "nickname" in kwargs:
-        args = []
+        args = ()
         kwargs["entry_ids"] = __resolve_nickname(kwargs)
         del kwargs["nickname"]
         kwargs.pop("evolution", None)
-    return get_active_policy().central.memory.forget(*args, **kwargs)
+
+    # Accept the leading positional via the ``entry_ids=`` keyword too.
+    if not args and "entry_ids" in kwargs:
+        args = (kwargs.pop("entry_ids"),)
+
+    # Back-compat: policy_id -> policy, pool_id/pool_nickname -> pool.
+    if policy is None:
+        policy = policy_id
+    if pool is None:
+        pool = pool_id if pool_id is not None else pool_nickname
+
+    target_gid = _resolve_policy_ref(policy)
+    active_gid = get_active_policy().global_id
+
+    if target_gid is not None and target_gid != active_gid:
+        return _route_to_policy(
+            target_gid, "forget", args, {"pool": pool}, comm=comm
+        )
+    return get_active_policy().central.memory.forget(*args, pool=pool, **kwargs)
 
 
 def add_peer(uri: str, secret: str) -> str:
@@ -1194,6 +1475,47 @@ def add_peer(uri: str, secret: str) -> str:
         If the *secret* is rejected by the remote's protocol.
     """
     return get_active_policy().central.communication.add_peer(uri, secret)
+
+
+def request(policy_id, comm_protocol=None):
+    """Return a transport-bound proxy for a connected peer.
+
+    The channel-aware companion to :func:`add_peer`. Given a peered
+    policy's ``global_id`` it returns its :class:`RemotePolicyProxy`,
+    optionally *bound* to a specific transport via *comm_protocol* so
+    that every call (and every follow-up on the futures it yields)
+    travels over that channel:
+
+    .. code-block:: python
+
+        # send this request over LoRa even if a TCP link also exists
+        laila.request(gid, comm_protocol="lora").central.memory.remember(eid)
+
+    Parameters
+    ----------
+    policy_id : str
+        ``global_id`` of a peer registered via :func:`add_peer`.
+    comm_protocol : str, optional
+        A *communication id* -- a registered connection's ``global_id``
+        or a protocol token (``"tcp"``, ``"lora"``, ``"ble"`` ...). When
+        ``None`` the proxy uses the first transport holding the peer.
+
+    Returns
+    -------
+    RemotePolicyProxy
+        A proxy (optionally channel-bound) to the remote policy.
+
+    Raises
+    ------
+    ConnectionError
+        If *policy_id* is not a connected peer.
+    """
+    proxy = _remote_policies.get(str(policy_id))
+    if proxy is None:
+        raise ConnectionError(
+            f"Unknown peer {str(policy_id)!r}: connect first with laila.add_peer()."
+        )
+    return proxy.via(comm_protocol) if comm_protocol is not None else proxy
 
 
 def _resolve_future(future_ref):

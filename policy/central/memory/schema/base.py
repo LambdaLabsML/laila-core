@@ -152,6 +152,38 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
 
         raise TypeError("pool_ref must be a pool object, pool id, or pool nickname.")
 
+    def _route_pool(
+        self,
+        entries,
+        *,
+        pool=None,
+        pool_id: str | None = None,
+        pool_nickname: str | None = None,
+        affinity: float | None = None,
+    ) -> _LAILA_IDENTIFIABLE_POOL:
+        """Resolve the target pool for a memory op.
+
+        Unifies the three ways a caller can name a pool:
+
+        - ``pool`` -- a live pool *object*, a gid string, or a nickname,
+          resolved directly through :meth:`_resolve_pool_ref`. This is
+          the path that supports *standalone* pools (e.g. an S3 / Redis
+          pool instance the caller configured itself and handed in).
+        - ``pool_id`` / ``pool_nickname`` -- the classic router inputs,
+          resolved through the :class:`PoolRouter` (``pool_id`` >
+          ``pool_nickname`` > default alpha).
+
+        ``pool`` wins when supplied; otherwise the router decides.
+        """
+        if pool is not None:
+            return self._resolve_pool_ref(pool)
+        return self.pool_router.route(
+            entries=entries,
+            pool_id=pool_id,
+            pool_nickname=pool_nickname,
+            affinity=affinity,
+        )
+
     # TODO: need to make sure cross-borrowing does not lead to stall
     @contextmanager
     def borrow(
@@ -316,6 +348,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         self,
         entries: Any,
         *,
+        pool=None,
         pool_id: str | None = None,
         pool_nickname: str | None = None,
         affinity: float | None = None,
@@ -333,8 +366,12 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             One or more entries to write. The :func:`ensure_list`
             decorator wraps a single entry in a 1-list before this body
             runs.
+        pool : pool object, gid str, or nickname str, optional
+            Direct pool selector (highest priority). Accepts a live,
+            *standalone* pool instance the caller configured, a gid, or
+            a nickname. See :meth:`_route_pool`.
         pool_id : str, optional
-            Explicit pool gid, highest-priority routing input.
+            Explicit pool gid, classic router input.
         pool_nickname : str, optional
             Friendly name resolved through the router.
         affinity : float, optional
@@ -349,8 +386,9 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         """
         from ..... import active_policy
 
-        pool = self.pool_router.route(
-            entries=entries,
+        pool = self._route_pool(
+            entries,
+            pool=pool,
             pool_id=pool_id,
             pool_nickname=pool_nickname,
             affinity=affinity,
@@ -436,6 +474,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         self,
         entry_ids: list[Entry] | list[str],
         *,
+        pool=None,
         pool_id: str | None = None,
         pool_nickname: str | None = None,
         affinity: float | None = None,
@@ -478,8 +517,9 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         """
         from ..... import active_policy
 
-        pool = self.pool_router.route(
-            entries=entry_ids,
+        pool = self._route_pool(
+            entry_ids,
+            pool=pool,
             pool_id=pool_id,
             pool_nickname=pool_nickname,
             affinity=affinity,
@@ -671,11 +711,174 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         """Batch-accelerated fetch path (not yet implemented)."""
         raise NotImplementedError
 
+    # ------------------------------------------------------------------
+    # Cross-peer (over-the-wire) memorize / remember
+    # ------------------------------------------------------------------
+
+    def _remote_memorize(
+        self,
+        serialized_entries: list,
+        *,
+        pool: str | None = None,
+        pool_id: str | None = None,
+        pool_nickname: str | None = None,
+    ) -> list[str]:
+        """Reconstruct wire-serialized entries and memorize them locally.
+
+        Invoked over a transport by a peer's :func:`laila.memorize`
+        ``dst_policy=`` call. Each item in *serialized_entries* is the
+        JSON-safe form produced by ``Entry.serialize(transformation_base64)``
+        on the sender; here it is rebuilt into a live :class:`Entry`,
+        written through the normal :meth:`memorize` path, and the call
+        blocks until the write completes so the caller gets a definite
+        list of stored gids back.
+
+        ``pool`` (a gid or nickname *string* resolvable on this policy)
+        wins over the classic ``pool_id`` / ``pool_nickname``. A
+        standalone pool *object* can never cross the wire, so only string
+        selectors are accepted here.
+        """
+        from .....entry.constitution.build_maps import build_by_scope
+
+        entries = [build_by_scope(s, asynchronous=False) for s in serialized_entries]
+        future = self.memorize(
+            entries, pool=pool, pool_id=pool_id, pool_nickname=pool_nickname
+        )
+        if future is not None and hasattr(future, "wait"):
+            future.wait(timeout=60)
+        return [e.global_id for e in entries]
+
+    def _remote_remember(
+        self,
+        entry_ids: list[str],
+        *,
+        pool: str | None = None,
+        pool_id: str | None = None,
+        pool_nickname: str | None = None,
+    ) -> list:
+        """Fetch entries locally and return them wire-serialized.
+
+        The inverse of :meth:`_remote_memorize`: invoked over a transport
+        by a peer's :func:`laila.remember` ``dst_policy=`` call. Resolves
+        the entries from the local pool, then returns each as the JSON-safe
+        ``Entry.serialize(transformation_base64)`` form so the caller can
+        rebuild real :class:`Entry` objects on its side.
+        """
+        from .....entry import transformation_base64
+
+        future = self.remember(
+            entry_ids,
+            pool=pool,
+            pool_id=pool_id,
+            pool_nickname=pool_nickname,
+            persist=False,
+        )
+        result = future.wait(timeout=60) if hasattr(future, "wait") else future
+        entries = result if isinstance(result, list) else [result]
+        return [e.serialize(transformations=transformation_base64) for e in entries]
+
+    def _remote_forget(
+        self,
+        entry_ids: list[str],
+        *,
+        pool: str | None = None,
+        pool_id: str | None = None,
+        pool_nickname: str | None = None,
+    ) -> list[str]:
+        """Delete *entry_ids* from a local pool on behalf of a peer.
+
+        Invoked over a transport by a peer's :func:`laila.forget`
+        ``policy=`` call. Blocks until the delete completes so the caller
+        gets a definite acknowledgement (the list of gids it asked to
+        delete).
+        """
+        ids = [x.global_id if hasattr(x, "global_id") else str(x) for x in entry_ids]
+        future = self.forget(
+            ids, pool=pool, pool_id=pool_id, pool_nickname=pool_nickname
+        )
+        if future is not None and hasattr(future, "wait"):
+            future.wait(timeout=60)
+        return ids
+
+    # ------------------------------------------------------------------
+    # 3-party relays (source-side orchestration)
+    #
+    # These run on the *source* policy B when an orchestrator A issues a
+    # ``src_policy=B, dst_policy=C`` transfer. A reaches B over the A<->B
+    # link and asks B to move data over B's own B<->C link -- A never
+    # brokers the B<->C connection.
+    # ------------------------------------------------------------------
+
+    def _relay_memorize(
+        self,
+        entry_ids: list[str],
+        *,
+        src_pool: str | None = None,
+        dst_policy: str | None = None,
+        dst_pool: str | None = None,
+        comm: str | None = None,
+    ) -> list[str]:
+        """Push entries this policy holds to *dst_policy* (push relay).
+
+        Runs on the source policy B: read *entry_ids* from B's own
+        ``src_pool`` and memorize them into ``dst_policy`` C's
+        ``dst_pool`` over B's existing peer link to C. Blocks until the
+        push completes and returns the stored gids.
+
+        Raises a clear error if B is not peered to ``dst_policy``.
+        """
+        import laila
+
+        ids = [x.global_id if hasattr(x, "global_id") else str(x) for x in entry_ids]
+        fetched = laila.remember(ids, dst_pool=src_pool, persist=False)
+        result = fetched.wait(timeout=60) if hasattr(fetched, "wait") else fetched
+        entries = result if isinstance(result, list) else [result]
+
+        pushed = laila.memorize(
+            entries, dst_policy=dst_policy, dst_pool=dst_pool, comm=comm
+        )
+        if pushed is not None and hasattr(pushed, "wait"):
+            pushed.wait(timeout=60)
+        return [e.global_id for e in entries]
+
+    def _relay_remember(
+        self,
+        entry_ids: list[str],
+        *,
+        dst_policy: str | None = None,
+        dst_pool: str | None = None,
+        src_pool: str | None = None,
+        comm: str | None = None,
+        persist: bool = True,
+    ) -> list[str]:
+        """Pull entries from *dst_policy* into this policy (pull relay).
+
+        Runs on the source policy B: fetch *entry_ids* from ``dst_policy``
+        C's ``dst_pool`` over B's own B<->C link, store them into B's
+        ``src_pool`` (or B's alpha pool), and return the stored gids.
+
+        Raises a clear error if B is not peered to ``dst_policy``.
+        """
+        import laila
+
+        ids = [x.global_id if hasattr(x, "global_id") else str(x) for x in entry_ids]
+        fetched = laila.remember(
+            ids, dst_policy=dst_policy, dst_pool=dst_pool, comm=comm, persist=False
+        )
+        result = fetched.wait(timeout=60) if hasattr(fetched, "wait") else fetched
+        entries = result if isinstance(result, list) else [result]
+
+        stored = laila.memorize(entries, dst_pool=src_pool) if persist else None
+        if stored is not None and hasattr(stored, "wait"):
+            stored.wait(timeout=60)
+        return [e.global_id for e in entries]
+
     @ensure_list("entry_ids")
     def forget(
         self,
         entry_ids: list[Entry] | list[str],
         *,
+        pool=None,
         pool_id: str | None = None,
         pool_nickname: str | None = None,
         affinity: float | None = None,
@@ -694,8 +897,9 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         Future or GroupFuture
             Future-like handle resolving when deletion finishes.
         """
-        pool = self.pool_router.route(
-            entries=entry_ids,
+        pool = self._route_pool(
+            entry_ids,
+            pool=pool,
             pool_id=pool_id,
             pool_nickname=pool_nickname,
             affinity=affinity,

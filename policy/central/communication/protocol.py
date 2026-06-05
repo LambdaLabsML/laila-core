@@ -38,6 +38,11 @@ ERR_INVALID_REQUEST = -32600
 ERR_METHOD_NOT_FOUND = -32601
 ERR_AUTH_FAILED = -32001
 ERR_EXECUTION = -32002
+# Backpressure: the receiving policy's inbound RPC queue is at capacity.
+# Senders treat this as retryable (exponential backoff) rather than a
+# hard failure -- it is distinct from ERR_EXECUTION so retries stay
+# scoped to overload only.
+ERR_BUSY = -32003
 
 
 class LailaJSONEncoder(json.JSONEncoder):

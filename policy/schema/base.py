@@ -283,3 +283,45 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
         if hasattr(future, "_result_global_id"):
             return future._result_global_id
         return None
+
+    def _serialize_future_result(self, future: Any) -> Any:
+        """Return a local future's result entry(ies), wire-serialized.
+
+        Uses the canonical, self-describing ``Entry.serialize(
+        transformation_base64)`` form so a :class:`RemoteFuture` on a peer
+        can rebuild the real :class:`Entry` via ``build_by_scope`` -- the
+        payload actually crosses the wire (no shared pool needed). For a
+        :class:`GroupFuture` a list of per-child blobs is returned.
+        """
+        from ...entry import transformation_base64
+
+        if hasattr(future, "future_ids"):
+            results = future.result
+            return [
+                (e.serialize(transformations=transformation_base64) if e is not None else None)
+                for e in results
+            ]
+        result = future.result
+        if result is None:
+            return None
+        return result.serialize(transformations=transformation_base64)
+
+    def _get_future_result_entry(self, future_id: str) -> Any:
+        """RPC: return a local future's result entry(ies), wire-serialized.
+
+        The data-bearing counterpart of :meth:`_get_future_result_id`:
+        used by :class:`RemoteFuture` to materialize the real entry over
+        the wire instead of a bare gid. Blocks until the future resolves.
+        """
+        future = self.future_bank.get(future_id)
+        if future is None:
+            raise KeyError(f"Future {future_id} not in bank")
+        return self._serialize_future_result(future)
+
+    def _wait_future_entry(self, future_id: str, timeout: float = None) -> Any:
+        """RPC: block on a local future and return its result entry(ies), serialized."""
+        future = self.future_bank.get(future_id)
+        if future is None:
+            raise KeyError(f"Future {future_id} not in bank")
+        future.wait(timeout)
+        return self._serialize_future_result(future)

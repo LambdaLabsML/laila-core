@@ -32,9 +32,10 @@ to the originating peer (see :meth:`_maybe_wrap_remote_future`).
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
-from pydantic import ConfigDict, PrivateAttr
+from pydantic import ConfigDict, Field, PrivateAttr
 
 from .....basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS, CLIExempt
 from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
@@ -91,7 +92,23 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         default_factory=dict,
     )
 
+    #: How often (seconds) the async liveness loop pings each peer.
+    liveness_interval: float = Field(default=15.0)
+    #: Whether the async liveness loop runs at all.
+    liveness_enabled: bool = Field(default=True)
+
+    #: Max inbound RPCs this policy will run/queue concurrently across all
+    #: transports before rejecting new ones with ``ERR_BUSY``. Bounds the
+    #: per-policy backlog so a flood cannot exhaust memory; embedded /
+    #: low-resource configs should set this low (e.g. 32-64) via
+    #: ``laila.args``. Liveness pings bypass this cap entirely.
+    max_inflight_rpcs: int = Field(default=1000)
+
     _local_policy: Any = PrivateAttr(default=None)
+    _liveness_thread: Any = PrivateAttr(default=None)
+    _liveness_stop: Any = PrivateAttr(default=None)
+    _rpc_semaphore: Any = PrivateAttr(default=None)
+    _rpc_semaphore_lock: Any = PrivateAttr(default=None)
 
     # ------------------------------------------------------------------
     # Protocol management
@@ -189,12 +206,14 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
             raise ConnectionError(
                 "No communication protocols configured. Call add_connection() first."
             )
-        resolved = token if token is not None else "tcpip"
+        if token is None:
+            # Transport-agnostic default: the first registered protocol.
+            return next(iter(self.connections.values()))
         for proto in self.connections.values():
-            if type(proto).matches_token(resolved):
+            if type(proto).matches_token(token):
                 return proto
         raise ConnectionError(
-            f"No registered communication protocol matches {resolved!r}. "
+            f"No registered communication protocol matches {token!r}. "
             "Register one with add_connection()."
         )
 
@@ -211,6 +230,7 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         """
         for proto in self.connections.values():
             proto.start()
+        self._start_liveness()
         log.info("Communication started for policy %s", self.policy_id)
 
     def stop(self) -> None:
@@ -221,6 +241,7 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         registry afterwards so subsequent code does not try to talk
         to detached proxies.
         """
+        self._stop_liveness()
         for proto in self.connections.values():
             proto.stop()
         self.peers.clear()
@@ -249,7 +270,7 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
             The ``global_id`` of the newly peered remote policy.
         """
         proto = self._resolve_protocol_for_uri(uri)
-        return proto.add_peer(uri, secret)
+        return proto.connect(uri, secret)
 
     def add_tcpip_peer(self, host: str, port: int, secret: str) -> str:
         """Peer with a remote policy over TCP/IP (WebSocket).
@@ -272,6 +293,86 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         """
         return self.add_peer(f"ws://{host}:{port}", secret)
 
+    def remove_peer(self, peer_id: str) -> None:
+        """Disconnect *peer_id* via whichever protocol holds it. Idempotent."""
+        for proto in list(self.connections.values()):
+            if proto.has_peer(peer_id):
+                try:
+                    proto.disconnect(peer_id)
+                except Exception:  # noqa: BLE001
+                    pass
+                return
+        self._unregister_peer(peer_id)
+
+    def _holder_protocol(self, peer_id: str) -> _LAILA_IDENTIFIABLE_COMM_PROTOCOL | None:
+        """Return the registered protocol currently holding *peer_id*, if any."""
+        for proto in self.connections.values():
+            if proto.has_peer(peer_id):
+                return proto
+        return None
+
+    # ------------------------------------------------------------------
+    # Liveness (async per-peer ping loop)
+    # ------------------------------------------------------------------
+
+    def _start_liveness(self) -> None:
+        """Start the background liveness loop (idempotent)."""
+        if not self.liveness_enabled:
+            return
+        if self._liveness_thread is not None and self._liveness_thread.is_alive():
+            return
+        self._liveness_stop = threading.Event()
+        self._liveness_thread = threading.Thread(
+            target=self._liveness_loop,
+            daemon=True,
+            name=f"comm-liveness-{self.policy_id}",
+        )
+        self._liveness_thread.start()
+
+    def _stop_liveness(self) -> None:
+        """Stop the background liveness loop (idempotent)."""
+        if self._liveness_stop is not None:
+            self._liveness_stop.set()
+        if self._liveness_thread is not None:
+            self._liveness_thread.join(timeout=2.0)
+            self._liveness_thread = None
+        self._liveness_stop = None
+
+    def _liveness_loop(self) -> None:
+        """Ping each peer every ``liveness_interval`` and drop dead ones.
+
+        Runs entirely off the data path on its own thread. Each ping is
+        bounded by the protocol's ``ping_timeout`` (via a worker pool) so
+        a silently-dead peer cannot stall the sweep. Only protocols that
+        are ``persistent`` and ``supports_ping`` are probed.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        stop = self._liveness_stop
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="comm-ping") as pool:
+            while not stop.wait(self.liveness_interval):
+                # snapshot keys so concurrent register/unregister is safe
+                for peer_id in list(self.peers):
+                    proto = self._holder_protocol(peer_id)
+                    if proto is None:
+                        continue
+                    if not (
+                        getattr(proto, "persistent", True)
+                        and getattr(proto, "supports_ping", True)
+                    ):
+                        continue
+                    deadline = getattr(proto, "ping_timeout", 5.0)
+                    try:
+                        alive = pool.submit(proto.ping, peer_id).result(timeout=deadline)
+                    except Exception:  # noqa: BLE001 - timeouts count as dead
+                        alive = False
+                    if not alive:
+                        try:
+                            proto.disconnect(peer_id)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        self._unregister_peer(peer_id)
+
     def _register_peer(self, peer_id: str) -> None:
         """Create a proxy for a newly connected peer.
 
@@ -289,6 +390,8 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
             from ..... import _remote_policies
 
             _remote_policies[peer_id] = proxy
+            # ensure liveness monitoring is running once we have a peer
+            self._start_liveness()
 
     def _unregister_peer(self, peer_id: str) -> None:
         """Remove a peer proxy after the transport connection closes.
@@ -304,6 +407,39 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         from ..... import _remote_policies
 
         _remote_policies.pop(peer_id, None)
+
+    # ------------------------------------------------------------------
+    # Inbound admission control (backpressure)
+    # ------------------------------------------------------------------
+
+    def _rpc_gate(self):
+        """Lazily build the shared bounded semaphore guarding inbound RPCs.
+
+        One semaphore per policy (shared by every transport) sized to
+        :attr:`max_inflight_rpcs`, so the cap is a true *per-policy*
+        budget rather than per-connection.
+        """
+        if self._rpc_semaphore_lock is None:
+            self._rpc_semaphore_lock = threading.Lock()
+        if self._rpc_semaphore is None:
+            with self._rpc_semaphore_lock:
+                if self._rpc_semaphore is None:
+                    self._rpc_semaphore = threading.BoundedSemaphore(
+                        max(1, int(self.max_inflight_rpcs))
+                    )
+        return self._rpc_semaphore
+
+    def _acquire_rpc_slot(self) -> bool:
+        """Claim an inbound-RPC slot without blocking. ``True`` if admitted."""
+        return self._rpc_gate().acquire(blocking=False)
+
+    def _release_rpc_slot(self) -> None:
+        """Release a previously-claimed inbound-RPC slot. Idempotent-safe."""
+        try:
+            self._rpc_gate().release()
+        except ValueError:
+            # Released more than acquired -- ignore (defensive).
+            pass
 
     # ------------------------------------------------------------------
     # RPC dispatch (inbound)
@@ -343,8 +479,59 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
     # RPC dispatch (outbound)
     # ------------------------------------------------------------------
 
-    def _send_rpc(self, peer_id: str, path: list[str], args: tuple, kwargs: dict) -> Any:
-        """Send an RPC call to a peer via the protocol that holds the connection.
+    def _select_protocol_for_peer(
+        self, peer_id: str, comm: str | None = None
+    ) -> _LAILA_IDENTIFIABLE_COMM_PROTOCOL:
+        """Pick the transport that carries the call to *peer_id*.
+
+        Parameters
+        ----------
+        peer_id : str
+            Target peer ``global_id``.
+        comm : str, optional
+            A *communication id* -- either a registered connection's
+            ``global_id`` or a protocol token (e.g. ``"tcp"``,
+            ``"lora"``). When given, that specific channel is used and
+            must already hold the peer; when ``None`` the first
+            registered protocol holding *peer_id* is used.
+
+        Raises
+        ------
+        ConnectionError
+            If the requested channel is unknown, or no channel holds the
+            peer.
+        """
+        if comm is not None:
+            proto = self.connections.get(str(comm))
+            if proto is None:
+                try:
+                    proto = self._resolve_protocol_for_token(str(comm))
+                except ConnectionError:
+                    proto = None
+            if proto is None:
+                raise ConnectionError(
+                    f"Unknown communication channel {comm!r}: not a connection id "
+                    "or a registered protocol token."
+                )
+            if not proto.has_peer(peer_id):
+                raise ConnectionError(
+                    f"Communication channel {comm!r} has no connection to peer {peer_id}."
+                )
+            return proto
+        for proto in self.connections.values():
+            if proto.has_peer(peer_id):
+                return proto
+        raise ConnectionError(f"No connection to peer {peer_id}")
+
+    def _send_rpc(
+        self,
+        peer_id: str,
+        path: list[str],
+        args: tuple,
+        kwargs: dict,
+        comm: str | None = None,
+    ) -> Any:
+        """Send an RPC call to a peer over the selected transport.
 
         If the deserialized response contains a ``__laila_future__`` marker
         it is automatically wrapped in a :class:`RemoteFuture` and
@@ -360,6 +547,11 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
             Positional arguments.
         kwargs : dict
             Keyword arguments.
+        comm : str, optional
+            Communication id / protocol token selecting the transport.
+            Threaded into the returned :class:`RemoteFuture` so its later
+            ``status`` / ``wait`` / ``result`` calls stay on the same
+            channel.
 
         Returns
         -------
@@ -370,17 +562,18 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         Raises
         ------
         ConnectionError
-            If no protocol holds a connection to *peer_id*.
+            If no protocol holds a connection to *peer_id* (or the named
+            channel does not).
         RuntimeError
             If the remote side returned an error.
         """
-        for proto in self.connections.values():
-            if proto.has_peer(peer_id):
-                result = proto.send_rpc(peer_id, path, args, kwargs)
-                return self._maybe_wrap_remote_future(result, peer_id)
-        raise ConnectionError(f"No connection to peer {peer_id}")
+        proto = self._select_protocol_for_peer(peer_id, comm)
+        result = proto.send_rpc(peer_id, path, args, kwargs)
+        return self._maybe_wrap_remote_future(result, peer_id, comm=comm)
 
-    def _maybe_wrap_remote_future(self, result: Any, peer_id: str) -> Any:
+    def _maybe_wrap_remote_future(
+        self, result: Any, peer_id: str, comm: str | None = None
+    ) -> Any:
         """Promote a future-shaped envelope into a real :class:`RemoteFuture`.
 
         Detected by the ``__laila_future__`` flag on the deserialized
@@ -422,5 +615,5 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
             scopes=[_GROUP_FUTURE_SCOPE if is_group else _FUTURE_SCOPE],
             evolution=evolution,
         )
-        rf.bind(self, is_group=is_group)
+        rf.bind(self, is_group=is_group, comm=comm)
         return rf

@@ -18,12 +18,15 @@ reading local state.
 
 Result handling
 ---------------
-``RemoteFuture.result`` returns the *global_id* of the result entry
-on the peer rather than the entry itself -- the caller typically
-hands that gid to :func:`laila.remember` to materialize the payload
-through a shared pool. Returning the gid keeps RPC frames small and
-defers the (potentially expensive) payload transfer to the explicit
-remember.
+``RemoteFuture`` fully mirrors a local :class:`Future`: ``.result`` /
+``.wait()`` block until the peer's future completes, transfer the result
+entry's bytes over the wire (serialized with ``transformation_base64``
+on the peer, rebuilt via ``build_by_scope`` here), and return the real
+:class:`Entry`; ``.data`` returns its payload. The materialized result
+is cached so repeated access never re-transfers. ``.status`` /
+``.exception`` remain lightweight proxies that do not move the payload.
+The cheap result-gid pointer is still available on the peer via
+``_get_future_result_id`` for callers that want it.
 """
 
 from __future__ import annotations
@@ -64,12 +67,16 @@ class RemoteFuture(_LAILA_IDENTIFIABLE_FUTURE):
 
     _comm: Any = PrivateAttr(default=None)
     _is_group: bool = PrivateAttr(default=False)
+    _comm_selector: Any = PrivateAttr(default=None)
+    _materialized: Any = PrivateAttr(default=None)
+    _materialized_set: bool = PrivateAttr(default=False)
 
     def bind(
         self,
         communication: _LAILA_IDENTIFIABLE_COMMUNICATION,
         *,
         is_group: bool = False,
+        comm: Any = None,
     ) -> None:
         """Attach the communication channel and group-flag after construction.
 
@@ -77,9 +84,15 @@ class RemoteFuture(_LAILA_IDENTIFIABLE_FUTURE):
         the proxy has been built. Uses ``object.__setattr__`` to bypass
         Pydantic's validation (the channel reference is a
         :class:`PrivateAttr` so this is safe).
+
+        The *comm* selector (a communication id / protocol token, or
+        ``None``) is remembered so every follow-up ``status`` / ``wait``
+        / ``result`` call stays on the same transport that produced the
+        future.
         """
         object.__setattr__(self, "_comm", communication)
         object.__setattr__(self, "_is_group", is_group)
+        object.__setattr__(self, "_comm_selector", comm)
 
     def model_post_init(self, __context: Any) -> None:
         """Apply staged identity fields and self-register with the active local policy.
@@ -109,6 +122,7 @@ class RemoteFuture(_LAILA_IDENTIFIABLE_FUTURE):
             ["_get_future_status"],
             (self.global_id,),
             {},
+            comm=self._comm_selector,
         )
         if isinstance(raw, FutureStatus):
             return raw
@@ -122,18 +136,64 @@ class RemoteFuture(_LAILA_IDENTIFIABLE_FUTURE):
                     return raw
         return raw
 
+    def _rebuild(self, blob: Any) -> Any:
+        """Rebuild a live Entry (or list for a group) from a wire blob."""
+        from .......entry.constitution.build_maps import build_by_scope
+
+        if self._is_group:
+            blob = blob or []
+            return [
+                (build_by_scope(b, asynchronous=False) if b is not None else None)
+                for b in blob
+            ]
+        if blob is None:
+            return None
+        return build_by_scope(blob, asynchronous=False)
+
     @property
     def result(self) -> Any:
-        """Return the ``global_id`` of the result entry on the remote side.
+        """Return the rebuilt result :class:`Entry` from the remote future.
 
-        Callers typically pass this into ``laila.remember(result_gid, ...)``
-        to fetch the actual payload through a shared pool.
+        Mirrors a local ``Future.result``: blocks until the peer's future
+        completes, transfers the entry over the wire, and returns the
+        rebuilt :class:`Entry` (a list for a group future). Cached so a
+        second access does not re-transfer.
         """
+        if self._materialized_set:
+            return self._materialized
+        blob = self._comm._send_rpc(
+            str(self.policy_id),
+            ["_get_future_result_entry"],
+            (self.global_id,),
+            {},
+            comm=self._comm_selector,
+        )
+        entry = self._rebuild(blob)
+        object.__setattr__(self, "_materialized", entry)
+        object.__setattr__(self, "_materialized_set", True)
+        return entry
+
+    @property
+    def data(self) -> Any:
+        """Return the payload of the result entry (mirrors local ``Future.data``).
+
+        Blocking: materializes the entry from the peer if needed, then
+        unwraps its ``data`` (a list of payloads for a group future).
+        """
+        result = self.result
+        if self._is_group:
+            return [(e.data if e is not None else None) for e in result]
+        return result.data if result is not None else None
+
+    @property
+    def result_id(self) -> Any:
+        """Return just the result entry's ``global_id`` (cheap pointer, no payload)."""
         return self._comm._send_rpc(
             str(self.policy_id),
             ["_get_future_result_id"],
             (self.global_id,),
             {},
+            comm=self._comm_selector,
         )
 
     @property
@@ -144,10 +204,14 @@ class RemoteFuture(_LAILA_IDENTIFIABLE_FUTURE):
             ["_get_future_exception"],
             (self.global_id,),
             {},
+            comm=self._comm_selector,
         )
 
     def wait(self, timeout: float | None = None) -> Any:
-        """Block until the remote future completes, returning the result id.
+        """Block until the remote future completes; return the rebuilt Entry.
+
+        Mirrors a local ``Future.wait``: transfers the result entry over
+        the wire and returns the rebuilt :class:`Entry` (cached).
 
         Raises
         ------
@@ -158,12 +222,19 @@ class RemoteFuture(_LAILA_IDENTIFIABLE_FUTURE):
 
         _check_not_loop_thread()
 
-        return self._comm._send_rpc(
+        if self._materialized_set:
+            return self._materialized
+        blob = self._comm._send_rpc(
             str(self.policy_id),
-            ["_wait_future"],
+            ["_wait_future_entry"],
             (self.global_id,),
             {"timeout": timeout},
+            comm=self._comm_selector,
         )
+        entry = self._rebuild(blob)
+        object.__setattr__(self, "_materialized", entry)
+        object.__setattr__(self, "_materialized_set", True)
+        return entry
 
     def __await__(self):
         """Await the remote future without blocking the calling event loop.

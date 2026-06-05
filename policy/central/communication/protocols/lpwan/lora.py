@@ -18,22 +18,18 @@ What lands here so the rest of laila can already "see" LoRa:
 
 Implementation notes for a future contributor
 ----------------------------------------------
-LoRa is half-duplex, framed, and lossy. A real implementation should:
-
-- Own a serial/SPI link to a LoRa modem on a background thread (mirror
-  the dedicated-event-loop pattern in
-  :class:`_LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL`).
-- Fragment/reassemble RPC frames to fit the small LoRa MTU and add an
-  ack/retry layer because delivery is not guaranteed.
-- Map a node address (``lora://<node-id>``) to a peer ``global_id`` via
-  the same ``peer.connect`` handshake used by the TCP/IP transport.
+LoRa is half-duplex, framed, and lossy. A real implementation should
+build on the :class:`_DatagramRPCProtocol` carrier (fragmentation +
+ack/retry already provided) and supply a SX127x/SX126x modem endpoint
+(``spidev``) plus a node-address -> peer ``global_id`` mapping via the
+shared ``peer.connect`` handshake.
 """
 
 from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from .base import _LAILA_IDENTIFIABLE_COMM_PROTOCOL
+from ..base import _LAILA_IDENTIFIABLE_COMM_PROTOCOL
 
 _NOT_IMPLEMENTED = (
     "The LoRa transport is a planned protocol and is not implemented yet. "
@@ -63,10 +59,14 @@ class _LAILA_IDENTIFIABLE_LORA_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL):
         raise NotImplementedError(_NOT_IMPLEMENTED)
 
     def stop(self) -> None:
-        """Tear down the LoRa modem link. Not implemented yet."""
-        raise NotImplementedError(_NOT_IMPLEMENTED)
+        """Tear down the LoRa modem link. No-op (nothing is ever started).
 
-    def add_peer(self, uri: str, secret: str) -> str:
+        ``stop`` must be idempotent and safe per the base contract, so
+        the scaffold returns cleanly rather than raising.
+        """
+        return None
+
+    def connect(self, uri: str, secret: str) -> str:
         """Peer with a remote node over LoRa. Not implemented yet."""
         raise NotImplementedError(_NOT_IMPLEMENTED)
 

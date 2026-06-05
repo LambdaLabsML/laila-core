@@ -71,6 +71,17 @@ class _LAILA_IDENTIFIABLE_COMM_PROTOCOL(
     #: matches against. Subclasses MUST override it.
     protocol_name: ClassVar[str] = "base"
 
+    #: Whether a peering holds a long-lived connection (``True``) or is
+    #: re-established per request (``False``). Persistent transports avoid
+    #: a handshake per call and are pinged by the communication layer's
+    #: liveness loop; per-request transports are not pinged.
+    persistent: ClassVar[bool] = True
+
+    #: Whether :meth:`ping` is meaningful for this transport. The
+    #: communication liveness loop only pings protocols that are both
+    #: ``persistent`` and ``supports_ping``.
+    supports_ping: ClassVar[bool] = True
+
     # ------------------------------------------------------------------
     # Abstract interface
     # ------------------------------------------------------------------
@@ -121,10 +132,14 @@ class _LAILA_IDENTIFIABLE_COMM_PROTOCOL(
         """
         raise NotImplementedError
 
-    def add_peer(self, uri: str, secret: str) -> str:
-        """Initiate an outbound peering handshake to *uri* using *secret*.
+    def connect(self, uri: str, secret: str) -> str:
+        """Establish an outbound connection/peering to *uri* using *secret*.
 
-        On success, the protocol must call
+        Peer *orchestration* (resolving which protocol handles a URI,
+        registering the proxy) is owned by
+        :class:`_LAILA_IDENTIFIABLE_COMMUNICATION`; a protocol only knows
+        how to ``connect`` and ``disconnect`` its own wire. On success the
+        protocol must call
         :meth:`_LAILA_IDENTIFIABLE_COMMUNICATION._register_peer` so a
         :class:`RemotePolicyProxy` is created in the local registry.
 
@@ -134,6 +149,25 @@ class _LAILA_IDENTIFIABLE_COMM_PROTOCOL(
             The remote policy's ``global_id``.
         """
         raise NotImplementedError
+
+    def disconnect(self, peer_id: str) -> None:
+        """Tear down the connection to a single *peer_id*.
+
+        Idempotent and safe by default (a transport that holds no peer
+        has nothing to disconnect). Carriers override this to close the
+        peer's handle and call
+        :meth:`_LAILA_IDENTIFIABLE_COMMUNICATION._unregister_peer`.
+        """
+        return None
+
+    def ping(self, peer_id: str, timeout: float | None = None) -> bool:
+        """Return ``True`` if *peer_id* is reachable right now.
+
+        Used by the communication layer's async liveness loop to detect
+        dead peers without touching the data path. The default returns
+        ``False``; carriers implement a lightweight round-trip.
+        """
+        return False
 
     def send_rpc(self, peer_id: str, path: list[str], args: tuple, kwargs: dict) -> Any:
         """Send an RPC frame to *peer_id* and block for the deserialized response.
