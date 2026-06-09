@@ -18,9 +18,7 @@ from pydantic import Field, PrivateAttr
 from ..ip_app.modbus_tcp import _LAILA_IDENTIFIABLE_MODBUS_TCP_COMM_PROTOCOL
 
 
-class _LAILA_IDENTIFIABLE_MODBUS_RTU_COMM_PROTOCOL(
-    _LAILA_IDENTIFIABLE_MODBUS_TCP_COMM_PROTOCOL
-):
+class _LAILA_IDENTIFIABLE_MODBUS_RTU_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_MODBUS_TCP_COMM_PROTOCOL):
     """Modbus-RTU register-mailbox transport over RS-485."""
 
     protocol_name: ClassVar[str] = "modbus-rtu"
@@ -42,7 +40,7 @@ class _LAILA_IDENTIFIABLE_MODBUS_RTU_COMM_PROTOCOL(
             raise RuntimeError(
                 f"{type(self).__name__} requires a serial `port` (e.g. '/dev/ttyUSB0')."
             )
-        from pymodbus.client import AsyncModbusSerialClient  # noqa: PLC0415
+        from pymodbus.client import AsyncModbusSerialClient
 
         self._client = AsyncModbusSerialClient(port=self.port, baudrate=self.baudrate)
         await self._client.connect()

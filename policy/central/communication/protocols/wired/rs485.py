@@ -44,8 +44,8 @@ class _LAILA_IDENTIFIABLE_RS485_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_UART_COMM_PROT
         if not self.rs485_mode:
             return
         try:
-            import serial.rs485  # noqa: PLC0415
+            import serial.rs485
 
             ser.rs485_mode = serial.rs485.RS485Settings()
-        except Exception:  # noqa: BLE001 - not all drivers support it
+        except Exception:
             log.debug("RS-485 direction control unavailable on %s", self.port)

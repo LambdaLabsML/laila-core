@@ -41,7 +41,7 @@ class _LAILA_IDENTIFIABLE_I2C_COMM_PROTOCOL(_RegisterRPCProtocol):
 
     async def _open_bus(self) -> None:
         self._require_drivers(("smbus2",), "i2c")
-        from smbus2 import SMBus  # noqa: PLC0415
+        from smbus2 import SMBus
 
         self._bus = SMBus(self.bus_number)
 
@@ -49,7 +49,7 @@ class _LAILA_IDENTIFIABLE_I2C_COMM_PROTOCOL(_RegisterRPCProtocol):
         if self._bus is not None:
             try:
                 self._bus.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._bus = None
 

@@ -72,9 +72,7 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
     #: transports under ``protocols/ip_app/`` that own the ``tcp`` /
     #: ``udp`` / ``tls`` tokens, so ``tcpip`` claims only the
     #: WebSocket family to keep the token map globally disjoint.
-    _TOKEN_ALIASES: ClassVar[frozenset[str]] = frozenset(
-        {"tcpip", "ws", "wss", "websocket"}
-    )
+    _TOKEN_ALIASES: ClassVar[frozenset[str]] = frozenset({"tcpip", "ws", "wss", "websocket"})
 
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=0)

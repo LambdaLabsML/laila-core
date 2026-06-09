@@ -43,7 +43,7 @@ class _LAILA_IDENTIFIABLE_XMPP_COMM_PROTOCOL(_BrokerRPCProtocol):
 
     async def _broker_connect(self) -> None:
         self._require_drivers(("slixmpp",), "xmpp")
-        import slixmpp  # noqa: PLC0415
+        import slixmpp
 
         self._client = slixmpp.ClientXMPP(self.jid, self.password)
         self._client.connect((self.server_host, self.server_port))
@@ -63,6 +63,6 @@ class _LAILA_IDENTIFIABLE_XMPP_COMM_PROTOCOL(_BrokerRPCProtocol):
         if self._client is not None:
             try:
                 self._client.disconnect()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._client = None

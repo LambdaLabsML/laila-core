@@ -133,7 +133,7 @@ class _CarrierRPCProtocol(_LAILA_IDENTIFIABLE_COMM_PROTOCOL):
         try:
             result = self._communication._execute_rpc(path, args, kwargs)
             return rpc_protocol.make_result(request_id, result)
-        except Exception as exc:  # noqa: BLE001 - errors travel back to the caller
+        except Exception as exc:
             return rpc_protocol.make_error(
                 request_id,
                 rpc_protocol.ERR_EXECUTION,
@@ -262,7 +262,7 @@ class _CarrierRPCProtocol(_LAILA_IDENTIFIABLE_COMM_PROTOCOL):
             return False
         try:
             return self.send_rpc(peer_id, list(_COMM_PING_PATH), (), {}) == "pong"
-        except Exception:  # noqa: BLE001
+        except Exception:
             return False
 
     # ------------------------------------------------------------------
@@ -296,8 +296,7 @@ class _CarrierRPCProtocol(_LAILA_IDENTIFIABLE_COMM_PROTOCOL):
         self._pending_rpcs.pop(request_id, None)
         if not completed:
             raise TimeoutError(
-                f"RPC to peer timed out after {self.rpc_timeout}s "
-                f"on {type(self).__name__}."
+                f"RPC to peer timed out after {self.rpc_timeout}s on {type(self).__name__}."
             )
         if "error" in slot:
             err = slot["error"]

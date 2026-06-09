@@ -54,7 +54,7 @@ class _P2PStreamRPCProtocol(_CarrierRPCProtocol):
         if self._writer is not None:
             try:
                 self._writer.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         self._writer = None
         self._reader = None
@@ -76,7 +76,7 @@ class _P2PStreamRPCProtocol(_CarrierRPCProtocol):
             asyncio.set_event_loop(self._event_loop)
             try:
                 self._event_loop.run_until_complete(self._async_start(ready))
-            except BaseException as exc:  # noqa: BLE001
+            except BaseException as exc:
                 boot["error"] = exc
                 ready.set()
                 return
@@ -120,7 +120,7 @@ class _P2PStreamRPCProtocol(_CarrierRPCProtocol):
             try:
                 fut = asyncio.run_coroutine_threadsafe(_shutdown(), self._event_loop)
                 fut.result(timeout=5.0)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._event_loop.call_soon_threadsafe(self._event_loop.stop)
 
@@ -160,7 +160,7 @@ class _P2PStreamRPCProtocol(_CarrierRPCProtocol):
                         self._complete_pending(msg)
         except (asyncio.CancelledError, ConnectionError):
             pass
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.debug("P2P receive loop ended", exc_info=True)
 
     async def _write_frame(self, obj: dict) -> None:
@@ -203,9 +203,7 @@ class _P2PStreamRPCProtocol(_CarrierRPCProtocol):
         """Initiate the handshake over the already-open point-to-point link."""
         self.start()
         policy_id = self._communication.policy_id if self._communication else None
-        req = rpc_protocol.make_request(
-            "peer.connect", {"from_id": policy_id, "secret": secret}
-        )
+        req = rpc_protocol.make_request("peer.connect", {"from_id": policy_id, "secret": secret})
         rid = req["id"]
         slot: dict[str, Any] = {"event": threading.Event()}
         self._handshake_pending[rid] = slot

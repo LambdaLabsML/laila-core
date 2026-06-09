@@ -87,7 +87,7 @@ class _RegisterRPCProtocol(_CarrierRPCProtocol):
             asyncio.set_event_loop(self._event_loop)
             try:
                 self._event_loop.run_until_complete(self._async_start(ready))
-            except BaseException as exc:  # noqa: BLE001
+            except BaseException as exc:
                 boot["error"] = exc
                 ready.set()
                 return
@@ -131,7 +131,7 @@ class _RegisterRPCProtocol(_CarrierRPCProtocol):
             try:
                 fut = asyncio.run_coroutine_threadsafe(_shutdown(), self._event_loop)
                 fut.result(timeout=5.0)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._event_loop.call_soon_threadsafe(self._event_loop.stop)
 
@@ -155,7 +155,7 @@ class _RegisterRPCProtocol(_CarrierRPCProtocol):
                     await asyncio.sleep(self.poll_interval)
         except asyncio.CancelledError:
             pass
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.debug("Register poll loop ended", exc_info=True)
 
     # ------------------------------------------------------------------
@@ -165,7 +165,7 @@ class _RegisterRPCProtocol(_CarrierRPCProtocol):
     def _feed_message(self, data: bytes) -> None:
         try:
             msg = self._decode(data)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return
         if rpc_protocol.is_request(msg):
             if msg.get("method") == "peer.connect":
@@ -201,9 +201,7 @@ class _RegisterRPCProtocol(_CarrierRPCProtocol):
 
     def _deliver_async(self, obj: dict) -> None:
         data = self._encode(obj)
-        self._event_loop.call_soon_threadsafe(
-            lambda: asyncio.ensure_future(self._deliver(data))
-        )
+        self._event_loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self._deliver(data)))
 
     # ------------------------------------------------------------------
     # Peering / RPC
@@ -213,9 +211,7 @@ class _RegisterRPCProtocol(_CarrierRPCProtocol):
         """Handshake with the single peer on the other end of the bus."""
         self.start()
         policy_id = self._communication.policy_id if self._communication else None
-        req = rpc_protocol.make_request(
-            "peer.connect", {"from_id": policy_id, "secret": secret}
-        )
+        req = rpc_protocol.make_request("peer.connect", {"from_id": policy_id, "secret": secret})
         rid = req["id"]
         slot: dict[str, Any] = {"event": threading.Event()}
         self._handshake_pending[rid] = slot

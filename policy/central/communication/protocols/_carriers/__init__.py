@@ -33,9 +33,9 @@ from .register import _RegisterRPCProtocol
 from .stream import _StreamRPCProtocol
 
 __all__ = [
-    "_CarrierRPCProtocol",
-    "_StreamRPCProtocol",
-    "_DatagramRPCProtocol",
     "_BrokerRPCProtocol",
+    "_CarrierRPCProtocol",
+    "_DatagramRPCProtocol",
     "_RegisterRPCProtocol",
+    "_StreamRPCProtocol",
 ]

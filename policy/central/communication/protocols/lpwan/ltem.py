@@ -19,9 +19,7 @@ class _LAILA_IDENTIFIABLE_LTEM_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_CELLULAR_COMM_P
     """LTE-M (Cat-M1) cellular LPWAN transport (IP data path)."""
 
     protocol_name: ClassVar[str] = "ltem"
-    _TOKEN_ALIASES: ClassVar[frozenset[str]] = frozenset(
-        {"ltem", "lte-m", "cat-m1", "catm1"}
-    )
+    _TOKEN_ALIASES: ClassVar[frozenset[str]] = frozenset({"ltem", "lte-m", "cat-m1", "catm1"})
 
     @classmethod
     def can_handle_uri(cls, uri: str) -> bool:

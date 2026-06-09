@@ -11,7 +11,9 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 
-def split_host_port(uri: str, default_host: str = "127.0.0.1", default_port: int = 0) -> tuple[str, int]:
+def split_host_port(
+    uri: str, default_host: str = "127.0.0.1", default_port: int = 0
+) -> tuple[str, int]:
     """Return ``(host, port)`` from a ``scheme://host:port`` URI."""
     parsed = urlparse(uri)
     host = parsed.hostname or default_host

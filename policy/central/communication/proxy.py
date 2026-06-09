@@ -55,7 +55,7 @@ class RemotePolicyProxy:
     the start of a remote attribute chain!).
     """
 
-    __slots__ = ("_comm", "_peer_id", "_comm_selector")
+    __slots__ = ("_comm", "_comm_selector", "_peer_id")
 
     def __init__(
         self,
@@ -72,7 +72,7 @@ class RemotePolicyProxy:
         """The remote policy's ``global_id`` (resolved without I/O)."""
         return self._peer_id
 
-    def via(self, comm: Any) -> "RemotePolicyProxy":
+    def via(self, comm: Any) -> RemotePolicyProxy:
         """Return a proxy bound to a specific transport *comm*.
 
         *comm* is a *communication id* -- a registered connection's
@@ -123,7 +123,7 @@ class _RemoteAttrChain:
         in place by callers; a new list is created per ``__getattr__``.
     """
 
-    __slots__ = ("_comm", "_path", "_peer_id", "_comm_selector")
+    __slots__ = ("_comm", "_comm_selector", "_path", "_peer_id")
 
     def __init__(
         self,
@@ -139,9 +139,7 @@ class _RemoteAttrChain:
 
     def __getattr__(self, name: str) -> _RemoteAttrChain:
         """Return a *new* chain whose path is the current path plus *name*."""
-        return _RemoteAttrChain(
-            self._comm, self._peer_id, self._path + [name], self._comm_selector
-        )
+        return _RemoteAttrChain(self._comm, self._peer_id, self._path + [name], self._comm_selector)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Dispatch the accumulated path + arguments as a single RPC.

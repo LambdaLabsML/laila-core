@@ -97,7 +97,7 @@ class _BrokerRPCProtocol(_CarrierRPCProtocol):
             asyncio.set_event_loop(self._event_loop)
             try:
                 self._event_loop.run_until_complete(self._async_start(ready))
-            except BaseException as exc:  # noqa: BLE001
+            except BaseException as exc:
                 boot["error"] = exc
                 ready.set()
                 return
@@ -140,7 +140,7 @@ class _BrokerRPCProtocol(_CarrierRPCProtocol):
             try:
                 fut = asyncio.run_coroutine_threadsafe(_shutdown(), self._event_loop)
                 fut.result(timeout=5.0)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._event_loop.call_soon_threadsafe(self._event_loop.stop)
 
@@ -161,7 +161,7 @@ class _BrokerRPCProtocol(_CarrierRPCProtocol):
         """Inbound entry point: decode a frame and route it."""
         try:
             msg = self._decode(data)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return
 
         if rpc_protocol.is_request(msg):
@@ -197,9 +197,7 @@ class _BrokerRPCProtocol(_CarrierRPCProtocol):
 
     def _dispatch_request(self, msg: dict) -> None:
         reply_to = msg.get("reply_to")
-        self._handle_request_frame(
-            msg, lambda resp: self._publish_async(reply_to, resp)
-        )
+        self._handle_request_frame(msg, lambda resp: self._publish_async(reply_to, resp))
 
     def _publish_async(self, topic: str | None, obj: dict) -> None:
         if topic is None:

@@ -114,7 +114,7 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
         if self._transport is not None:
             try:
                 self._transport.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._transport = None
 
@@ -140,7 +140,7 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
             asyncio.set_event_loop(self._event_loop)
             try:
                 self._event_loop.run_until_complete(self._async_start(ready))
-            except BaseException as exc:  # noqa: BLE001
+            except BaseException as exc:
                 boot["error"] = exc
                 ready.set()
                 return
@@ -185,7 +185,7 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
             try:
                 fut = asyncio.run_coroutine_threadsafe(_shutdown(), self._event_loop)
                 fut.result(timeout=5.0)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._event_loop.call_soon_threadsafe(self._event_loop.stop)
 
@@ -228,7 +228,7 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
                     addr = key[0]
                     try:
                         self._sendto(addr, slot["packet"])
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         self._unacked.pop(key, None)
         except asyncio.CancelledError:
             pass
@@ -249,7 +249,7 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
         ack = _HEADER.pack(_MAGIC, _TYPE_ACK, frag_index, frag_count) + msg_id
         try:
             self._sendto(addr, ack)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
         if msg_id in self._seen:
@@ -281,7 +281,7 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
         """Decode a fully-reassembled JSON-RPC message and dispatch it."""
         try:
             msg = self._decode(payload)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return
 
         if rpc_protocol.is_request(msg):
@@ -320,9 +320,7 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
         """Run an inbound ``rpc.call`` off the loop and reply to *addr*."""
 
         def _reply(resp: dict) -> None:
-            self._event_loop.call_soon_threadsafe(
-                self._send_message, addr, self._encode(resp)
-            )
+            self._event_loop.call_soon_threadsafe(self._send_message, addr, self._encode(resp))
 
         self._handle_request_frame(msg, _reply)
 
@@ -333,21 +331,15 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
     def connect(self, uri: str, secret: str) -> str:
         """Handshake with the remote endpoint named by *uri*."""
         self.start()
-        addr_fut = asyncio.run_coroutine_threadsafe(
-            self._resolve_peer_addr(uri), self._event_loop
-        )
+        addr_fut = asyncio.run_coroutine_threadsafe(self._resolve_peer_addr(uri), self._event_loop)
         addr = addr_fut.result(timeout=10.0)
 
         policy_id = self._communication.policy_id if self._communication else None
-        req = rpc_protocol.make_request(
-            "peer.connect", {"from_id": policy_id, "secret": secret}
-        )
+        req = rpc_protocol.make_request("peer.connect", {"from_id": policy_id, "secret": secret})
         rid = req["id"]
         slot: dict[str, Any] = {"event": threading.Event()}
         self._handshake_pending[rid] = slot
-        self._event_loop.call_soon_threadsafe(
-            self._send_message, addr, self._encode(req)
-        )
+        self._event_loop.call_soon_threadsafe(self._send_message, addr, self._encode(req))
 
         completed = slot["event"].wait(timeout=self.handshake_timeout)
         self._handshake_pending.pop(rid, None)
@@ -371,7 +363,5 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
             raise ConnectionError(f"No connection to peer {peer_id}")
         request_id, slot = self._register_pending()
         req = self._make_rpc_request(path, args, kwargs, request_id)
-        self._event_loop.call_soon_threadsafe(
-            self._send_message, addr, self._encode(req)
-        )
+        self._event_loop.call_soon_threadsafe(self._send_message, addr, self._encode(req))
         return self._await_pending(request_id, slot)

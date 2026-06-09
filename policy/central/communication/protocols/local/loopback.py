@@ -24,7 +24,7 @@ from .._carriers.base import _CarrierRPCProtocol
 from .._carriers.uri import uri_authority
 
 #: process-wide registry: policy global_id -> loopback protocol instance
-_LOOPBACK_REGISTRY: dict[str, "_LAILA_IDENTIFIABLE_LOOPBACK_COMM_PROTOCOL"] = {}
+_LOOPBACK_REGISTRY: dict[str, _LAILA_IDENTIFIABLE_LOOPBACK_COMM_PROTOCOL] = {}
 
 
 class _LAILA_IDENTIFIABLE_LOOPBACK_COMM_PROTOCOL(_CarrierRPCProtocol):

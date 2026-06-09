@@ -58,7 +58,7 @@ class _LAILA_IDENTIFIABLE_TCP_COMM_PROTOCOL(_StreamRPCProtocol):
 
     def _on_stream_ready(self, writer) -> None:
         """Disable Nagle (TCP_NODELAY) so small RPC frames go out immediately."""
-        import socket as _socket  # noqa: PLC0415
+        import socket as _socket
 
         sock = writer.get_extra_info("socket")
         if sock is not None:
@@ -68,9 +68,7 @@ class _LAILA_IDENTIFIABLE_TCP_COMM_PROTOCOL(_StreamRPCProtocol):
                 pass
 
     async def _serve(self) -> Any:
-        server = await asyncio.start_server(
-            self._handle_inbound_stream, self.host, self.port
-        )
+        server = await asyncio.start_server(self._handle_inbound_stream, self.host, self.port)
         self._bound_port = server.sockets[0].getsockname()[1]
         return server
 

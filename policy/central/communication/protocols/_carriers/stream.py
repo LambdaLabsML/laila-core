@@ -88,7 +88,7 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
         if wait_closed is not None:
             try:
                 await asyncio.wait_for(wait_closed(), timeout=2.0)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
     # ------------------------------------------------------------------
@@ -108,7 +108,7 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
             asyncio.set_event_loop(self._event_loop)
             try:
                 self._event_loop.run_until_complete(self._async_start(ready))
-            except BaseException as exc:  # noqa: BLE001 - surfaced to caller
+            except BaseException as exc:
                 boot["error"] = exc
                 ready.set()
                 return
@@ -140,7 +140,7 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
             for writer in list(self._connections.values()):
                 try:
                     writer.close()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
             self._connections.clear()
             await self._close_server(self._server)
@@ -159,7 +159,7 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
             try:
                 fut = asyncio.run_coroutine_threadsafe(_shutdown(), self._event_loop)
                 fut.result(timeout=5.0)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._event_loop.call_soon_threadsafe(self._event_loop.stop)
 
@@ -188,17 +188,13 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
         reader, writer = await self._open_connection(uri)
         self._on_stream_ready(writer)
         policy_id = self._communication.policy_id if self._communication else None
-        req = rpc_protocol.make_request(
-            "peer.connect", {"from_id": policy_id, "secret": secret}
-        )
+        req = rpc_protocol.make_request("peer.connect", {"from_id": policy_id, "secret": secret})
         writer.write(_codec.frame(self._encode(req)))
         await writer.drain()
 
         try:
-            raw = await asyncio.wait_for(
-                _codec.read_frame(reader), timeout=self.handshake_timeout
-            )
-        except (TimeoutError, asyncio.TimeoutError) as exc:
+            raw = await asyncio.wait_for(_codec.read_frame(reader), timeout=self.handshake_timeout)
+        except TimeoutError as exc:
             writer.close()
             raise ConnectionError("Peer handshake timed out.") from exc
         if raw is None:
@@ -226,7 +222,7 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
         if writer is not None and self._event_loop is not None:
             try:
                 self._event_loop.call_soon_threadsafe(writer.close)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         self._unregister_peer(peer_id)
 
@@ -235,10 +231,8 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
     ) -> None:
         """Server side of the handshake, then the shared receive loop."""
         try:
-            raw = await asyncio.wait_for(
-                _codec.read_frame(reader), timeout=self.handshake_timeout
-            )
-        except (TimeoutError, asyncio.TimeoutError):
+            raw = await asyncio.wait_for(_codec.read_frame(reader), timeout=self.handshake_timeout)
+        except TimeoutError:
             writer.close()
             return
         if raw is None:
@@ -293,7 +287,7 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
                     self._complete_pending(msg)
         except (asyncio.CancelledError, ConnectionError):
             pass
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.debug("Stream receive loop for peer %s ended", peer_id, exc_info=True)
         finally:
             self._unregister_peer(peer_id)
@@ -312,7 +306,7 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
                 try:
                     writer.write(data)
                     await writer.drain()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
 
             asyncio.run_coroutine_threadsafe(_w(), self._event_loop)

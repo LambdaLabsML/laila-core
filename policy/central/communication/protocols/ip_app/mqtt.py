@@ -61,7 +61,7 @@ class _LAILA_IDENTIFIABLE_MQTT_COMM_PROTOCOL(_BrokerRPCProtocol):
 
     async def _broker_connect(self) -> None:
         try:
-            import paho.mqtt.client as mqtt  # noqa: PLC0415
+            import paho.mqtt.client as mqtt
         except ImportError as exc:  # pragma: no cover - exercised when dep absent
             raise RuntimeError(_INSTALL_HINT) from exc
 
@@ -91,6 +91,6 @@ class _LAILA_IDENTIFIABLE_MQTT_COMM_PROTOCOL(_BrokerRPCProtocol):
             try:
                 self._client.loop_stop()
                 self._client.disconnect()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._client = None

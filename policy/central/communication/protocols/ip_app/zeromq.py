@@ -40,9 +40,7 @@ class _LAILA_IDENTIFIABLE_ZEROMQ_COMM_PROTOCOL(_BrokerRPCProtocol):
     """ZeroMQ PUSH/PULL brokerless transport."""
 
     protocol_name: ClassVar[str] = "zeromq"
-    _TOKEN_ALIASES: ClassVar[frozenset[str]] = frozenset(
-        {"zeromq", "zmq", "nanomsg", "nng"}
-    )
+    _TOKEN_ALIASES: ClassVar[frozenset[str]] = frozenset({"zeromq", "zmq", "nanomsg", "nng"})
 
     endpoint_scheme: str = Field(default="ipc")
     tcp_host: str = Field(default="127.0.0.1")
@@ -80,8 +78,8 @@ class _LAILA_IDENTIFIABLE_ZEROMQ_COMM_PROTOCOL(_BrokerRPCProtocol):
 
     async def _broker_connect(self) -> None:
         try:
-            import zmq  # noqa: PLC0415
-            import zmq.asyncio  # noqa: PLC0415
+            import zmq
+            import zmq.asyncio
         except ImportError as exc:  # pragma: no cover - exercised when dep absent
             raise RuntimeError(_INSTALL_HINT) from exc
         self._ctx = zmq.asyncio.Context()
@@ -100,7 +98,7 @@ class _LAILA_IDENTIFIABLE_ZEROMQ_COMM_PROTOCOL(_BrokerRPCProtocol):
                 self._feed_message(data)
         except asyncio.CancelledError:
             pass
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.debug("ZeroMQ recv loop ended", exc_info=True)
 
     async def _broker_publish(self, topic: str, data: bytes) -> None:
@@ -117,18 +115,18 @@ class _LAILA_IDENTIFIABLE_ZEROMQ_COMM_PROTOCOL(_BrokerRPCProtocol):
         for push in self._pushes.values():
             try:
                 push.close(linger=0)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         self._pushes.clear()
         if self._pull is not None:
             try:
                 self._pull.close(linger=0)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._pull = None
         if self._ctx is not None:
             try:
                 self._ctx.term()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._ctx = None

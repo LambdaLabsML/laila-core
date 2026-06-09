@@ -38,7 +38,7 @@ class _LAILA_IDENTIFIABLE_SPI_COMM_PROTOCOL(_RegisterRPCProtocol):
 
     async def _open_bus(self) -> None:
         self._require_drivers(("spidev",), "spi")
-        import spidev  # noqa: PLC0415
+        import spidev
 
         spi = spidev.SpiDev()
         spi.open(self.bus, self.device)
@@ -49,7 +49,7 @@ class _LAILA_IDENTIFIABLE_SPI_COMM_PROTOCOL(_RegisterRPCProtocol):
         if self._spi is not None:
             try:
                 self._spi.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._spi = None
 

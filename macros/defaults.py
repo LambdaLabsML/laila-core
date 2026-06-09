@@ -43,11 +43,17 @@ from ..policy.central.command.schema.base import _LAILA_IDENTIFIABLE_CENTRAL_COM
 from ..policy.central.command.taskforce.async_thread_pool_executor import (
     PythonAsyncThreadPoolTaskForce,
 )
-from ..policy.central.communication.protocols.ip_app.ethernet import (
-    _LAILA_IDENTIFIABLE_ETHERNET_COMM_PROTOCOL,
+from ..policy.central.communication.protocols.cellular.cellular import (
+    _LAILA_IDENTIFIABLE_CELLULAR_COMM_PROTOCOL,
 )
-from ..policy.central.communication.protocols.ip_app.tcp import (
-    _LAILA_IDENTIFIABLE_TCP_COMM_PROTOCOL,
+from ..policy.central.communication.protocols.cellular.gsm_gprs import (
+    _LAILA_IDENTIFIABLE_GSM_COMM_PROTOCOL,
+)
+from ..policy.central.communication.protocols.cellular.lte import (
+    _LAILA_IDENTIFIABLE_LTE_COMM_PROTOCOL,
+)
+from ..policy.central.communication.protocols.cellular.nr5g import (
+    _LAILA_IDENTIFIABLE_NR5G_COMM_PROTOCOL,
 )
 from ..policy.central.communication.protocols.ip_app.amqp import (
     _LAILA_IDENTIFIABLE_AMQP_COMM_PROTOCOL,
@@ -61,6 +67,9 @@ from ..policy.central.communication.protocols.ip_app.dds import (
 from ..policy.central.communication.protocols.ip_app.dtls import (
     _LAILA_IDENTIFIABLE_DTLS_COMM_PROTOCOL,
 )
+from ..policy.central.communication.protocols.ip_app.ethernet import (
+    _LAILA_IDENTIFIABLE_ETHERNET_COMM_PROTOCOL,
+)
 from ..policy.central.communication.protocols.ip_app.grpc import (
     _LAILA_IDENTIFIABLE_GRPC_COMM_PROTOCOL,
 )
@@ -70,20 +79,17 @@ from ..policy.central.communication.protocols.ip_app.http2 import (
 from ..policy.central.communication.protocols.ip_app.http3 import (
     _LAILA_IDENTIFIABLE_HTTP3_COMM_PROTOCOL,
 )
-from ..policy.central.communication.protocols.ip_app.opcua import (
-    _LAILA_IDENTIFIABLE_OPCUA_COMM_PROTOCOL,
-)
-from ..policy.central.communication.protocols.ip_app.xmpp import (
-    _LAILA_IDENTIFIABLE_XMPP_COMM_PROTOCOL,
-)
 from ..policy.central.communication.protocols.ip_app.modbus_tcp import (
     _LAILA_IDENTIFIABLE_MODBUS_TCP_COMM_PROTOCOL,
 )
 from ..policy.central.communication.protocols.ip_app.mqtt import (
     _LAILA_IDENTIFIABLE_MQTT_COMM_PROTOCOL,
 )
-from ..policy.central.communication.protocols.ip_app.zeromq import (
-    _LAILA_IDENTIFIABLE_ZEROMQ_COMM_PROTOCOL,
+from ..policy.central.communication.protocols.ip_app.opcua import (
+    _LAILA_IDENTIFIABLE_OPCUA_COMM_PROTOCOL,
+)
+from ..policy.central.communication.protocols.ip_app.tcp import (
+    _LAILA_IDENTIFIABLE_TCP_COMM_PROTOCOL,
 )
 from ..policy.central.communication.protocols.ip_app.tls import (
     _LAILA_IDENTIFIABLE_TLS_COMM_PROTOCOL,
@@ -91,23 +97,17 @@ from ..policy.central.communication.protocols.ip_app.tls import (
 from ..policy.central.communication.protocols.ip_app.udp import (
     _LAILA_IDENTIFIABLE_UDP_COMM_PROTOCOL,
 )
+from ..policy.central.communication.protocols.ip_app.xmpp import (
+    _LAILA_IDENTIFIABLE_XMPP_COMM_PROTOCOL,
+)
+from ..policy.central.communication.protocols.ip_app.zeromq import (
+    _LAILA_IDENTIFIABLE_ZEROMQ_COMM_PROTOCOL,
+)
 from ..policy.central.communication.protocols.local.loopback import (
     _LAILA_IDENTIFIABLE_LOOPBACK_COMM_PROTOCOL,
 )
 from ..policy.central.communication.protocols.local.unixsocket import (
     _LAILA_IDENTIFIABLE_UNIXSOCKET_COMM_PROTOCOL,
-)
-from ..policy.central.communication.protocols.cellular.cellular import (
-    _LAILA_IDENTIFIABLE_CELLULAR_COMM_PROTOCOL,
-)
-from ..policy.central.communication.protocols.cellular.gsm_gprs import (
-    _LAILA_IDENTIFIABLE_GSM_COMM_PROTOCOL,
-)
-from ..policy.central.communication.protocols.cellular.lte import (
-    _LAILA_IDENTIFIABLE_LTE_COMM_PROTOCOL,
-)
-from ..policy.central.communication.protocols.cellular.nr5g import (
-    _LAILA_IDENTIFIABLE_NR5G_COMM_PROTOCOL,
 )
 from ..policy.central.communication.protocols.lpwan.lora import (
     _LAILA_IDENTIFIABLE_LORA_COMM_PROTOCOL,
@@ -157,18 +157,19 @@ from ..policy.central.communication.protocols.short_range.thread import (
 from ..policy.central.communication.protocols.short_range.uwb import (
     _LAILA_IDENTIFIABLE_UWB_COMM_PROTOCOL,
 )
-from ..policy.central.communication.protocols.short_range.zigbee import (
-    _LAILA_IDENTIFIABLE_ZIGBEE_COMM_PROTOCOL,
-)
-from ..policy.central.communication.protocols.short_range.zwave import (
-    _LAILA_IDENTIFIABLE_ZWAVE_COMM_PROTOCOL,
-)
 from ..policy.central.communication.protocols.short_range.wifi import (
     _LAILA_IDENTIFIABLE_WIFI_COMM_PROTOCOL,
 )
 from ..policy.central.communication.protocols.short_range.wifi_direct import (
     _LAILA_IDENTIFIABLE_WIFIDIRECT_COMM_PROTOCOL,
 )
+from ..policy.central.communication.protocols.short_range.zigbee import (
+    _LAILA_IDENTIFIABLE_ZIGBEE_COMM_PROTOCOL,
+)
+from ..policy.central.communication.protocols.short_range.zwave import (
+    _LAILA_IDENTIFIABLE_ZWAVE_COMM_PROTOCOL,
+)
+from ..policy.central.communication.protocols.tcpip import _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL
 from ..policy.central.communication.protocols.wired.can import (
     _LAILA_IDENTIFIABLE_CAN_COMM_PROTOCOL,
 )
@@ -196,17 +197,17 @@ from ..policy.central.communication.protocols.wired.one_wire import (
 from ..policy.central.communication.protocols.wired.profinet import (
     _LAILA_IDENTIFIABLE_PROFINET_COMM_PROTOCOL,
 )
-from ..policy.central.communication.protocols.wired.sdio import (
-    _LAILA_IDENTIFIABLE_SDIO_COMM_PROTOCOL,
-)
-from ..policy.central.communication.protocols.wired.spi import (
-    _LAILA_IDENTIFIABLE_SPI_COMM_PROTOCOL,
-)
 from ..policy.central.communication.protocols.wired.rs232 import (
     _LAILA_IDENTIFIABLE_RS232_COMM_PROTOCOL,
 )
 from ..policy.central.communication.protocols.wired.rs485 import (
     _LAILA_IDENTIFIABLE_RS485_COMM_PROTOCOL,
+)
+from ..policy.central.communication.protocols.wired.sdio import (
+    _LAILA_IDENTIFIABLE_SDIO_COMM_PROTOCOL,
+)
+from ..policy.central.communication.protocols.wired.spi import (
+    _LAILA_IDENTIFIABLE_SPI_COMM_PROTOCOL,
 )
 from ..policy.central.communication.protocols.wired.uart import (
     _LAILA_IDENTIFIABLE_UART_COMM_PROTOCOL,
@@ -214,7 +215,6 @@ from ..policy.central.communication.protocols.wired.uart import (
 from ..policy.central.communication.protocols.wired.usb import (
     _LAILA_IDENTIFIABLE_USB_COMM_PROTOCOL,
 )
-from ..policy.central.communication.protocols.tcpip import _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL
 from ..policy.central.communication.schema.base import _LAILA_IDENTIFIABLE_COMMUNICATION
 from ..policy.central.memory.router.pool_router import _LAILA_IDENTIFIABLE_POOL_ROUTER
 from ..policy.central.memory.schema.base import _LAILA_IDENTIFIABLE_CENTRAL_MEMORY

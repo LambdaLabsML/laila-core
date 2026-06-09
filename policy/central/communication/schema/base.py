@@ -173,9 +173,7 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
                 return proto
         return next(iter(self.connections.values()))
 
-    def _resolve_protocol_for_token(
-        self, token: str | None
-    ) -> _LAILA_IDENTIFIABLE_COMM_PROTOCOL:
+    def _resolve_protocol_for_token(self, token: str | None) -> _LAILA_IDENTIFIABLE_COMM_PROTOCOL:
         """Find a registered protocol matching a transport *token*.
 
         Drives the ``comm_protocol`` argument of :func:`laila.request`.
@@ -299,7 +297,7 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
             if proto.has_peer(peer_id):
                 try:
                     proto.disconnect(peer_id)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
                 return
         self._unregister_peer(peer_id)
@@ -357,19 +355,18 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
                     if proto is None:
                         continue
                     if not (
-                        getattr(proto, "persistent", True)
-                        and getattr(proto, "supports_ping", True)
+                        getattr(proto, "persistent", True) and getattr(proto, "supports_ping", True)
                     ):
                         continue
                     deadline = getattr(proto, "ping_timeout", 5.0)
                     try:
                         alive = pool.submit(proto.ping, peer_id).result(timeout=deadline)
-                    except Exception:  # noqa: BLE001 - timeouts count as dead
+                    except Exception:
                         alive = False
                     if not alive:
                         try:
                             proto.disconnect(peer_id)
-                        except Exception:  # noqa: BLE001
+                        except Exception:
                             pass
                         self._unregister_peer(peer_id)
 
@@ -571,9 +568,7 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         result = proto.send_rpc(peer_id, path, args, kwargs)
         return self._maybe_wrap_remote_future(result, peer_id, comm=comm)
 
-    def _maybe_wrap_remote_future(
-        self, result: Any, peer_id: str, comm: str | None = None
-    ) -> Any:
+    def _maybe_wrap_remote_future(self, result: Any, peer_id: str, comm: str | None = None) -> Any:
         """Promote a future-shaped envelope into a real :class:`RemoteFuture`.
 
         Detected by the ``__laila_future__`` flag on the deserialized

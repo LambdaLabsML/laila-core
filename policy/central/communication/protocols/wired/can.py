@@ -70,7 +70,7 @@ class _LAILA_IDENTIFIABLE_CAN_COMM_PROTOCOL(_P2PStreamRPCProtocol):
 
     async def _open_stream(self) -> tuple[asyncio.StreamReader, Any]:
         try:
-            import isotp  # noqa: PLC0415
+            import isotp
         except ImportError as exc:  # pragma: no cover - exercised when dep absent
             raise RuntimeError(_INSTALL_HINT) from exc
 
@@ -82,7 +82,7 @@ class _LAILA_IDENTIFIABLE_CAN_COMM_PROTOCOL(_P2PStreamRPCProtocol):
 
         loop = asyncio.get_running_loop()
         fileno = sock.fileno()
-        import os  # noqa: PLC0415
+        import os
 
         os.set_blocking(fileno, False)
         reader = asyncio.StreamReader()
@@ -102,6 +102,6 @@ class _LAILA_IDENTIFIABLE_CAN_COMM_PROTOCOL(_P2PStreamRPCProtocol):
         if self._isotp_sock is not None:
             try:
                 self._isotp_sock.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._isotp_sock = None

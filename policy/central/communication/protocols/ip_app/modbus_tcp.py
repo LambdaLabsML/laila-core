@@ -21,16 +21,13 @@ from typing import Any, ClassVar
 from pydantic import Field, PrivateAttr
 
 from .._carriers.register import _RegisterRPCProtocol
-from .._carriers.uri import split_host_port
 
 
 class _LAILA_IDENTIFIABLE_MODBUS_TCP_COMM_PROTOCOL(_RegisterRPCProtocol):
     """Modbus-TCP register-mailbox transport (master side)."""
 
     protocol_name: ClassVar[str] = "modbus-tcp"
-    _TOKEN_ALIASES: ClassVar[frozenset[str]] = frozenset(
-        {"modbus-tcp", "modbus", "modbustcp"}
-    )
+    _TOKEN_ALIASES: ClassVar[frozenset[str]] = frozenset({"modbus-tcp", "modbus", "modbustcp"})
 
     host: str = Field(default="127.0.0.1")
     port: int = Field(default=502)
@@ -52,7 +49,7 @@ class _LAILA_IDENTIFIABLE_MODBUS_TCP_COMM_PROTOCOL(_RegisterRPCProtocol):
 
     async def _open_bus(self) -> None:
         self._require_drivers(("pymodbus",), "modbus")
-        from pymodbus.client import AsyncModbusTcpClient  # noqa: PLC0415
+        from pymodbus.client import AsyncModbusTcpClient
 
         self._client = AsyncModbusTcpClient(self.host, port=self.port)
         await self._client.connect()
@@ -61,7 +58,7 @@ class _LAILA_IDENTIFIABLE_MODBUS_TCP_COMM_PROTOCOL(_RegisterRPCProtocol):
         if self._client is not None:
             try:
                 self._client.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._client = None
 
@@ -84,9 +81,7 @@ class _LAILA_IDENTIFIABLE_MODBUS_TCP_COMM_PROTOCOL(_RegisterRPCProtocol):
         )
 
     async def _poll_inbound(self) -> bytes | None:
-        rr = await self._client.read_holding_registers(
-            self.inbox_base, count=1, slave=self.unit_id
-        )
+        rr = await self._client.read_holding_registers(self.inbox_base, count=1, slave=self.unit_id)
         if rr.isError() or not rr.registers or rr.registers[0] == 0:
             return None
         length = rr.registers[0]

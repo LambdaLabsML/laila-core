@@ -62,13 +62,11 @@ class _LAILA_IDENTIFIABLE_UART_COMM_PROTOCOL(_P2PStreamRPCProtocol):
 
     def _make_serial(self):
         try:
-            import serial  # noqa: PLC0415
+            import serial
         except ImportError as exc:  # pragma: no cover - exercised when dep absent
             raise RuntimeError(_INSTALL_HINT) from exc
         if not self.port:
-            raise RuntimeError(
-                f"{type(self).__name__} requires a `port` (e.g. '/dev/ttyUSB0')."
-            )
+            raise RuntimeError(f"{type(self).__name__} requires a `port` (e.g. '/dev/ttyUSB0').")
         return serial.Serial(self.port, self.baudrate, timeout=0)
 
     async def _open_stream(self) -> tuple[asyncio.StreamReader, Any]:
@@ -100,6 +98,6 @@ class _LAILA_IDENTIFIABLE_UART_COMM_PROTOCOL(_P2PStreamRPCProtocol):
         if self._serial is not None:
             try:
                 self._serial.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._serial = None

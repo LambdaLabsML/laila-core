@@ -143,8 +143,7 @@ class RemoteFuture(_LAILA_IDENTIFIABLE_FUTURE):
         if self._is_group:
             blob = blob or []
             return [
-                (build_by_scope(b, asynchronous=False) if b is not None else None)
-                for b in blob
+                (build_by_scope(b, asynchronous=False) if b is not None else None) for b in blob
             ]
         if blob is None:
             return None

@@ -61,12 +61,12 @@ class _LAILA_IDENTIFIABLE_AMQP_COMM_PROTOCOL(_BrokerRPCProtocol):
 
     async def _broker_connect(self) -> None:
         try:
-            import aio_pika  # noqa: PLC0415
+            import aio_pika
         except ImportError as exc:  # pragma: no cover - exercised when dep absent
             raise RuntimeError(_INSTALL_HINT) from exc
         try:
             self._conn = await aio_pika.connect_robust(self.broker_url)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ConnectionError(
                 f"Could not reach AMQP broker at {self.broker_url}: {exc}"
             ) from exc
@@ -82,17 +82,15 @@ class _LAILA_IDENTIFIABLE_AMQP_COMM_PROTOCOL(_BrokerRPCProtocol):
         await queue.consume(_on_message)
 
     async def _broker_publish(self, topic: str, data: bytes) -> None:
-        import aio_pika  # noqa: PLC0415
+        import aio_pika
 
-        await self._channel.default_exchange.publish(
-            aio_pika.Message(body=data), routing_key=topic
-        )
+        await self._channel.default_exchange.publish(aio_pika.Message(body=data), routing_key=topic)
 
     async def _broker_close(self) -> None:
         if self._conn is not None:
             try:
                 await asyncio.wait_for(self._conn.close(), timeout=2.0)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._conn = None
             self._channel = None

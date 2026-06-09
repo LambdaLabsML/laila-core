@@ -20,9 +20,7 @@ class _LAILA_IDENTIFIABLE_SATELLITE_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_UART_COMM_
     """Satellite SBD transport (serial AT modem)."""
 
     protocol_name: ClassVar[str] = "satellite"
-    _TOKEN_ALIASES: ClassVar[frozenset[str]] = frozenset(
-        {"satellite", "iridium", "swarm", "sbd"}
-    )
+    _TOKEN_ALIASES: ClassVar[frozenset[str]] = frozenset({"satellite", "iridium", "swarm", "sbd"})
 
     @classmethod
     def can_handle_uri(cls, uri: str) -> bool:

@@ -17,16 +17,13 @@ from typing import Any, ClassVar
 from pydantic import Field, PrivateAttr
 
 from .._carriers.register import _RegisterRPCProtocol
-from .._carriers.uri import uri_authority
 
 
 class _LAILA_IDENTIFIABLE_ENIP_COMM_PROTOCOL(_RegisterRPCProtocol):
     """EtherNet/IP tag-mailbox transport."""
 
     protocol_name: ClassVar[str] = "ethernet-ip"
-    _TOKEN_ALIASES: ClassVar[frozenset[str]] = frozenset(
-        {"ethernet-ip", "enip", "ethernetip"}
-    )
+    _TOKEN_ALIASES: ClassVar[frozenset[str]] = frozenset({"ethernet-ip", "enip", "ethernetip"})
 
     host: str = Field(default="127.0.0.1")
     inbox_tag: str = Field(default="LAILA_IN")
@@ -46,7 +43,7 @@ class _LAILA_IDENTIFIABLE_ENIP_COMM_PROTOCOL(_RegisterRPCProtocol):
 
     async def _open_bus(self) -> None:
         self._require_drivers(("pycomm3",), "enip")
-        from pycomm3 import CIPDriver  # noqa: PLC0415
+        from pycomm3 import CIPDriver
 
         self._plc = CIPDriver(self.host)
         self._plc.open()
@@ -55,18 +52,18 @@ class _LAILA_IDENTIFIABLE_ENIP_COMM_PROTOCOL(_RegisterRPCProtocol):
         if self._plc is not None:
             try:
                 self._plc.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._plc = None
 
     async def _deliver(self, data: bytes) -> None:
         # store as a base64 string tag (PLC string tags are ASCII)
-        import base64  # noqa: PLC0415
+        import base64
 
         self._plc.write((self.outbox_tag, base64.b64encode(data).decode("ascii")))
 
     async def _poll_inbound(self) -> bytes | None:
-        import base64  # noqa: PLC0415
+        import base64
 
         result = self._plc.read(self.inbox_tag)
         value = getattr(result, "value", None)

@@ -16,7 +16,7 @@ import re
 import sqlite3
 from collections.abc import Hashable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import PrivateAttr
 
@@ -107,7 +107,7 @@ class Manifest(Entry):
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: [_MANIFEST_SCOPE])
     _pending_entries: list | None = PrivateAttr(default=None)
-    _sql_state: Optional[_SqlState] = PrivateAttr(default=None)
+    _sql_state: _SqlState | None = PrivateAttr(default=None)
     _sql_finalizer: Any = PrivateAttr(default=None)
 
     def __init__(self, **data: Any):
@@ -417,7 +417,7 @@ class Manifest(Entry):
         *,
         on: Iterable[str] = (),
         composite: Iterable[tuple[str, ...]] = (),
-        persist: Optional[str] = None,
+        persist: str | None = None,
         widen: bool = True,
     ) -> None:
         """Materialize the manifest into a sqlite table + indexes.
@@ -527,7 +527,7 @@ class Manifest(Entry):
     # ----- SQL parser helpers ----------------------------------------
 
     @staticmethod
-    def _parse_sql(query: str) -> tuple[list[str], str, Optional[str]]:
+    def _parse_sql(query: str) -> tuple[list[str], str, str | None]:
         """Parse a tiny ``SELECT … FROM … [WHERE …]`` query.
 
         Strips a trailing ``;``, normalizes ``==`` to ``=``, rejects
@@ -555,13 +555,10 @@ class Manifest(Entry):
             re.IGNORECASE | re.DOTALL,
         )
         if not match:
-            raise ValueError(
-                "Only 'SELECT <items> FROM <name> [WHERE <predicate>]' is supported."
-            )
+            raise ValueError("Only 'SELECT <items> FROM <name> [WHERE <predicate>]' is supported.")
 
         select_items = [
-            Manifest._strip_table_prefix(item.strip())
-            for item in match.group("items").split(",")
+            Manifest._strip_table_prefix(item.strip()) for item in match.group("items").split(",")
         ]
         from_alias = match.group("from").strip("`\"'")
         where = match.group("where")
@@ -572,12 +569,12 @@ class Manifest(Entry):
     @staticmethod
     def _strip_table_prefix(item: str) -> str:
         """Drop an ``alias.`` prefix and surrounding quotes from a SELECT item."""
-        stripped = item.strip().strip("`\"")
+        stripped = item.strip().strip('`"')
         if stripped == "*":
             return stripped
         if "." in stripped:
             stripped = stripped.split(".", 1)[1]
-        return stripped.strip("`\"")
+        return stripped.strip('`"')
 
     @staticmethod
     def _validate_primitive_rows(rows: list[tuple[Hashable, dict]]) -> None:
@@ -618,7 +615,7 @@ class Manifest(Entry):
         *,
         on: Iterable[str],
         composite: Iterable[tuple[str, ...]],
-        persist: Optional[str],
+        persist: str | None,
     ) -> None:
         """Build the index from scratch (or attach a matching on-disk file)."""
         rows, columns = self._sql_rows()
@@ -637,9 +634,7 @@ class Manifest(Entry):
 
         conn = sqlite3.connect(db_path, check_same_thread=False)
 
-        if Manifest._index_table_exists(conn) and Manifest._index_row_count(conn) == len(
-            rows
-        ):
+        if Manifest._index_table_exists(conn) and Manifest._index_row_count(conn) == len(rows):
             existing_columns = Manifest._existing_columns(conn)
             if set(existing_columns) == set(columns):
                 self._sql_state = _SqlState(
@@ -683,13 +678,9 @@ class Manifest(Entry):
         new_columns = [c for c in columns if c not in state.columns]
         if new_columns:
             if not widen:
-                raise ValueError(
-                    f"Index rebuild needs new columns {new_columns} but widen=False."
-                )
+                raise ValueError(f"Index rebuild needs new columns {new_columns} but widen=False.")
             for col in new_columns:
-                conn.execute(
-                    f'ALTER TABLE "{state.table_name}" ADD COLUMN "{col}"'
-                )
+                conn.execute(f'ALTER TABLE "{state.table_name}" ADD COLUMN "{col}"')
 
         all_columns = list(state.columns) + new_columns
         conn.execute(f'DELETE FROM "{state.table_name}"')
@@ -750,12 +741,10 @@ class Manifest(Entry):
             col_names = ", ".join(f'"{c}"' for c in columns)
             placeholders = ", ".join(["?"] * (len(columns) + 1))
             statement = (
-                f'INSERT INTO "{table}" ("{_SQL_ROW_IDX_COL}", {col_names}) '
-                f"VALUES ({placeholders})"
+                f'INSERT INTO "{table}" ("{_SQL_ROW_IDX_COL}", {col_names}) VALUES ({placeholders})'
             )
             data = [
-                [idx] + [row.get(c) for c in columns]
-                for idx, (_row_key, row) in enumerate(rows)
+                [idx] + [row.get(c) for c in columns] for idx, (_row_key, row) in enumerate(rows)
             ]
         else:
             statement = f'INSERT INTO "{table}" ("{_SQL_ROW_IDX_COL}") VALUES (?)'
@@ -784,8 +773,7 @@ class Manifest(Entry):
             name = "idx_" + _SQL_INDEX_TABLE + "_" + "_".join(cols)
             cols_sql = ", ".join(f'"{c}"' for c in cols)
             conn.execute(
-                f'CREATE INDEX IF NOT EXISTS "{name}" '
-                f'ON "{_SQL_INDEX_TABLE}" ({cols_sql})'
+                f'CREATE INDEX IF NOT EXISTS "{name}" ON "{_SQL_INDEX_TABLE}" ({cols_sql})'
             )
             indexed.add(cols)
         conn.commit()

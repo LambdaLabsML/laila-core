@@ -41,9 +41,7 @@ class _LAILA_IDENTIFIABLE_TLS_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_TCP_COMM_PROTOCO
     """
 
     protocol_name: ClassVar[str] = "tls"
-    _TOKEN_ALIASES: ClassVar[frozenset[str]] = frozenset(
-        {"tls", "tcps", "ssl", "tls/tcp"}
-    )
+    _TOKEN_ALIASES: ClassVar[frozenset[str]] = frozenset({"tls", "tcps", "ssl", "tls/tcp"})
 
     certfile: str | None = Field(default=None)
     keyfile: str | None = Field(default=None)

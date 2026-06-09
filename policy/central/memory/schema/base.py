@@ -741,9 +741,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         from .....entry.constitution.build_maps import build_by_scope
 
         entries = [build_by_scope(s, asynchronous=False) for s in serialized_entries]
-        future = self.memorize(
-            entries, pool=pool, pool_id=pool_id, pool_nickname=pool_nickname
-        )
+        future = self.memorize(entries, pool=pool, pool_id=pool_id, pool_nickname=pool_nickname)
         if future is not None and hasattr(future, "wait"):
             future.wait(timeout=60)
         return [e.global_id for e in entries]
@@ -793,9 +791,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         delete).
         """
         ids = [x.global_id if hasattr(x, "global_id") else str(x) for x in entry_ids]
-        future = self.forget(
-            ids, pool=pool, pool_id=pool_id, pool_nickname=pool_nickname
-        )
+        future = self.forget(ids, pool=pool, pool_id=pool_id, pool_nickname=pool_nickname)
         if future is not None and hasattr(future, "wait"):
             future.wait(timeout=60)
         return ids
@@ -834,9 +830,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         result = fetched.wait(timeout=60) if hasattr(fetched, "wait") else fetched
         entries = result if isinstance(result, list) else [result]
 
-        pushed = laila.memorize(
-            entries, dst_policy=dst_policy, dst_pool=dst_pool, comm=comm
-        )
+        pushed = laila.memorize(entries, dst_policy=dst_policy, dst_pool=dst_pool, comm=comm)
         if pushed is not None and hasattr(pushed, "wait"):
             pushed.wait(timeout=60)
         return [e.global_id for e in entries]

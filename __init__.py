@@ -1041,7 +1041,9 @@ def _extract_gids(args, kwargs):
     return [x.global_id if hasattr(x, "global_id") else str(x) for x in items]
 
 
-def _relay_transfer(verb, src_gid, args, kwargs, *, src_pool, dst_gid, dst_pool, comm, persist=True):
+def _relay_transfer(
+    verb, src_gid, args, kwargs, *, src_pool, dst_gid, dst_pool, comm, persist=True
+):
     """Drive a 3-party transfer by commanding the *source* policy.
 
     With active policy A, ``src_gid`` = B, ``dst_gid`` = C: A reaches B
@@ -1071,8 +1073,12 @@ def _relay_transfer(verb, src_gid, args, kwargs, *, src_pool, dst_gid, dst_pool,
                 gids, src_pool=src_pool, dst_policy=dst_gid, dst_pool=dst_pool, comm=comm
             )
         return relay._relay_remember(
-            gids, dst_policy=dst_gid, dst_pool=dst_pool, src_pool=src_pool,
-            comm=comm, persist=persist,
+            gids,
+            dst_policy=dst_gid,
+            dst_pool=dst_pool,
+            src_pool=src_pool,
+            comm=comm,
+            persist=persist,
         )
 
     global _active_policy_gid
@@ -1085,8 +1091,12 @@ def _relay_transfer(verb, src_gid, args, kwargs, *, src_pool, dst_gid, dst_pool,
                 gids, src_pool=src_pool, dst_policy=dst_gid, dst_pool=dst_pool, comm=comm
             )
         return memory._relay_remember(
-            gids, dst_policy=dst_gid, dst_pool=dst_pool, src_pool=src_pool,
-            comm=comm, persist=persist,
+            gids,
+            dst_policy=dst_gid,
+            dst_pool=dst_pool,
+            src_pool=src_pool,
+            comm=comm,
+            persist=persist,
         )
     finally:
         _active_policy_gid = previous_gid
@@ -1181,16 +1191,20 @@ def memorize(
     # Source is another policy -> 3-party relay (B pushes src->dst).
     if src_gid is not None and src_gid != active_gid:
         return _relay_transfer(
-            "memorize", src_gid, args, kwargs,
-            src_pool=src_pool, dst_gid=dst_gid, dst_pool=dst_pool, comm=comm,
+            "memorize",
+            src_gid,
+            args,
+            kwargs,
+            src_pool=src_pool,
+            dst_gid=dst_gid,
+            dst_pool=dst_pool,
+            comm=comm,
         )
 
     # Source is the active policy.
     if dst_gid is not None and dst_gid != active_gid:
         # active -> peer push (2-party).
-        return _route_to_policy(
-            dst_gid, "memorize", args, {"pool": dst_pool}, comm=comm
-        )
+        return _route_to_policy(dst_gid, "memorize", args, {"pool": dst_pool}, comm=comm)
 
     # Purely local / standalone write into the active policy's pool.
     return get_active_policy().central.memory.memorize(
@@ -1340,8 +1354,14 @@ def remember(
     # Source policy is another policy -> 3-party relay (B pulls from dst).
     if src_gid is not None and src_gid != active_gid:
         return _relay_transfer(
-            "remember", src_gid, args, kwargs,
-            src_pool=src_pool, dst_gid=dst_gid, dst_pool=dst_pool, comm=comm,
+            "remember",
+            src_gid,
+            args,
+            kwargs,
+            src_pool=src_pool,
+            dst_gid=dst_gid,
+            dst_pool=dst_pool,
+            comm=comm,
             persist=persist,
         )
 
@@ -1422,9 +1442,7 @@ def forget(
     active_gid = get_active_policy().global_id
 
     if target_gid is not None and target_gid != active_gid:
-        return _route_to_policy(
-            target_gid, "forget", args, {"pool": pool}, comm=comm
-        )
+        return _route_to_policy(target_gid, "forget", args, {"pool": pool}, comm=comm)
     return get_active_policy().central.memory.forget(*args, pool=pool, **kwargs)
 
 

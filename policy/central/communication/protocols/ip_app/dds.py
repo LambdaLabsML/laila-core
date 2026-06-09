@@ -39,7 +39,7 @@ class _LAILA_IDENTIFIABLE_DDS_COMM_PROTOCOL(_BrokerRPCProtocol):
 
     async def _broker_connect(self) -> None:
         mods = self._require_drivers(("cyclonedds",), "dds")
-        from cyclonedds.domain import DomainParticipant  # noqa: PLC0415
+        from cyclonedds.domain import DomainParticipant
 
         self._participant = DomainParticipant()
         self._cyclonedds = mods["cyclonedds"]
@@ -51,9 +51,7 @@ class _LAILA_IDENTIFIABLE_DDS_COMM_PROTOCOL(_BrokerRPCProtocol):
 
     async def _broker_publish(self, topic: str, data: bytes) -> None:
         # A real implementation writes `data` on a DataWriter for `topic`.
-        raise RuntimeError(
-            "DDS publish requires a configured DataWriter for the peer topic."
-        )
+        raise RuntimeError("DDS publish requires a configured DataWriter for the peer topic.")
 
     async def _broker_close(self) -> None:
         self._participant = None

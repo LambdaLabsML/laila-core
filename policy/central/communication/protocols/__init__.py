@@ -17,14 +17,14 @@ from .tcpip import _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL
 
 __all__ = [
     "_LAILA_IDENTIFIABLE_COMM_PROTOCOL",
+    "_LAILA_IDENTIFIABLE_LOOPBACK_COMM_PROTOCOL",
     "_LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL",
     "_LAILA_IDENTIFIABLE_TCP_COMM_PROTOCOL",
-    "_LAILA_IDENTIFIABLE_UDP_COMM_PROTOCOL",
     "_LAILA_IDENTIFIABLE_TLS_COMM_PROTOCOL",
+    "_LAILA_IDENTIFIABLE_UDP_COMM_PROTOCOL",
     "_LAILA_IDENTIFIABLE_UNIXSOCKET_COMM_PROTOCOL",
-    "_LAILA_IDENTIFIABLE_LOOPBACK_COMM_PROTOCOL",
-    "iter_comm_protocols",
     "comm_protocol_for_token",
+    "iter_comm_protocols",
 ]
 
 
@@ -45,7 +45,7 @@ def _autoload_transports() -> None:
     for _finder, name, _ispkg in pkgutil.walk_packages(__path__, prefix=__name__ + "."):
         try:
             importlib.import_module(name)
-        except Exception:  # noqa: BLE001 - a broken optional module must not break import
+        except Exception:
             logging.getLogger(__name__).debug("autoload skipped %s", name, exc_info=True)
 
 
