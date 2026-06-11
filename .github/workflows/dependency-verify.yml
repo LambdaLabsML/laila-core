@@ -1,0 +1,73 @@
+name: Post-merge dependency verification
+
+# Safety net for automated dependency updates. The CI workflow already gates
+# the PR before auto-merge, but this re-runs the full test suite against main
+# *after* a Dependabot change lands (catching cross-update interactions) and
+# opens a tracking issue if anything broke.
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  verify:
+    name: Verify dependencies on main
+    runs-on: ubuntu-latest
+    # Only run when the merged commit came from a Dependabot update.
+    if: >-
+      github.event.head_commit.author.name == 'dependabot[bot]' ||
+      contains(github.event.head_commit.message, 'dependabot') ||
+      contains(github.event.head_commit.message, 'Bump ')
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package and extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[all,dev]"
+
+      - name: Run tests
+        id: tests
+        env:
+          LAILA_SKIP_CLOUD_TESTS: "1"
+        run: |
+          python -m pytest tests/ -m "not cloud and not slow" --tb=short
+
+      - name: Open an issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create \
+            --title "Dependency update broke main (${COMMIT_SHA:0:7})" \
+            --label "dependencies,ci-failure" \
+            --body "$(cat <<EOF
+          The post-merge dependency verification failed after an automated update landed on \`main\`.
+
+          - Commit: \`${COMMIT_SHA}\`
+          - Failed run: ${RUN_URL}
+
+          <details><summary>Merged commit message</summary>
+
+          \`\`\`
+          ${COMMIT_MSG}
+          \`\`\`
+          </details>
+
+          A dependency bump likely introduced a regression. Review the failing run, then either pin/revert the offending dependency or fix the breakage.
+          EOF
+          )"

@@ -1,9 +1,12 @@
 version: 2
 updates:
+  # Python runtime + dev/test dependencies. Everything is rolled into a single
+  # grouped PR per run so reviewers (and the auto-merge workflow) deal with one
+  # PR instead of several. Cadence is monthly to keep churn low.
   - package-ecosystem: pip
     directory: "/"
     schedule:
-      interval: weekly
+      interval: monthly
       day: monday
       time: "09:00"
       timezone: "America/Los_Angeles"
@@ -12,43 +15,20 @@ updates:
       - dependencies
       - python
     groups:
-      runtime:
+      python:
         applies-to: version-updates
         patterns:
-          - "pydantic*"
-          - "dotmap"
-          - "msgpack"
-          - "websockets"
-          - "jsonrpcserver"
-          - "numpy"
-      backends:
-        applies-to: version-updates
+          - "*"
+      python-security:
+        applies-to: security-updates
         patterns:
-          - "boto3"
-          - "aioboto3"
-          - "google-cloud-storage"
-          - "azure-storage-blob"
-          - "psycopg*"
-          - "pymongo"
-          - "redis"
-          - "duckdb"
-          - "h5py"
-          - "huggingface_hub"
-      dev-tools:
-        applies-to: version-updates
-        patterns:
-          - "ruff"
-          - "mypy"
-          - "pytest*"
-          - "pre-commit"
-          - "build"
-          - "twine"
-          - "nbstripout"
+          - "*"
 
+  # GitHub Actions: one grouped PR per run, monthly.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: weekly
+      interval: monthly
       day: monday
     labels:
       - dependencies
@@ -57,5 +37,9 @@ updates:
     groups:
       actions:
         applies-to: version-updates
+        patterns:
+          - "*"
+      actions-security:
+        applies-to: security-updates
         patterns:
           - "*"

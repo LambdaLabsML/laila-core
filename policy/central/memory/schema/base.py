@@ -693,7 +693,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         alpha_id = cmd.alpha_taskforce
 
         async def _remember_one(eid=None, p=pool):
-            raw = await p._read_async(eid)
+            raw = await p._read_through_async(eid)
             if raw is None:
                 raise KeyError(f"Entry {eid} not found in pool {p.global_id}")
             record = await Record._build_async(raw)

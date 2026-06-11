@@ -255,6 +255,32 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_ATOMIC_I
         """Async exists; default delegates to sync :meth:`_exists` (see :meth:`_read_async`)."""
         return self._exists(key)
 
+    async def _read_through_async(self, key: str) -> Any | None:
+        """Async, proxy-aware read: the coroutine counterpart of :meth:`__getitem__`.
+
+        Reads from this pool's own async storage and, on a miss, falls
+        through the ``_proxy_to`` chain. A successful upstream read is
+        cached back into this pool (via :meth:`_write_async`) before
+        being returned, so later reads bypass the upstream -- exactly
+        the layered-cache semantics ``mem << hdf5 << s3`` relies on.
+
+        The synchronous :meth:`__getitem__` already does this walk; this
+        method gives the async fetch path (used by ``remember``) the same
+        fall-through so a read routed at the front of a proxy chain reaches
+        the tier that actually holds the data instead of reporting a miss.
+        """
+        value = await self._read_async(key)
+        if value is not None:
+            return value
+
+        if self._proxy_to is not None:
+            value = await self._proxy_to._read_through_async(key)
+            if value is not None:
+                await self._write_async(key, value)
+                return value
+
+        return None
+
     # -------- Proxy-aware public API --------
     def __getitem__(self, key) -> Any | None:
         """Retrieve the blob for *key*, with proxy fall-through and write-back.
