@@ -14,7 +14,7 @@ pip install "laila-core[s3,torch]"
 import torch
 import torch.nn as nn
 import laila
-from laila.pool import S3Pool
+from laila.data import S3Pool
 
 laila.read_args("./secrets.toml")
 

@@ -1,0 +1,9 @@
+# laila-C needs C++17 with exceptions/RTTI (the core builds either way, but the
+# default exception path is simplest here). Give app_main room for shared_ptr/map.
+CONFIG_COMPILER_CXX_EXCEPTIONS=y
+CONFIG_COMPILER_CXX_RTTI=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y
+# Emulated Ethernet NIC (QEMU openeth) -- the IP transport used in the emulator
+# (QEMU has no Wi-Fi radio; laila-C's lwIP socket path is identical either way).
+CONFIG_ETH_USE_OPENETH=y

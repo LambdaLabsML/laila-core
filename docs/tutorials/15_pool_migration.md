@@ -12,7 +12,7 @@ pip install "laila-core[hdf5]"
 
 ```python
 import laila
-from laila.pool import FilesystemPool, HDF5Pool
+from laila.data import FilesystemPool, HDF5Pool
 
 warm = FilesystemPool(nickname="warm")
 cold = HDF5Pool(nickname="cold")

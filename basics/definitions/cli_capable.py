@@ -704,7 +704,7 @@ def _build_policy_from_dump(
     from ...policy.central.communication.protocols.base import (
         _LAILA_IDENTIFIABLE_COMM_PROTOCOL,
     )
-    from ...pool.schema.base import _LAILA_IDENTIFIABLE_POOL
+    from ...data.schema.base import _LAILA_IDENTIFIABLE_POOL
     from ..definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 
     policy = DefaultPolicy()

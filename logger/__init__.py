@@ -1,7 +1,7 @@
 """LAILA Logger subsystem.
 
 A top-level singleton (sibling to :mod:`laila.policy`,
-:mod:`laila.pool`, :mod:`laila.entry`) that fans structured log
+:mod:`laila.data`, :mod:`laila.entry`) that fans structured log
 records out to two independent sinks:
 
 - The standard-library :mod:`logging` hierarchy under the

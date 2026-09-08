@@ -51,16 +51,18 @@ from typing import Any
 
 from pydantic import ConfigDict, Field, PrivateAttr
 
-from ...atomic.definitions.locally_atomic_identifiable_object import (
-    _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT,
-)
-from ...basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS, CLIExempt
+from ...basics.definitions.cli_capable import CLIExempt
 from ...entry.compdata.transformation import TransformationSequence
 from ...macros.strings import _POOL_SCOPE
+from .data_container import _LAILA_IDENTIFIABLE_DATA_CONTAINER
 
 
-class _LAILA_IDENTIFIABLE_POOL(_LAILA_CLI_CAPABLE_CLASS, _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
+class _LAILA_IDENTIFIABLE_POOL(_LAILA_IDENTIFIABLE_DATA_CONTAINER):
     """Abstract base class for laila storage pools.
+
+    A pool is the *map* flavour of
+    :class:`_LAILA_IDENTIFIABLE_DATA_CONTAINER`: keys are entry
+    ``global_id`` strings.
 
     Implements the proxy-aware public read/write/delete/exists/keys
     API and provides default in-memory hook implementations so simple

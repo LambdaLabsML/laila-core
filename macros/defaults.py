@@ -17,6 +17,7 @@ DefaultCentralMemory        :class:`_LAILA_IDENTIFIABLE_CENTRAL_MEMORY`
 DefaultPolicy               :class:`_LAILA_IDENTIFIABLE_POLICY`
 DefaultPool                 :class:`_LAILA_IDENTIFIABLE_POOL`
 DefaultPoolRouter           :class:`_LAILA_IDENTIFIABLE_POOL_ROUTER`
+DefaultMultiBuffer          :class:`MultiBuffer`
 ==========================  ==================================================
 
 Other constants:
@@ -219,7 +220,8 @@ from ..policy.central.communication.schema.base import _LAILA_IDENTIFIABLE_COMMU
 from ..policy.central.memory.router.pool_router import _LAILA_IDENTIFIABLE_POOL_ROUTER
 from ..policy.central.memory.schema.base import _LAILA_IDENTIFIABLE_CENTRAL_MEMORY
 from ..policy.schema.base import _LAILA_IDENTIFIABLE_POLICY
-from ..pool.schema.base import _LAILA_IDENTIFIABLE_POOL
+from ..data.schema.base import _LAILA_IDENTIFIABLE_POOL
+from ..data.multibuffer.multibuffer import MultiBuffer
 
 DefaultTaskForce = PythonAsyncThreadPoolTaskForce
 DefaultCentralCommand = _LAILA_IDENTIFIABLE_CENTRAL_COMMAND
@@ -287,6 +289,7 @@ DefaultCentralMemory = _LAILA_IDENTIFIABLE_CENTRAL_MEMORY
 DefaultPolicy = _LAILA_IDENTIFIABLE_POLICY
 DefaultPool = _LAILA_IDENTIFIABLE_POOL
 DefaultPoolRouter = _LAILA_IDENTIFIABLE_POOL_ROUTER
+DefaultMultiBuffer = MultiBuffer
 
 
 AUTO_INITIALIZE_POLICY = True

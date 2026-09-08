@@ -15,7 +15,7 @@ SQLite needs no extra (stdlib only).
 `DuckDBPool` writes to a `.duckdb` file. Without `file_path`, LAILA picks a default under the configured `pools/` directory:
 
 ```python
-from laila.pool import DuckDBPool
+from laila.data import DuckDBPool
 
 duck = DuckDBPool(nickname="duck")
 laila.memory.extend(duck, pool_nickname="duck")
@@ -26,7 +26,7 @@ laila.memory.extend(duck, pool_nickname="duck")
 `SQLitePool` needs no third-party extras — it uses the stdlib `sqlite3` module:
 
 ```python
-from laila.pool import SQLitePool
+from laila.data import SQLitePool
 
 sqlite = SQLitePool(nickname="sqlite")
 laila.memory.extend(sqlite, pool_nickname="sqlite")
@@ -37,7 +37,7 @@ laila.memory.extend(sqlite, pool_nickname="sqlite")
 If you do **not** pass any connection parameters, `PostgresPool` starts a managed local `postgres` server in a subprocess. Pass `host` / `port` / `dbname` / `user` / `password` (or a `dsn`) to point at an existing server:
 
 ```python
-from laila.pool import PostgresPool
+from laila.data import PostgresPool
 
 # Managed local server:
 pg = PostgresPool(nickname="pg")
@@ -53,7 +53,7 @@ laila.memory.extend(pg, pool_nickname="pg")
 `MongoPool` mirrors the Postgres pattern: managed local `mongod` when no `uri`/`host` is given, otherwise connects to your existing cluster:
 
 ```python
-from laila.pool import MongoPool
+from laila.data import MongoPool
 
 mongo = MongoPool(nickname="mongo")
 laila.memory.extend(mongo, pool_nickname="mongo")

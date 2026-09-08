@@ -1,0 +1,507 @@
+[
+  {
+    "name": "str",
+    "check": "value",
+    "serialized": {
+      "_uuid": "50504c37-028c-4e7a-9268-6517c945873c",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "gAWVDwAAAAAAAACMC2hlbGxvIGxhaWxhlC4=",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import pickle\n    kwargs = {}\n    return pickle.loads(inp, **kwargs)\n"
+        ]
+      }
+    },
+    "value": "hello laila"
+  },
+  {
+    "name": "empty_str",
+    "check": "value",
+    "serialized": {
+      "_uuid": "d0f591b9-95b3-49c2-a52a-2d65f18088f2",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "gAWVBAAAAAAAAACMAJQu",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import pickle\n    kwargs = {}\n    return pickle.loads(inp, **kwargs)\n"
+        ]
+      }
+    },
+    "value": ""
+  },
+  {
+    "name": "unicode",
+    "check": "value",
+    "serialized": {
+      "_uuid": "15989a99-a889-4d85-be87-4279535de001",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "gAWVFAAAAAAAAACMEMO8bsOvY8O2ZMOpIPCfmICULg==",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import pickle\n    kwargs = {}\n    return pickle.loads(inp, **kwargs)\n"
+        ]
+      }
+    },
+    "value": "\u00fcn\u00efc\u00f6d\u00e9 \ud83d\ude00"
+  },
+  {
+    "name": "int_small",
+    "check": "value",
+    "serialized": {
+      "_uuid": "0446758a-71b0-4f56-a1a2-4c3938f805d9",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "gAVLBy4=",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import pickle\n    kwargs = {}\n    return pickle.loads(inp, **kwargs)\n"
+        ]
+      }
+    },
+    "value": 7
+  },
+  {
+    "name": "int_neg",
+    "check": "value",
+    "serialized": {
+      "_uuid": "8c9c0c14-1192-4d8a-9827-178c7d45b4a2",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "gAWVBgAAAAAAAABKM37+/y4=",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import pickle\n    kwargs = {}\n    return pickle.loads(inp, **kwargs)\n"
+        ]
+      }
+    },
+    "value": -98765
+  },
+  {
+    "name": "int_max64",
+    "check": "value",
+    "serialized": {
+      "_uuid": "303ff5f3-713c-42f3-bf4b-b204d8d0ab92",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "gAWVCwAAAAAAAACKCP////////9/Lg==",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import pickle\n    kwargs = {}\n    return pickle.loads(inp, **kwargs)\n"
+        ]
+      }
+    },
+    "value": 9223372036854775807
+  },
+  {
+    "name": "int_min64",
+    "check": "value",
+    "serialized": {
+      "_uuid": "81a40c05-3d8d-4ecd-bd78-37e6da81cbcf",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "gAWVCwAAAAAAAACKCAAAAAAAAACALg==",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import pickle\n    kwargs = {}\n    return pickle.loads(inp, **kwargs)\n"
+        ]
+      }
+    },
+    "value": -9223372036854775808
+  },
+  {
+    "name": "float",
+    "check": "value",
+    "serialized": {
+      "_uuid": "673c5b8b-0347-4f7c-875b-39e542a37c05",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "gAWVCgAAAAAAAABHQAwAAAAAAAAu",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import pickle\n    kwargs = {}\n    return pickle.loads(inp, **kwargs)\n"
+        ]
+      }
+    },
+    "value": 3.5
+  },
+  {
+    "name": "float_neg",
+    "check": "value",
+    "serialized": {
+      "_uuid": "918bd0a3-1b02-4f7a-b896-c3728ca525a3",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "gAWVCgAAAAAAAABHvfEuC+gm1pUu",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import pickle\n    kwargs = {}\n    return pickle.loads(inp, **kwargs)\n"
+        ]
+      }
+    },
+    "value": -2.5e-10
+  },
+  {
+    "name": "bool_true",
+    "check": "value",
+    "serialized": {
+      "_uuid": "95f75064-94e5-481a-8937-1bc152d2c748",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "gAWILg==",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import pickle\n    kwargs = {}\n    return pickle.loads(inp, **kwargs)\n"
+        ]
+      }
+    },
+    "value": true
+  },
+  {
+    "name": "bool_false",
+    "check": "value",
+    "serialized": {
+      "_uuid": "cdacd253-ab50-4777-bdad-11ed6610f932",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "gAWJLg==",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import pickle\n    kwargs = {}\n    return pickle.loads(inp, **kwargs)\n"
+        ]
+      }
+    },
+    "value": false
+  },
+  {
+    "name": "none",
+    "check": "none",
+    "serialized": {
+      "_uuid": "4d99e5d7-50b6-4f98-94ab-4bca43a9fc10",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": null,
+      "constitution": {
+        "_kind": "simple",
+        "codes": []
+      }
+    }
+  },
+  {
+    "name": "bytes",
+    "check": "bytes",
+    "serialized": {
+      "_uuid": "6b3b8b18-7dd8-4752-852f-0f5963d73676",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "gAWVCQAAAAAAAABDBQABAv7/lC4=",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import pickle\n    kwargs = {}\n    return pickle.loads(inp, **kwargs)\n"
+        ]
+      }
+    },
+    "b64": "AAEC/v8="
+  },
+  {
+    "name": "list",
+    "check": "value",
+    "serialized": {
+      "_uuid": "2ae929d7-0a60-430a-a59b-e85776d95df3",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "lAECAwQ=",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import msgpack\n    kwargs = {\"raw\": False, **{}}\n    return msgpack.unpackb(inp, **kwargs)\n"
+        ]
+      }
+    },
+    "value": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "mp_identity": true
+  },
+  {
+    "name": "dict_ordered",
+    "check": "value",
+    "serialized": {
+      "_uuid": "b5f31b96-edb8-4814-8771-162f742815ac",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "g6FiAaFhAqF6Aw==",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import msgpack\n    kwargs = {\"raw\": False, **{}}\n    return msgpack.unpackb(inp, **kwargs)\n"
+        ]
+      }
+    },
+    "value": {
+      "b": 1,
+      "a": 2,
+      "z": 3
+    },
+    "mp_identity": true
+  },
+  {
+    "name": "nested",
+    "check": "value",
+    "serialized": {
+      "_uuid": "48394e26-8f38-44b8-8ade-ee910d33f1fa",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "gaFhgaFikwECgaFjAw==",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import msgpack\n    kwargs = {\"raw\": False, **{}}\n    return msgpack.unpackb(inp, **kwargs)\n"
+        ]
+      }
+    },
+    "value": {
+      "a": {
+        "b": [
+          1,
+          2,
+          {
+            "c": 3
+          }
+        ]
+      }
+    },
+    "mp_identity": true
+  },
+  {
+    "name": "mixed",
+    "check": "value",
+    "serialized": {
+      "_uuid": "bd317c32-f18d-41b6-97e9-cf10566db930",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "hqFpAaFmy0AEAAAAAAAAoXOheKFiw6FuwKFskgGjdHdv",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import msgpack\n    kwargs = {\"raw\": False, **{}}\n    return msgpack.unpackb(inp, **kwargs)\n"
+        ]
+      }
+    },
+    "value": {
+      "i": 1,
+      "f": 2.5,
+      "s": "x",
+      "b": true,
+      "n": null,
+      "l": [
+        1,
+        "two"
+      ]
+    },
+    "mp_identity": true
+  },
+  {
+    "name": "dict_bytes",
+    "check": "nested_bytes",
+    "serialized": {
+      "_uuid": "2bb13df3-a79b-41f0-a23f-43c9806d1c46",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "gaFrxATerb7v",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import msgpack\n    kwargs = {\"raw\": False, **{}}\n    return msgpack.unpackb(inp, **kwargs)\n"
+        ]
+      }
+    },
+    "key": "k",
+    "b64": "3q2+7w=="
+  },
+  {
+    "name": "bignum",
+    "check": "bignum_unsupported",
+    "serialized": {
+      "_uuid": "39fcec38-b60d-41a2-af53-6822b4543b65",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "gAWVEAAAAAAAAACKDQAAAEDq7XRG0Jwsnwwu",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import pickle\n    kwargs = {}\n    return pickle.loads(inp, **kwargs)\n"
+        ]
+      }
+    }
+  },
+  {
+    "name": "npy_f64",
+    "check": "numpy",
+    "serialized": {
+      "_uuid": "3ec2710a-c383-497f-b497-4e15fefd3a21",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "k05VTVBZAQB2AHsnZGVzY3InOiAnPGY4JywgJ2ZvcnRyYW5fb3JkZXInOiBGYWxzZSwgJ3NoYXBlJzogKDIsIDIpLCB9ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAoAAAAAAAD4PwAAAAAAAARAAAAAAAAADEAAAAAAAAASQA==",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import io\n    import numpy as np\n    buf = io.BytesIO(inp)\n    kwargs = {'allow_pickle': False, **{}}\n    return np.load(buf, **kwargs)\n"
+        ]
+      }
+    },
+    "dtype": "<f8",
+    "shape": [
+      2,
+      2
+    ],
+    "raw_b64": "AAAAAAAA+D8AAAAAAAAEQAAAAAAAAAxAAAAAAAAAEkA="
+  },
+  {
+    "name": "npy_i32",
+    "check": "numpy",
+    "serialized": {
+      "_uuid": "135178f3-1df7-457e-b6c4-98a09f69491d",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "k05VTVBZAQB2AHsnZGVzY3InOiAnPGk0JywgJ2ZvcnRyYW5fb3JkZXInOiBGYWxzZSwgJ3NoYXBlJzogKDUsKSwgfSAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAoBAAAAAgAAAAMAAAAEAAAABQAAAA==",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import io\n    import numpy as np\n    buf = io.BytesIO(inp)\n    kwargs = {'allow_pickle': False, **{}}\n    return np.load(buf, **kwargs)\n"
+        ]
+      }
+    },
+    "dtype": "<i4",
+    "shape": [
+      5
+    ],
+    "raw_b64": "AQAAAAIAAAADAAAABAAAAAUAAAA="
+  },
+  {
+    "name": "npy_u8",
+    "check": "numpy",
+    "serialized": {
+      "_uuid": "5f620386-9bb6-4400-88ea-90a07b415dbe",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "k05VTVBZAQB2AHsnZGVzY3InOiAnfHUxJywgJ2ZvcnRyYW5fb3JkZXInOiBGYWxzZSwgJ3NoYXBlJzogKDIsIDMpLCB9ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAoAAQIDBAU=",
+      "constitution": {
+        "_kind": "simple",
+        "codes": [
+          "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
+          "\ndef backward(inp):\n    import io\n    import numpy as np\n    buf = io.BytesIO(inp)\n    kwargs = {'allow_pickle': False, **{}}\n    return np.load(buf, **kwargs)\n"
+        ]
+      }
+    },
+    "dtype": "|u1",
+    "shape": [
+      2,
+      3
+    ],
+    "raw_b64": "AAECAwQF"
+  }
+]

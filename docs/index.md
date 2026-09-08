@@ -73,7 +73,7 @@ it back from anywhere with just an id":
 ```python
 import numpy as np
 import laila
-from laila.pool import S3Pool
+from laila.data import S3Pool
 
 # 1. Create a pool (any backend — S3, Redis, HDF5, filesystem, …)
 pool = S3Pool(

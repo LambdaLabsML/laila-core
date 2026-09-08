@@ -27,7 +27,7 @@ Then load them into LAILA's arg system:
 import numpy as np
 import torch
 import laila
-from laila.pool import S3Pool
+from laila.data import S3Pool
 
 laila.read_args("./secrets.toml")
 ```

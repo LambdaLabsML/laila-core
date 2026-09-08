@@ -24,7 +24,7 @@ key = Fernet.generate_key()
 ```python
 import laila
 from laila.entry import transformation_base64_compression_encryption
-from laila.pool import FilesystemPool
+from laila.data import FilesystemPool
 
 vault = FilesystemPool(
     nickname="vault",

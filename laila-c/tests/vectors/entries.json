@@ -1,0 +1,193 @@
+[
+  {
+    "name": "string",
+    "as_dict": {
+      "_uuid": "345aa5c5-340d-4f76-86f5-ef8635552ab3",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "hello laila",
+      "constitution": null
+    },
+    "global_id": "LAILA:ENTRY:GLOBAL_ID:345aa5c5-340d-4f76-86f5-ef8635552ab3",
+    "uuid": "345aa5c5-340d-4f76-86f5-ef8635552ab3"
+  },
+  {
+    "name": "empty_string",
+    "as_dict": {
+      "_uuid": "501c10d8-0676-4ff8-9850-f62d81d39d99",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": "",
+      "constitution": null
+    },
+    "global_id": "LAILA:ENTRY:GLOBAL_ID:501c10d8-0676-4ff8-9850-f62d81d39d99",
+    "uuid": "501c10d8-0676-4ff8-9850-f62d81d39d99"
+  },
+  {
+    "name": "int",
+    "as_dict": {
+      "_uuid": "98e19b58-9a03-4cf2-bd10-110678145752",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": 123,
+      "constitution": null
+    },
+    "global_id": "LAILA:ENTRY:GLOBAL_ID:98e19b58-9a03-4cf2-bd10-110678145752",
+    "uuid": "98e19b58-9a03-4cf2-bd10-110678145752"
+  },
+  {
+    "name": "neg_int",
+    "as_dict": {
+      "_uuid": "073b2981-bd37-462d-9521-adf54e71f14c",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": -98765,
+      "constitution": null
+    },
+    "global_id": "LAILA:ENTRY:GLOBAL_ID:073b2981-bd37-462d-9521-adf54e71f14c",
+    "uuid": "073b2981-bd37-462d-9521-adf54e71f14c"
+  },
+  {
+    "name": "zero",
+    "as_dict": {
+      "_uuid": "e96176b1-c17f-480d-81b2-58f9d179df11",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": 0,
+      "constitution": null
+    },
+    "global_id": "LAILA:ENTRY:GLOBAL_ID:e96176b1-c17f-480d-81b2-58f9d179df11",
+    "uuid": "e96176b1-c17f-480d-81b2-58f9d179df11"
+  },
+  {
+    "name": "float",
+    "as_dict": {
+      "_uuid": "1a5b65f7-976d-45b5-ac99-6e0d068e9efa",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": 3.5,
+      "constitution": null
+    },
+    "global_id": "LAILA:ENTRY:GLOBAL_ID:1a5b65f7-976d-45b5-ac99-6e0d068e9efa",
+    "uuid": "1a5b65f7-976d-45b5-ac99-6e0d068e9efa"
+  },
+  {
+    "name": "bool_true",
+    "as_dict": {
+      "_uuid": "39770b5b-403f-4604-85f8-d1773af51712",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": true,
+      "constitution": null
+    },
+    "global_id": "LAILA:ENTRY:GLOBAL_ID:39770b5b-403f-4604-85f8-d1773af51712",
+    "uuid": "39770b5b-403f-4604-85f8-d1773af51712"
+  },
+  {
+    "name": "bool_false",
+    "as_dict": {
+      "_uuid": "b966ccc3-8796-428e-bb02-3a879de66ea9",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": false,
+      "constitution": null
+    },
+    "global_id": "LAILA:ENTRY:GLOBAL_ID:b966ccc3-8796-428e-bb02-3a879de66ea9",
+    "uuid": "b966ccc3-8796-428e-bb02-3a879de66ea9"
+  },
+  {
+    "name": "dict",
+    "as_dict": {
+      "_uuid": "33c9e00b-ed26-4c4b-b4e4-e74fb99415aa",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": {
+        "k": [
+          1,
+          2,
+          3
+        ],
+        "s": "v"
+      },
+      "constitution": null
+    },
+    "global_id": "LAILA:ENTRY:GLOBAL_ID:33c9e00b-ed26-4c4b-b4e4-e74fb99415aa",
+    "uuid": "33c9e00b-ed26-4c4b-b4e4-e74fb99415aa"
+  },
+  {
+    "name": "list",
+    "as_dict": {
+      "_uuid": "a9802bfe-9922-4a5b-823d-872f39e5cdcf",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "constitution": null
+    },
+    "global_id": "LAILA:ENTRY:GLOBAL_ID:a9802bfe-9922-4a5b-823d-872f39e5cdcf",
+    "uuid": "a9802bfe-9922-4a5b-823d-872f39e5cdcf"
+  },
+  {
+    "name": "nested",
+    "as_dict": {
+      "_uuid": "e6f43b36-69ff-44b8-99fb-cd0534853349",
+      "_evolution": null,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "payload": {
+        "a": {
+          "b": {
+            "c": 1
+          }
+        },
+        "arr": [
+          {
+            "x": 1
+          },
+          {
+            "y": 2
+          }
+        ]
+      },
+      "constitution": null
+    },
+    "global_id": "LAILA:ENTRY:GLOBAL_ID:e6f43b36-69ff-44b8-99fb-cd0534853349",
+    "uuid": "e6f43b36-69ff-44b8-99fb-cd0534853349"
+  }
+]

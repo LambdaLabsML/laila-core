@@ -32,7 +32,7 @@ from typing import Optional, Any, Iterable
 from pydantic import PrivateAttr
 
 import laila
-from laila.pool.schema.base import _LAILA_IDENTIFIABLE_POOL
+from laila.data.schema.base import _LAILA_IDENTIFIABLE_POOL
 
 class DictPool(_LAILA_IDENTIFIABLE_POOL):
     """A toy pool backed by a private dict."""

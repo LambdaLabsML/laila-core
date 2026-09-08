@@ -39,7 +39,7 @@ from .....basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS
 from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from .....entry import Entry
 from .....macros.strings import _CENTRAL_MEMORY_SCOPE, _DEFAULT_POOL_NICKNAME
-from .....pool.schema.base import _LAILA_IDENTIFIABLE_POOL
+from .....data.schema.base import _LAILA_IDENTIFIABLE_POOL
 from .....utils.decorators.typecheck import ensure_list
 from ...command.schema.future.future.future_status import FutureStatus
 from ...command.schema.future.future.group_future import GroupFuture

@@ -38,7 +38,7 @@ laila.read_args("./secrets.toml")
 ## Google Cloud Storage
 
 ```python
-from laila.pool import GCSPool
+from laila.data import GCSPool
 import json
 
 sa_info = json.loads(open(laila.args.GCS_SERVICE_ACCOUNT_JSON).read())
@@ -54,7 +54,7 @@ laila.memory.extend(gcs, pool_nickname="gcs")
 ## Azure Blob Storage
 
 ```python
-from laila.pool import AzurePool
+from laila.data import AzurePool
 
 azure = AzurePool(
     connection_string=laila.args.AZURE_CONNECTION_STRING,
@@ -69,7 +69,7 @@ laila.memory.extend(azure, pool_nickname="azure")
 R2 speaks the S3 protocol. `CloudflarePool` is a thin wrapper that fills in the endpoint URL from your account id:
 
 ```python
-from laila.pool import CloudflarePool
+from laila.data import CloudflarePool
 
 r2 = CloudflarePool(
     account_id=laila.args.R2_ACCOUNT_ID,
@@ -86,7 +86,7 @@ laila.memory.extend(r2, pool_nickname="r2")
 B2 also speaks S3-compatible; the constructor takes application keys instead of access keys:
 
 ```python
-from laila.pool import BackblazePool
+from laila.data import BackblazePool
 
 b2 = BackblazePool(
     application_key_id=laila.args.B2_APP_KEY_ID,

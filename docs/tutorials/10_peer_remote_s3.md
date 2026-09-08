@@ -31,7 +31,7 @@ The subprocess reads `secrets.toml`, creates an `S3Pool`, registers it under the
 REMOTE_SCRIPT = textwrap.dedent("""\
     import time, uuid, laila
     from laila.macros.defaults import DefaultTCPIPProtocol
-    from laila.pool import S3Pool
+    from laila.data import S3Pool
 
     laila.read_args("./secrets.toml")
 

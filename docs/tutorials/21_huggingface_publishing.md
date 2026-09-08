@@ -25,7 +25,7 @@ laila.read_args("./secrets.toml")
 `repo_id` is `<user>/<repo>`. `repo_type` defaults to `"model"`; pass `"dataset"` if you're storing datasets. The repo is auto-created on first write:
 
 ```python
-from laila.pool import HuggingFacePool
+from laila.data import HuggingFacePool
 
 hf = HuggingFacePool(
     repo_id=laila.args.HF_REPO_ID,

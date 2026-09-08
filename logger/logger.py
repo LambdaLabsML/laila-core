@@ -1,7 +1,7 @@
 """LAILA :class:`Logger` singleton.
 
 The Logger is a top-level subsystem (sibling to :mod:`laila.policy`,
-:mod:`laila.pool`, :mod:`laila.entry`) that emits structured log records
+:mod:`laila.data`, :mod:`laila.entry`) that emits structured log records
 from anywhere in the package. It has two sinks:
 
 1. The standard library ``logging`` hierarchy rooted at the ``"laila"``

@@ -38,7 +38,7 @@ laila.remember(tensor_entry.global_id).data           # returns a tensor
 The same three verbs — `memorize`, `remember`, and `forget` — work across every storage backend. S3, HDF5, Cloudflare R2, Redis, GCS, filesystem — swap the pool, keep the code:
 
 ```python
-from laila.pool import S3Pool, HDF5Pool, CloudflarePool
+from laila.data import S3Pool, HDF5Pool, CloudflarePool
 
 s3_pool = S3Pool(...)
 hdf5_pool = HDF5Pool(...)
@@ -81,7 +81,7 @@ in every tier on the way back up.
 
 ```python
 import laila
-from laila.pool import S3Pool, HDF5Pool
+from laila.data import S3Pool, HDF5Pool
 
 # Create an HDF5 pool (local disk) and an S3 pool (remote)
 hdf5_pool = HDF5Pool(nickname="cache_hdf5")

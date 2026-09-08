@@ -76,7 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   argument (`keys=[]`). Switched to `keys=None` with in-body normalization.
 - `tests/functional/logger/unit_tests/test_logger.py::TestHDF5PoolSink`
   now skips cleanly when `h5py` is not installed instead of erroring out
-  on the bare `from laila.pool.hdf5.hdf5 import HDF5Pool` in `setUp`.
+  on the bare `from laila.data.hdf5.hdf5 import HDF5Pool` in `setUp`.
 
 ### Removed
 

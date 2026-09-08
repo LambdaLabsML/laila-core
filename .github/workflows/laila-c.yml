@@ -1,0 +1,66 @@
+name: laila-c
+
+on:
+  push:
+    branches: [main]
+    paths: ["laila-c/**"]
+  pull_request:
+    paths: ["laila-c/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: laila-c-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    name: laila-C host tests + translator suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure + build laila-C (posix)
+        run: |
+          cmake -S laila-c -B laila-c/build
+          cmake --build laila-c/build -j
+
+      - name: Unit tests (12k+ assertions)
+        run: ./laila-c/build/tests/laila_tests
+
+      - name: Cross-backend matrix (posix coop/threaded, baremetal)
+        run: bash laila-c/tests/run_all_platforms.sh
+
+      - name: Translator suite (deterministic; live cases skip without token)
+        run: python3 laila-c/tools/test_translate.py
+
+  qemu:
+    name: ESP32 QEMU networking smoke test
+    # Heavy (installs the xtensa QEMU + builds firmware) -> on demand only.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    container: espressif/idf:release-v5.3
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install QEMU (xtensa) + host build deps
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          python $IDF_PATH/tools/idf_tools.py install qemu-xtensa
+          apt-get update && apt-get install -y --no-install-recommends \
+            libsdl2-2.0-0 libslirp0 cmake g++
+
+      - name: Build host laila-C (for the pull client)
+        run: |
+          cmake -S laila-c -B laila-c/build
+          cmake --build laila-c/build -j
+
+      - name: Boot on emulated ESP32 + pull an entry over TCP
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          cd laila-c/emulator
+          bash run_qemu_test.sh

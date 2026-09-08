@@ -15,7 +15,7 @@ You will need a `secrets.toml` with AWS credentials **and** a completed run of [
 ```python
 import json
 import laila
-from laila.pool import S3Pool
+from laila.data import S3Pool
 from laila.policy.central.memory.schema import Manifest
 from laila.macros.defaults import DefaultPolicy
 from dotmap import DotMap

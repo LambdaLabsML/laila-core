@@ -28,7 +28,7 @@ from .....basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS, CLIExe
 from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from .....entry import Entry
 from .....macros.strings import _DEFAULT_POOL_NICKNAME, _POOL_ROUTER_SCOPE
-from .....pool.schema.base import _LAILA_IDENTIFIABLE_POOL
+from .....data.schema.base import _LAILA_IDENTIFIABLE_POOL
 
 
 class _LAILA_IDENTIFIABLE_POOL_ROUTER(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):

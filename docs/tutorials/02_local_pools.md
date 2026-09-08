@@ -17,7 +17,7 @@ The filesystem pool has no extra dependencies.
 ```python
 import numpy as np
 import laila
-from laila.pool import FilesystemPool, RedisPool, HDF5Pool
+from laila.data import FilesystemPool, RedisPool, HDF5Pool
 ```
 
 ## Creating the pools

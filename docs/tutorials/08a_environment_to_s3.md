@@ -24,7 +24,7 @@ You will need an AWS S3 bucket and credentials. Store them in a `secrets.toml` a
 ```python
 import json
 import laila
-from laila.pool import S3Pool, HDF5Pool
+from laila.data import S3Pool, HDF5Pool
 from laila.policy.central.memory.schema import Manifest
 
 laila.read_args("./secrets.toml")

@@ -24,7 +24,7 @@ from ...basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS, CLIExemp
 from ...basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from ...entry import Entry
 from ...macros.strings import _POLICY_SCOPE
-from ...pool.schema.base import _LAILA_IDENTIFIABLE_POOL
+from ...data.schema.base import _LAILA_IDENTIFIABLE_POOL
 from ..central.command.schema.base import _LAILA_IDENTIFIABLE_CENTRAL_COMMAND
 
 

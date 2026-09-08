@@ -1,8 +1,18 @@
-"""Pool implementations for every supported storage backend.
+"""Data containers: storage pools for every supported backend, plus MultiBuffer.
 
-This package is the catalogue of concrete :class:`_LAILA_IDENTIFIABLE_POOL`
-subclasses. Each backend lives in its own sub-module and exposes a
-single ``*Pool`` class:
+Everything here derives from the virtual
+:class:`~laila.data.schema.data_container._LAILA_IDENTIFIABLE_DATA_CONTAINER`.
+Two families exist:
+
+- **Pools** (``_LAILA_IDENTIFIABLE_POOL`` subclasses) -- maps keyed by
+  entry ``global_id``; the persistence tier behind ``memorize`` /
+  ``remember`` / ``forget``.
+- :class:`MultiBuffer` -- an integer-indexed ring with independent
+  read/write heads, used as the proxy to a device's own buffer (e.g.
+  a camera's double-buffered frames on a microcontroller).
+
+Each pool backend lives in its own sub-module and exposes a single
+``*Pool`` class:
 
 ================  ==============================================
 Backend           Class
@@ -33,6 +43,8 @@ Pools are designed to be composed via the proxy operators
 local tier in front of a slower remote tier without the rest of the
 codebase ever knowing.
 """
+
+from .multibuffer.multibuffer import MultiBuffer
 
 try:
     from .redis.redis import RedisPool

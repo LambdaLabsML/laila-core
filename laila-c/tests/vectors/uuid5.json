@@ -1,0 +1,35 @@
+{
+  "namespace": "6c8dcd4c-d490-58bc-81a7-6afbe8d17594",
+  "cases": [
+    {
+      "nickname": "model",
+      "uuid": "a741981b-7d7e-5392-a679-9dedc215f4e6",
+      "global_id": "LAILA:ENTRY:GLOBAL_ID:a741981b-7d7e-5392-a679-9dedc215f4e6"
+    },
+    {
+      "nickname": "sensor_calibration",
+      "uuid": "b1b2b1f8-6e0b-5587-ae12-442b21d8a54e",
+      "global_id": "LAILA:ENTRY:GLOBAL_ID:b1b2b1f8-6e0b-5587-ae12-442b21d8a54e"
+    },
+    {
+      "nickname": "resnet50_v1",
+      "uuid": "3d113103-9439-57b3-87fb-80c4039dfd0d",
+      "global_id": "LAILA:ENTRY:GLOBAL_ID:3d113103-9439-57b3-87fb-80c4039dfd0d"
+    },
+    {
+      "nickname": "images",
+      "uuid": "c6e10257-2abf-5719-b1dc-dfa90f9d7bef",
+      "global_id": "LAILA:ENTRY:GLOBAL_ID:c6e10257-2abf-5719-b1dc-dfa90f9d7bef"
+    },
+    {
+      "nickname": "config",
+      "uuid": "04b0dcca-6978-5b87-b7a5-38cd46bbd5a8",
+      "global_id": "LAILA:ENTRY:GLOBAL_ID:04b0dcca-6978-5b87-b7a5-38cd46bbd5a8"
+    },
+    {
+      "nickname": "tenant/data",
+      "uuid": "cb34c124-53bf-582f-8432-8097c286b5d9",
+      "global_id": "LAILA:ENTRY:GLOBAL_ID:cb34c124-53bf-582f-8432-8097c286b5d9"
+    }
+  ]
+}
