@@ -200,6 +200,7 @@ packages = [
   "laila.data.hdf5",
   "laila.data.huggingface",
   "laila.data.mongo",
+  "laila.data.multibuffer",
   "laila.data.postgres",
   "laila.data.redis",
   "laila.data.s3",
