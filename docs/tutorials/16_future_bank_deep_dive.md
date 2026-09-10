@@ -19,7 +19,7 @@ from laila.macros.defaults import DefaultPool
 laila.memory.extend(DefaultPool(), pool_nickname="bank")
 
 entries = [laila.constant(data=i, nickname=f"bank_{i}") for i in range(5)]
-group = laila.memorize(entries, pool_nickname="bank")
+group = laila.memorize(entries, dst_pool="bank")
 
 bank = laila.active_policy.future_bank
 print(len(bank), "futures registered")
@@ -72,6 +72,19 @@ print(laila.runtime.status(fut))
 print(repr(fut.exception))
 ```
 
+## Releasing futures
+
+The bank is a plain dict with strong references: a future -- and the result `Entry` it holds -- stays resident until you release it. Nothing is evicted automatically, not on completion and not when you read the result. Release a future once you have consumed it; a `GroupFuture` releases its children as well:
+
+```python
+group.release()
+print(group.global_id in bank, all(fid in bank for fid in group.future_ids))  # False False
+
+fut.release()
+```
+
+`release()` is idempotent and safe to call early: a still-running task keeps its own reference, so it completes normally -- only the gid lookup through the bank goes away.
+
 ## Cancelling pending work at shutdown
 
 `laila.terminate(cancel_pending=True)` drops queued-but-unstarted tasks. Already-running tasks still finish (or fail) — only the unstarted backlog is discarded:
@@ -86,6 +99,7 @@ laila.terminate(wait=True, cancel_pending=True)
 - `laila.runtime.status / wait / result` accept futures, identity objects, or gid strings.
 - A `GroupFuture`'s `future_ids` list lets you look up children in `future_bank` for individual inspection.
 - Failed futures keep their exception around — read `.exception` instead of expecting `wait()` to swallow it.
+- Futures are never evicted automatically: call `release()` (on the group or the future) once you have consumed the result.
 - `terminate(cancel_pending=True)` drops queued submissions on the way down.
 
 Next: [Tutorial 17 — Three-Node Mesh on Localhost](17_three_node_mesh.md).

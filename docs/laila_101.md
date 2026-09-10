@@ -34,9 +34,9 @@ LAILA is **type-free**. When you memorize an entry, LAILA inspects the payload's
 ```python
 import torch, numpy as np
 
-laila.memorize(laila.constant(data=np.zeros((3, 3))))       # ndarray in
-laila.memorize(laila.constant(data=torch.randn(128, 64)))   # Tensor in
-laila.memorize(laila.constant(data={"key": "value"}))       # dict in
+laila.memorize(laila.constant(data=np.zeros((3, 3))))  # ndarray in
+laila.memorize(laila.constant(data=torch.randn(128, 64)))  # Tensor in
+laila.memorize(laila.constant(data={"key": "value"}))  # dict in
 ```
 
 Each pool can also attach its own **transformation sequence** — base64 encoding, zlib compression, encryption — which wraps the serialized bytes on write and unwraps them on read. The serialized entry stores a **`Constitution`** describing how to rebuild it: a `SimpleConstitution` for ordinary data (an ordered list of inverse-transform code strings) or a `ComplexConstitution` for entries built from a `Manifest` of other entries (a single `f(manifest) -> payload` function). `entry.build()` runs the constitution back-to-back to materialize the payload — the caller never has to think about serialization formats.
@@ -81,8 +81,8 @@ When you call `laila.memorize(entry)`, behind the scenes command submits seriali
 
 ```python
 future = laila.memorize(entry)
-laila.wait(future)    # block until done
-await future          # or await in async code
+laila.wait(future)  # block until done
+await future  # or await in async code
 ```
 
 A taskforce is either thread-based (`PythonThreadPoolTaskForce`) or process-based (`PythonProcessPoolTaskForce`). The default is a thread pool with `max(1, cpu_count // 2)` workers.

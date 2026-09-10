@@ -50,9 +50,9 @@ Reconstruct the manifest identity from its nickname, remember the blueprint, the
 manifest = Manifest(nickname="env_manifest_v1")
 
 with laila.guarantee:
-    ref = laila.remember(manifest.global_id, pool_nickname="s3")
+    ref = laila.remember(manifest.global_id, dst_pool="s3")
 
-blueprint = ref.data[0]
+blueprint = ref.data
 manifest = Manifest(data=blueprint, nickname="env_manifest_v1")
 
 print(f"Blueprint: {manifest.blueprint}")

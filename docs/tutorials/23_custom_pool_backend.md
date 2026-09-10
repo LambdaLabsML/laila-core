@@ -83,14 +83,14 @@ entries = [
     laila.constant(data={"label": "demo", "score": 0.95}, nickname="cp_dict"),
 ]
 for e in entries:
-    laila.memorize(e, pool_nickname="dict_pool").wait()
+    laila.memorize(e, dst_pool="dict_pool").wait()
 ```
 
 Recall and confirm types are preserved:
 
 ```python
 for nick in ["cp_array", "cp_tensor", "cp_dict"]:
-    r = laila.remember(nickname=nick, pool_nickname="dict_pool", persist=False).wait()
+    r = laila.remember(nickname=nick, dst_pool="dict_pool", persist=False).wait()
     print(nick, "->", type(r.data).__name__)
 ```
 

@@ -7,9 +7,7 @@ shallow-string-keyed cases.
 """
 
 import copy
-from typing import Any
-
-from pydantic import PrivateAttr
+from typing import Any, ClassVar
 
 from ..transformation.serialization import MsgpackSerializer
 from .compdata import ComputationalData, register_cdtype
@@ -26,13 +24,13 @@ class CD_dict(ComputationalData):
     """
 
     data: dict[Any, Any]
-    _serializer: MsgpackSerializer = PrivateAttr(default_factory=MsgpackSerializer)
+    _SERIALIZER_CLS: ClassVar[type] = MsgpackSerializer
 
     # --- Serializer getter/setter ---
     @property
     def serializer(self) -> MsgpackSerializer:
         """Return the serializer instance (public accessor)."""
-        return self._serializer
+        return self._ensure_serializer()
 
     @serializer.setter
     def serializer(self, value: MsgpackSerializer):

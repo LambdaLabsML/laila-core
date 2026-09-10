@@ -40,7 +40,7 @@ secret = laila.constant(
     data={"username": "alice", "api_key": "sk-live-very-secret"},
     nickname="prod_credentials",
 )
-laila.memorize(secret, pool_nickname="vault").wait()
+laila.memorize(secret, dst_pool="vault").wait()
 ```
 
 ## Inspect raw on-disk bytes
@@ -61,7 +61,7 @@ for f in Path(vault._mount_dir).rglob("*"):
 Reading through `laila.remember` runs the transformations in reverse — base64 decode, decrypt, decompress, deserialize — and the original payload comes back intact:
 
 ```python
-recovered = laila.remember(nickname="prod_credentials", pool_nickname="vault", persist=False).wait()
+recovered = laila.remember(nickname="prod_credentials", dst_pool="vault", persist=False).wait()
 print(recovered.data)
 # {'username': 'alice', 'api_key': 'sk-live-very-secret'}
 ```

@@ -21,6 +21,7 @@ Provides:
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import inspect
 import threading
@@ -113,20 +114,33 @@ def _check_no_pending_submit_owner() -> None:
 def ensure_coroutine_function(task):
     """Return a coroutine function for *task*.
 
-    Coroutine functions are returned unchanged. Plain sync callables
-    are wrapped in a trivial ``async def`` shim so the runner sees a
-    uniform awaitable. If the wrapped sync body itself returns a
-    coroutine (e.g. a lambda factory ``lambda: my_async_fn()``), the
-    shim awaits the inner coroutine so the runner gets the final value
-    rather than an unawaited coroutine. The wrapped sync body still
-    runs inline on the loop thread when invoked.
+    Coroutine functions (including ``functools.partial`` of one) are
+    returned unchanged. Plain sync callables are wrapped in an
+    ``async def`` shim so the runner sees a uniform awaitable. The shim
+    offloads the sync body to the owning taskforce's sync executor
+    (:meth:`PythonAsyncThreadPoolTaskForce.run_sync`) -- or
+    :func:`asyncio.to_thread` when not running inside a taskforce slot --
+    so a CPU-bound or blocking body never stalls the event loop. If the
+    body itself returns a coroutine (e.g. a lambda factory
+    ``lambda: my_async_fn()``), the shim awaits it on the loop so the
+    runner gets the final value rather than an unawaited coroutine.
+
+    Prefer submitting coroutine functions / ``functools.partial(coro_fn,
+    ...)`` for async work: they skip the thread hop entirely.
     """
     if inspect.iscoroutinefunction(task):
         return task
 
     @functools.wraps(task)
     async def _wrap(*args, **kwargs):
-        out = task(*args, **kwargs)
+        from .parking import _CURRENT_SLOT
+
+        slot = _CURRENT_SLOT.get()
+        tf = getattr(slot, "tf", None)
+        if tf is not None and hasattr(tf, "run_sync"):
+            out = await tf.run_sync(task, *args, **kwargs)
+        else:
+            out = await asyncio.to_thread(task, *args, **kwargs)
         if inspect.iscoroutine(out):
             out = await out
         return out

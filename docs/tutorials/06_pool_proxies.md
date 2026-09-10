@@ -71,8 +71,8 @@ Write to S3 only. At this point the alpha pool and HDF5 pool know nothing about 
 ```python
 entry = laila.constant(data={"message": "hello from S3"}, nickname="proxy_demo")
 
-future = laila.memorize(entry, pool_nickname="proxy_s3")
-laila.wait(future)
+future = laila.memorize(entry, dst_pool="proxy_s3")
+laila.runtime.wait(future)
 
 print(f"alpha_pool has it? {laila.alpha_pool.exists(entry.global_id)}")  # False
 print(f"hdf5_pool has it?  {hdf5_pool.exists(entry.global_id)}")         # False
@@ -174,8 +174,8 @@ hdf5_pool.proxy_to = s3_pool
 ## Clean up
 
 ```python
-forget_future = laila.forget(entry.global_id, pool_nickname="proxy_s3")
-laila.wait(forget_future)
+forget_future = laila.forget(entry.global_id, pool="proxy_s3")
+laila.runtime.wait(forget_future)
 
 hdf5_pool.empty()
 laila.alpha_pool.proxy_to = None

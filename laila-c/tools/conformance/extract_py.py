@@ -63,11 +63,7 @@ class PySurface:
         return names
 
     def all_symbol_names(self) -> set[str]:
-        return (
-            set(self.classes)
-            | self.all_callable_names()
-            | self.default_aliases
-        )
+        return set(self.classes) | self.all_callable_names() | self.default_aliases
 
 
 def _base_name(node: ast.expr) -> str:
@@ -87,7 +83,13 @@ def _public_methods(cls_node: ast.ClassDef) -> list[str]:
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
             name = item.name
             # Keep public names and the dunders that form part of the surface.
-            if not name.startswith("_") or name in {"__iter__", "__getitem__", "__len__", "__lshift__", "__rshift__"}:
+            if not name.startswith("_") or name in {
+                "__iter__",
+                "__getitem__",
+                "__len__",
+                "__lshift__",
+                "__rshift__",
+            }:
                 out.append(name)
     return out
 
@@ -122,8 +124,7 @@ def _parse_init(init_path: Path) -> tuple[set[str], set[str], set[str]]:
             for item in node.body:
                 if isinstance(item, ast.FunctionDef):
                     is_property = any(
-                        isinstance(d, ast.Name) and d.id == "property"
-                        for d in item.decorator_list
+                        isinstance(d, ast.Name) and d.id == "property" for d in item.decorator_list
                     )
                     if is_property and not item.name.startswith("_"):
                         props.add(item.name)

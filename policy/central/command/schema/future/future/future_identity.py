@@ -10,17 +10,15 @@ result / exception accessors *through* the bank, so any process that
 holds an identity can introspect the live future as long as the owning
 policy is reachable in :data:`_local_policies`.
 
-The split exists so that taskforce-level submission can return a
-lightweight identity to user code without forcing the production of a
-full :class:`Future` instance per submission, and so that
-:class:`RemoteFuture` can present the same identity-like API on the
-remote side.
+The split exists so that a future can be referenced by metadata alone
+(e.g. across a process boundary) and so that :class:`RemoteFuture` can
+present the same identity-like API on the remote side. Local submission
+paths return the concrete :class:`Future` itself -- it *is* an identity
+(subclass), so no separate handle is built per task.
 """
 
 import json
-from typing import Any
-
-from pydantic import PrivateAttr
+from typing import Any, ClassVar
 
 from .......atomic.definitions.locally_atomic_identifiable_object import (
     _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT,
@@ -53,7 +51,7 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         (e.g. ``"memorize:42"``, ``"build:my_model"``).
     """
 
-    _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_FUTURE_SCOPE]))
+    _DEFAULT_SCOPES: ClassVar[list[str]] = [_FUTURE_SCOPE]
 
     taskforce_id: _LAILA_IDENTIFIABLE_OBJECT | str
 
@@ -153,6 +151,28 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
             if gid in policy.future_bank:
                 return policy.future_bank[gid].wait(timeout)
         raise KeyError(f"Future {gid} not found in any local policy bank")
+
+    def release(self) -> None:
+        """Remove the underlying concrete future from its policy's future bank.
+
+        Delegates to the concrete future's :meth:`Future.release`. A
+        no-op when the future is no longer registered (already released
+        or never created locally). Futures are *never* released
+        automatically -- whoever owns the handle must call this once the
+        result has been consumed, otherwise the future (and its result
+        payload) stays resident for the life of the process.
+        """
+        from ....... import _local_policies
+
+        gid = self.global_id
+        for policy in _local_policies.values():
+            fut = policy.future_bank.get(gid)
+            if fut is not None:
+                if fut is self:
+                    policy.future_bank.pop(gid, None)
+                else:
+                    fut.release()
+                return
 
     def __await__(self):
         """Await the underlying concrete future via the policy's future bank.

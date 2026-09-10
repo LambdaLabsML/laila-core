@@ -26,25 +26,28 @@ for p in (hot_pool, warm_pool, cold_pool):
 
 ## Memorize one entry per pool
 
-Pass `pool_nickname=` to direct each write to a specific destination:
+Pass `dst_pool=` to direct each write to a specific destination. `dst_pool` accepts a registered nickname, a pool `global_id`, or a live pool object:
 
 ```python
 hot_entry  = laila.constant(data={"role": "hot"},  nickname="entry_hot")
 warm_entry = laila.constant(data=np.arange(8),     nickname="entry_warm")
 cold_entry = laila.constant(data="archived",       nickname="entry_cold")
 
-laila.memorize(hot_entry,  pool_nickname="hot").wait()
-laila.memorize(warm_entry, pool_nickname="warm").wait()
-laila.memorize(cold_entry, pool_nickname="cold").wait()
+laila.memorize(hot_entry,  dst_pool="hot").wait()
+laila.memorize(warm_entry, dst_pool="warm").wait()
+laila.memorize(cold_entry, dst_pool="cold").wait()
 ```
+
+!!! note "Back-compat aliases"
+    The older `pool_nickname=` / `pool_id=` keywords still work and are folded into `dst_pool` inside `laila.memorize` / `laila.remember`. `laila.forget` uses `pool=` (with the same aliases).
 
 ## Recall each from the correct pool
 
-`remember` takes the same nickname/pool routing kwargs as `memorize`. Asking the wrong pool simply fails to find the gid:
+`remember` takes the same `dst_pool=` routing kwarg as `memorize`. Asking the wrong pool simply fails to find the gid:
 
 ```python
 for nick, pool in [("entry_hot", "hot"), ("entry_warm", "warm"), ("entry_cold", "cold")]:
-    e = laila.remember(nickname=nick, pool_nickname=pool, persist=False).wait()
+    e = laila.remember(nickname=nick, dst_pool=pool, persist=False).wait()
     print(nick, "->", e.data)
 ```
 
@@ -65,13 +68,33 @@ multi.memorize(pool_nickname="hot").wait()
 
 Each leaf is keyed by its gid, so the router can read each from whichever pool it lives in. We register the manifest itself in the `hot` pool so callers know where to find the index.
 
-## `pool_id` for direct routing
+## Routing by gid or by pool object
 
-If you already have a pool handle, pass `pool_id=pool.global_id` to skip the nickname lookup. `pool_id` takes precedence over `pool_nickname`:
+If you already have a pool handle, pass `dst_pool=pool.global_id` (or the pool object itself) to skip the nickname lookup. Resolution order inside the router is: pool object > gid > nickname > alpha pool:
 
 ```python
 direct = laila.constant(data="direct write", nickname="direct_entry")
-laila.memorize(direct, pool_id=hot_pool.global_id).wait()
+laila.memorize(direct, dst_pool=hot_pool.global_id).wait()
+```
+
+## Standalone pools: no registration required
+
+`dst_pool=` also accepts a pool object that was **never** registered with the router. This is handy for scratch pools or one-off exports. Standalone pool objects are local-only: to target a pool on a peer you must name it with a gid/nickname string that exists on that peer.
+
+```python
+from laila.macros.defaults import DefaultPool
+
+scratch = DefaultPool()   # not passed to laila.memory.extend
+scratch_entry = laila.constant(data={"scratch": True}, nickname="scratch_entry")
+
+fut = laila.memorize(scratch_entry, dst_pool=scratch)
+if fut is not None:
+    fut.wait()
+print("in scratch pool:", scratch_entry.global_id in scratch)
+print("in router:", scratch.global_id in laila.memory.pool_router.pools)
+
+back = laila.remember(scratch_entry.global_id, dst_pool=scratch, persist=False)
+print("recovered:", back.data)
 ```
 
 ## Choosing nicknames vs ids
@@ -82,7 +105,8 @@ laila.memorize(direct, pool_id=hot_pool.global_id).wait()
 ## Summary
 
 - `laila.memory.extend(pool, pool_nickname=...)` registers a pool under a friendly name.
-- `memorize` / `remember` / `forget` accept either `pool_id` or `pool_nickname`; `pool_id` wins.
+- `memorize` / `remember` take `dst_pool=`, `forget` takes `pool=`; each accepts a nickname, a gid, or a pool object (`pool_nickname=` / `pool_id=` remain as aliases).
+- A pool object does not need to be registered: `dst_pool=<pool>` works for standalone pools, but only for local operations.
 - Manifests can span pools transparently because each leaf is addressed by its gid.
 
 Next: [Tutorial 15 — Migrating Entries Between Pools](15_pool_migration.md).

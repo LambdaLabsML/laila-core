@@ -121,7 +121,7 @@ class PoolWrapper:
 
         duplicate_futures = {
             entry_id: ConcurrentPackageFuture(
-                taskforce_id=active_policy.central.command.alpha_taskforce,
+                taskforce_id=active_policy.central.command.internal_taskforce,
                 policy_id=active_policy.global_id,
                 purpose=f"manifest_copy:{entry_id}",
             )
@@ -129,7 +129,7 @@ class PoolWrapper:
         }
 
         group_future = GroupFuture(
-            taskforce_id=active_policy.central.command.alpha_taskforce,
+            taskforce_id=active_policy.central.command.internal_taskforce,
             policy_id=active_policy.global_id,
             future_ids=[f.global_id for f in duplicate_futures.values()],
         )

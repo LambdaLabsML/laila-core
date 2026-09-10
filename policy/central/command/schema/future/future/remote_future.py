@@ -218,12 +218,15 @@ class RemoteFuture(_LAILA_IDENTIFIABLE_FUTURE):
             If called from a thread that owns an async event loop.
         """
         from ...exceptions import _check_not_loop_thread
+        from ...parking import park_sync
 
         _check_not_loop_thread()
 
         if self._materialized_set:
             return self._materialized
-        blob = self._comm._send_rpc(
+        # The RPC blocks on a remote future; park the local slot meanwhile.
+        blob = park_sync(
+            self._comm._send_rpc,
             str(self.policy_id),
             ["_wait_future_entry"],
             (self.global_id,),
@@ -240,13 +243,15 @@ class RemoteFuture(_LAILA_IDENTIFIABLE_FUTURE):
 
         The blocking RPC :meth:`wait` is offloaded to a worker thread
         via :func:`asyncio.to_thread`, so the event loop stays free to
-        service other coroutines while the wait is in flight.
+        service other coroutines while the wait is in flight. The current
+        taskforce slot (if any) is parked for the duration.
         """
+        from ...parking import park_async
 
         async def _run():
             return await asyncio.to_thread(self.wait, None)
 
-        return _run().__await__()
+        return park_async(_run()).__await__()
 
     def __repr__(self) -> str:
         """Return a short human-readable representation."""

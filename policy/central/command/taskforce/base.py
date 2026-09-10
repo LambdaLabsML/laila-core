@@ -32,7 +32,7 @@ import threading
 from collections.abc import Callable, Iterable
 from typing import Any
 
-from pydantic import ConfigDict, PrivateAttr
+from pydantic import ConfigDict, Field, PrivateAttr
 
 from .....atomic import AtomicDict
 from .....atomic.definitions.locally_atomic_identifiable_object import (
@@ -102,6 +102,17 @@ class _LAILA_IDENTIFIABLE_TASK_FORCE(
 
     policy_id: _LAILA_IDENTIFIABLE_OBJECT | str | None = CLIExempt(default=None)
 
+    rank: int = Field(
+        default=2,
+        ge=0,
+        description=(
+            "Dependency rank. Work running on a taskforce may only submit to "
+            "taskforces of equal or lower rank; the central command rejects "
+            "upward submissions so the wait-for graph between taskforces stays "
+            "acyclic. laila's internal taskforce has rank 1, user-facing ones 2."
+        ),
+    )
+
     status: TaskForceStatus = CLIExempt(
         default=TaskForceStatus.NOT_STARTED,
         description="Current lifecycle status of this TaskForce.",
@@ -120,6 +131,7 @@ class _LAILA_IDENTIFIABLE_TASK_FORCE(
         construct without starting, pass ``status=TaskForceStatus.PAUSED``
         explicitly.
         """
+        super().model_post_init(__context)
         if self.status == TaskForceStatus.NOT_STARTED:
             self.start()
 

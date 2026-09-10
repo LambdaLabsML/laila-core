@@ -64,7 +64,7 @@ weights = {name: laila.constant(data=p.detach().clone(), nickname=f"tinycnn.{nam
 
 ```python
 manifest = Manifest(data=weights, nickname="tinycnn_manifest")
-laila.memorize(list(weights.values()), pool_nickname="hf").wait()
+laila.memorize(list(weights.values()), dst_pool="hf").wait()
 manifest.memorize(pool_nickname="hf").wait()
 ```
 
@@ -76,7 +76,7 @@ After clearing local state, the manifest nickname is enough to rebuild the model
 
 ```python
 recovered = laila.remember(
-    nickname="tinycnn_manifest", pool_nickname="hf", persist=False,
+    nickname="tinycnn_manifest", dst_pool="hf", persist=False,
 ).wait()
 restored_params = recovered.realized
 

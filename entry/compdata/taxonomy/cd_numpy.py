@@ -6,8 +6,9 @@ language-neutral binary format -- much more compact than pickle for
 numeric data and readable from any process with NumPy installed.
 """
 
+from typing import ClassVar
+
 import numpy as np
-from pydantic import PrivateAttr
 
 from ..transformation.serialization import NumpySerializer
 from .compdata import ComputationalData, _scalar_len, register_cdtype
@@ -25,13 +26,13 @@ class CD_numpyarray(ComputationalData):
     """
 
     data: np.ndarray
-    _serializer: NumpySerializer = PrivateAttr(default_factory=NumpySerializer)
+    _SERIALIZER_CLS: ClassVar[type] = NumpySerializer
 
     # --- Serializer getter/setter ---
     @property
     def serializer(self) -> NumpySerializer:
         """Return the serializer instance (public accessor)."""
-        return self._serializer
+        return self._ensure_serializer()
 
     @serializer.setter
     def serializer(self, value: NumpySerializer):

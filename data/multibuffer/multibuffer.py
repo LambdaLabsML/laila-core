@@ -116,9 +116,7 @@ class MultiBuffer(_LAILA_IDENTIFIABLE_DATA_CONTAINER):
 
     def _index(self, key: Any) -> int:
         if isinstance(key, bool) or not isinstance(key, int):
-            raise TypeError(
-                f"MultiBuffer indices must be integers, not {type(key).__name__}"
-            )
+            raise TypeError(f"MultiBuffer indices must be integers, not {type(key).__name__}")
         return key % self.capacity
 
     def __len__(self) -> int:

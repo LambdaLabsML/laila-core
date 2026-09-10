@@ -108,10 +108,10 @@ Use `laila.guarantee` to ensure all futures are waited on before exiting the blo
 all_entries = list(weight_entries.values()) + [optim_entry]
 
 with laila.guarantee:
-    laila.memorize(all_entries, pool_nickname="ckpt")
+    laila.memorize(all_entries, dst_pool="ckpt")
 
 with laila.guarantee:
-    laila.memorize(manifest, pool_nickname="ckpt")
+    laila.memorize(manifest, dst_pool="ckpt")
 
 print(f"Uploaded {len(all_entries)} parameter entries + 1 manifest")
 ```
@@ -135,9 +135,9 @@ Recall the manifest by its nickname, then use the IDs inside to fetch all parame
 # Recall the manifest
 manifest_future = laila.remember(
     nickname=manifest_nickname,
-    pool_nickname="ckpt",
+    dst_pool="ckpt",
 )
-laila.wait(manifest_future)
+laila.runtime.wait(manifest_future)
 manifest_data = manifest_future.data
 
 print(f"Model class: {manifest_data['model_class']}")
@@ -150,9 +150,9 @@ Now fetch every model parameter:
 param_ids = list(manifest_data["model_params"].values())
 
 with laila.guarantee:
-    param_future = laila.remember(param_ids, pool_nickname="ckpt")
+    param_future = laila.remember(param_ids, dst_pool="ckpt")
 
-laila.wait(param_future)
+laila.runtime.wait(param_future)
 ```
 
 Reconstruct the `state_dict` and load it into a fresh model:
@@ -160,8 +160,8 @@ Reconstruct the `state_dict` and load it into a fresh model:
 ```python
 recalled_state_dict = {}
 for name, gid in manifest_data["model_params"].items():
-    future = laila.remember(gid, pool_nickname="ckpt")
-    laila.wait(future)
+    future = laila.remember(gid, dst_pool="ckpt")
+    laila.runtime.wait(future)
     recalled_state_dict[name] = future.data
 
 model = SimpleCNN()
@@ -174,8 +174,8 @@ print("Model reconstructed from S3 ✓")
 Restore the optimizer:
 
 ```python
-optim_future = laila.remember(manifest_data["optimizer"], pool_nickname="ckpt")
-laila.wait(optim_future)
+optim_future = laila.remember(manifest_data["optimizer"], dst_pool="ckpt")
+laila.runtime.wait(optim_future)
 
 optimizer = torch.optim.Adam(model.parameters())
 optimizer.load_state_dict(optim_future.data)
@@ -199,11 +199,11 @@ print(f"Output: {output}")
 ```python
 all_ids = param_ids + [manifest_data["optimizer"]]
 with laila.guarantee:
-    laila.forget(all_ids, pool_nickname="ckpt")
+    laila.forget(all_ids, pool="ckpt")
 
 laila.forget(
     nickname=manifest_nickname,
-    pool_nickname="ckpt",
+    pool="ckpt",
 )
 print("All entries cleaned up from S3")
 ```

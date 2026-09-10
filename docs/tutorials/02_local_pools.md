@@ -40,6 +40,8 @@ pools = [
 
 The key point: the code inside the loop is identical for all three backends.
 
+Inside the loop, `memorize` / `remember` select the pool with `dst_pool=` and `forget` with `pool=`. Each accepts a registered **nickname** (as here), a pool **`global_id`**, or a live **pool object**; omit it and the call goes to the alpha (default, in-memory) pool. The older `pool_nickname=` / `pool_id=` keywords are still accepted as back-compat aliases.
+
 ```python
 entry = laila.constant(data=np.random.randn(10, 10), nickname="tutorial_matrix")
 
@@ -48,14 +50,14 @@ for nick, pool in pools:
     laila.memory.extend(pool, pool_nickname=nick)
 
     # Memorize (write)
-    future = laila.memorize(entry, pool_nickname=nick)
-    laila.wait(future)
+    future = laila.memorize(entry, dst_pool=nick)
+    laila.runtime.wait(future)
 
-    print(f"[{nick}] memorized — status: {laila.status(future)}")
+    print(f"[{nick}] memorized — status: {laila.runtime.status(future)}")
 
     # Remember (read)
-    recall_future = laila.remember(entry.global_id, pool_nickname=nick)
-    laila.wait(recall_future)
+    recall_future = laila.remember(entry.global_id, dst_pool=nick)
+    laila.runtime.wait(recall_future)
     recalled_data = recall_future.data
 
     print(f"[{nick}] remembered — data shape: {recalled_data.shape}")
@@ -65,8 +67,8 @@ for nick, pool in pools:
     print(f"[{nick}] verified ✓")
 
     # Clean up
-    forget_future = laila.forget(entry.global_id, pool_nickname=nick)
-    laila.wait(forget_future)
+    forget_future = laila.forget(entry.global_id, pool=nick)
+    laila.runtime.wait(forget_future)
     print(f"[{nick}] cleaned up\n")
 ```
 

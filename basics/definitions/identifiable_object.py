@@ -38,7 +38,7 @@ import json
 import re
 import threading
 import uuid
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, PrivateAttr
 
@@ -92,19 +92,35 @@ class _LAILA_IDENTIFIABLE_OBJECT(BaseModel):
     :attr:`global_id`. The properties are settable, so identity can
     be mutated post-construction when needed (rare, but supported
     for record-rewriting workflows).
+
+    Performance note: the private attributes deliberately use plain
+    ``PrivateAttr(default=None)`` rather than ``default_factory``.
+    Pydantic re-inspects a private ``default_factory``'s signature on
+    *every* instantiation, which costs ~25 us per attribute; identity
+    objects are constructed on the hot path of every task and entry, so
+    defaults are computed in :meth:`__init__` instead. Subclasses set
+    their scope list through the :attr:`_DEFAULT_SCOPES` class variable
+    (``_DEFAULT_SCOPES = [_FUTURE_SCOPE]``) instead of overriding
+    ``_scopes`` with a factory.
     """
 
-    _uuid: str = PrivateAttr(default_factory=lambda: str(uuid.uuid4()))
-    _scopes: list[str] = PrivateAttr(default_factory=lambda: list(["OBJECT"]))
+    _DEFAULT_SCOPES: ClassVar[list[str]] = [_OBJECT_SCOPE]
+
+    _uuid: str = PrivateAttr(default=None)
+    _scopes: list[str] = PrivateAttr(default=None)
     _evolution: int | None = PrivateAttr(default=None)
 
     def __init__(self, **data: Any):
         """Stash identity fields in thread-local storage and delegate to Pydantic.
 
-        The values land on ``_INIT_PENDING`` (a thread-local) so they
-        survive Pydantic v2's ``validate_python`` boundary, and are
-        picked up by :meth:`model_post_init` once construction has
-        finished.
+        The *effective* identity (explicit values or freshly generated
+        defaults) lands on ``_INIT_PENDING`` (a thread-local) so it
+        survives Pydantic v2's ``validate_python`` boundary and is
+        already valid when any ``model_post_init`` in the hierarchy
+        runs (subclasses register themselves by ``global_id`` there).
+        :meth:`model_post_init` applies it; a fallback after
+        ``super().__init__`` covers subclasses whose ``model_post_init``
+        does not chain to this base.
         """
         uuid_input = data.pop("uuid", None)
         scopes_input = data.pop("scopes", None)
@@ -112,22 +128,51 @@ class _LAILA_IDENTIFIABLE_OBJECT(BaseModel):
         nickname_input = data.pop("nickname", None)
 
         if nickname_input is not None:
-            _INIT_PENDING.uuid = _LAILA_IDENTIFIABLE_OBJECT.generate_uuid_from_nickname(
-                nickname_input
-            )
+            pending_uuid = _LAILA_IDENTIFIABLE_OBJECT.generate_uuid_from_nickname(nickname_input)
         elif uuid_input is not None:
-            _INIT_PENDING.uuid = str(uuid_input)
+            pending_uuid = str(uuid_input)
         else:
-            _INIT_PENDING.uuid = None
+            pending_uuid = str(uuid.uuid4())
 
-        _INIT_PENDING.scopes = list(scopes_input) if scopes_input is not None else None
+        scopes_explicit = scopes_input is not None
+        if scopes_explicit:
+            pending_scopes = list(scopes_input)
+        else:
+            pending_scopes = list(type(self)._DEFAULT_SCOPES)
+
+        # Save the enclosing construction's staged identity (if any): a
+        # nested identifiable object may be built while Pydantic validates
+        # our fields, and it must not wipe our values before our own
+        # ``model_post_init`` has consumed them.
+        prev = (
+            getattr(_INIT_PENDING, "uuid", None),
+            getattr(_INIT_PENDING, "scopes", None),
+            getattr(_INIT_PENDING, "evolution", None),
+            getattr(_INIT_PENDING, "scopes_explicit", False),
+        )
+        _INIT_PENDING.uuid = pending_uuid
+        _INIT_PENDING.scopes = pending_scopes
         _INIT_PENDING.evolution = evolution_input
+        _INIT_PENDING.scopes_explicit = scopes_explicit
 
-        super().__init__(**data)
+        try:
+            super().__init__(**data)
+        finally:
+            (
+                _INIT_PENDING.uuid,
+                _INIT_PENDING.scopes,
+                _INIT_PENDING.evolution,
+                _INIT_PENDING.scopes_explicit,
+            ) = prev
 
-        _INIT_PENDING.uuid = None
-        _INIT_PENDING.scopes = None
-        _INIT_PENDING.evolution = None
+        # Fallback for subclasses whose model_post_init does not chain to
+        # ours (or that still declare ``_scopes`` with a default_factory).
+        if self._uuid is None:
+            self._uuid = pending_uuid
+        if self._scopes is None or (scopes_explicit and self._scopes != pending_scopes):
+            self._scopes = pending_scopes
+        if evolution_input is not None and self._evolution is None:
+            self._evolution = evolution_input
 
     def model_post_init(self, __context: Any) -> None:
         """Copy staged identity values from ``_INIT_PENDING`` onto private attrs.
@@ -135,14 +180,20 @@ class _LAILA_IDENTIFIABLE_OBJECT(BaseModel):
         This is the back half of the construction trick described in
         :meth:`__init__`. Anything that was stashed on the thread-local
         is now safely applied to the instance after Pydantic has
-        finished validation.
+        finished validation. Subclasses that override this method must
+        call ``super().model_post_init(__context)`` *first* so that
+        ``self.global_id`` is valid for their own registration logic.
         """
         pending_uuid = getattr(_INIT_PENDING, "uuid", None)
         if pending_uuid is not None:
             self._uuid = pending_uuid
         pending_scopes = getattr(_INIT_PENDING, "scopes", None)
         if pending_scopes is not None:
-            self._scopes = pending_scopes
+            # A subclass may still declare ``_scopes`` with its own
+            # default_factory; an explicit ``scopes=`` argument always
+            # wins, but a generated default must not clobber it.
+            if self._scopes is None or getattr(_INIT_PENDING, "scopes_explicit", False):
+                self._scopes = pending_scopes
         pending_evolution = getattr(_INIT_PENDING, "evolution", None)
         if pending_evolution is not None:
             self._evolution = pending_evolution

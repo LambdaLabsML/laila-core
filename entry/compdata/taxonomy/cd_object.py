@@ -8,8 +8,7 @@ on the wire.
 """
 
 import copy
-
-from pydantic import PrivateAttr
+from typing import ClassVar
 
 from ..transformation.serialization import PickleSerializer
 from .compdata import ComputationalData, _scalar_len, register_cdtype
@@ -26,13 +25,13 @@ class CD_generic(ComputationalData):
     :func:`_scalar_len`).
     """
 
-    _serializer: PickleSerializer = PrivateAttr(default_factory=PickleSerializer)
+    _SERIALIZER_CLS: ClassVar[type] = PickleSerializer
 
     # --- Serializer getter/setter ---
     @property
     def serializer(self) -> PickleSerializer:
         """Return the serializer instance (public accessor)."""
-        return self._serializer
+        return self._ensure_serializer()
 
     @serializer.setter
     def serializer(self, value: PickleSerializer):

@@ -9,6 +9,7 @@ compdata mirror (pickle/msgpack/npy) for every value type.
 
   C_HARNESS=/path/to/c_harness python3 run_interop.py [--qemu-uri tcp://host:port]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -17,9 +18,8 @@ import subprocess
 import sys
 import time
 
-import numpy as np
-
 import laila
+import numpy as np
 from laila.policy.central.communication.protocols.ip_app.tcp import (
     _LAILA_IDENTIFIABLE_TCP_COMM_PROTOCOL as TCP,
 )
@@ -33,8 +33,19 @@ HARNESS = os.environ.get("C_HARNESS", "")
 # Values spanning the compdata serializers: pickle (scalars/str/bytes),
 # msgpack (dict/list), and nesting.
 VALUES = [
-    "hello", "", "\u00fcni\U0001f600", 7, -98765, 9223372036854775807, 3.5, True, False,
-    b"\x00\x01\xfe\xff", [1, 2, 3], {"b": 1, "a": 2}, {"x": {"y": [1, {"z": 2}]}, "n": None},
+    "hello",
+    "",
+    "\u00fcni\U0001f600",
+    7,
+    -98765,
+    9223372036854775807,
+    3.5,
+    True,
+    False,
+    b"\x00\x01\xfe\xff",
+    [1, 2, 3],
+    {"b": 1, "a": 2},
+    {"x": {"y": [1, {"z": 2}]}, "n": None},
 ]
 
 # Entries the laila-C harness builds via its implicit LailaValue constructors
@@ -80,7 +91,11 @@ class CServer:
     def __init__(self, value):
         self.proc = subprocess.Popen(
             [HARNESS, "serve", "0", SECRET, value],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+        )
         self.policy = self.alpha = self.store = self.port = None
         deadline = time.time() + 15
         while time.time() < deadline:
@@ -110,8 +125,9 @@ class CServer:
 
 
 def c_client(mode, uri, *rest):
-    out = subprocess.run([HARNESS, mode, uri, SECRET, *rest],
-                         capture_output=True, text=True, timeout=30)
+    out = subprocess.run(
+        [HARNESS, mode, uri, SECRET, *rest], capture_output=True, text=True, timeout=30
+    )
     return (out.stdout + out.stderr).strip()
 
 
@@ -185,7 +201,10 @@ def c_client_to_py_server(scheme, ports):
         if not got_ok:
             typed_ok = False
             print(f"      typed mismatch {kind}: {out!r}")
-    check(typed_ok, f"[{scheme}] C memorizes each implicit-ctor kind into Python; Python reads them back")
+    check(
+        typed_ok,
+        f"[{scheme}] C memorizes each implicit-ctor kind into Python; Python reads them back",
+    )
 
     out = c_client("forget", uri, seed.global_id)
     gone = False
@@ -215,7 +234,9 @@ def main():
         print(f"[leg] Python client -> emulated ESP32 device ({args.qemu_uri})")
         pid = laila.add_peer(args.qemu_uri, SECRET)
         if args.device_gid:
-            g = laila.remember(args.device_gid, dst_policy=pid, dst_pool="remote-store", persist=False)
+            g = laila.remember(
+                args.device_gid, dst_policy=pid, dst_pool="remote-store", persist=False
+            )
             laila.wait(g)
             check(g.result.data == "sensor=42", "PY remembers the device's seeded entry")
         e = laila.constant(data="py-to-device")

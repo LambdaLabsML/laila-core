@@ -109,8 +109,8 @@ Rebuild the manifest's identity from its nickname, recall the blueprint from S3,
 manifest = Manifest(nickname=manifest_nickname)
 
 with laila.guarantee:
-    ref = laila.remember(manifest.global_id, pool_nickname="sentiment_pool")
-blueprint = ref.data[0]
+    ref = laila.remember(manifest.global_id, dst_pool="sentiment_pool")
+blueprint = ref.data
 
 manifest = Manifest(data=blueprint, nickname=manifest_nickname)
 ```

@@ -699,12 +699,12 @@ def _build_policy_from_dump(
     ``class_token`` to dispatch to the right subclass. Protocols are
     registered without calling ``start()``.
     """
+    from ...data.schema.base import _LAILA_IDENTIFIABLE_POOL
     from ...macros.defaults import DefaultPolicy
     from ...policy.central.command.taskforce.base import _LAILA_IDENTIFIABLE_TASK_FORCE
     from ...policy.central.communication.protocols.base import (
         _LAILA_IDENTIFIABLE_COMM_PROTOCOL,
     )
-    from ...data.schema.base import _LAILA_IDENTIFIABLE_POOL
     from ..definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 
     policy = DefaultPolicy()
@@ -783,6 +783,14 @@ def _build_policy_from_dump(
             policy.central.command.alpha_taskforce = str(alpha_tf)
         else:
             policy.central.command.alpha_taskforce = next(iter(policy.central.command.taskforces))
+
+        internal_tf = cmd_data.get("internal_taskforce")
+        if internal_tf is not None and str(internal_tf) in policy.central.command.taskforces:
+            policy.central.command.internal_taskforce = str(internal_tf)
+        else:
+            # Environments dumped before the internal/alpha split (or with a
+            # stale pointer) run laila's internals on the alpha taskforce.
+            policy.central.command.internal_taskforce = policy.central.command.alpha_taskforce
 
     mem_data = central_data.get("memory") or {}
     if hasattr(mem_data, "toDict"):

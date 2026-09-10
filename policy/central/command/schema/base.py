@@ -25,6 +25,7 @@ from .....basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS, CLIExe
 from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from .....macros.strings import _CENTRAL_COMMAND_SCOPE
 from .exceptions import (
+    NestedCommandSubmitError,
     _check_no_pending_submit_owner,
     ensure_coroutine_function,
 )
@@ -37,9 +38,11 @@ class _LAILA_IDENTIFIABLE_CENTRAL_COMMAND(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENT
     Owns
     ----
     - ``taskforces`` : ``{gid: TaskForce}`` -- every registered taskforce.
-    - ``alpha_taskforce`` : the gid of the default taskforce. Created
-      automatically by :meth:`model_post_init` if no taskforces were
-      provided.
+    - ``alpha_taskforce`` : the gid of the default (user-facing) taskforce.
+    - ``internal_taskforce`` : the gid of the taskforce laila's own
+      machinery (memory fetches/writes, manifest realisation) runs on.
+      Both are created automatically by :meth:`model_post_init` if no
+      taskforces were provided.
     - ``policy_id`` : back-reference to the owning policy's gid.
 
     Provides
@@ -56,29 +59,46 @@ class _LAILA_IDENTIFIABLE_CENTRAL_COMMAND(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENT
 
     taskforces: dict[str, Any] = CLIExempt(default_factory=dict)
     alpha_taskforce: str | None = None
+    internal_taskforce: str | None = None
     policy_id: _LAILA_IDENTIFIABLE_OBJECT | str | None = CLIExempt(default=None)
     _guarantee_local: threading.local = PrivateAttr(default_factory=threading.local)
 
     def model_post_init(self, __context: Any) -> None:
-        """Create a default async taskforce if none was registered.
+        """Create the default taskforces if none were registered.
 
-        When ``taskforces`` is empty, auto-creates a single
-        ``DefaultTaskForce`` (a ``PythonAsyncThreadPoolTaskForce``) and
-        points ``alpha_taskforce`` at it. There is no longer a built-in
-        IO/compute role split — sync work submitted to the async taskforce
-        runs inline on whatever loop thread the dispatcher picks; async
-        work interleaves on loop slots. Users can still register
-        additional taskforces (e.g. process pools) via ``add_taskforce``.
+        When ``taskforces`` is empty, auto-creates two
+        ``DefaultTaskForce`` instances (``PythonAsyncThreadPoolTaskForce``):
+
+        - the **alpha** taskforce (``rank=2``) receives user work
+          submitted without an explicit ``taskforce_id``;
+        - the **internal** taskforce (``rank=1``) runs laila's own
+          machinery (``remember`` / ``memorize`` / ``forget`` fetches,
+          manifest realisation, ``laila.build``).
+
+        The split keeps a flood of user jobs from starving the internal
+        fetches those very jobs depend on, and the rank guard in
+        :meth:`submit` keeps the dependency between the two acyclic.
+        Users can still register additional taskforces (e.g. process
+        pools) via :meth:`add_taskforce`. When the registry is restored
+        from an environment that predates the split (one taskforce),
+        ``internal_taskforce`` falls back to ``alpha_taskforce``.
         """
+        super().model_post_init(__context)
         if len(self.taskforces) == 0:
             from .....macros.defaults import DefaultTaskForce
 
-            tf = DefaultTaskForce(policy_id=self.policy_id)
-            self.taskforces[tf.global_id] = tf
-            self.alpha_taskforce = tf.global_id
+            alpha = DefaultTaskForce(policy_id=self.policy_id, rank=2)
+            self.taskforces[alpha.global_id] = alpha
+            self.alpha_taskforce = alpha.global_id
+
+            internal = DefaultTaskForce(policy_id=self.policy_id, rank=1)
+            self.taskforces[internal.global_id] = internal
+            self.internal_taskforce = internal.global_id
 
         if self.alpha_taskforce is None or self.alpha_taskforce not in self.taskforces:
             self.alpha_taskforce = next(iter(self.taskforces))
+        if self.internal_taskforce is None or self.internal_taskforce not in self.taskforces:
+            self.internal_taskforce = self.alpha_taskforce
 
         return self
 
@@ -172,18 +192,28 @@ class _LAILA_IDENTIFIABLE_CENTRAL_COMMAND(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENT
           returns the lone result (one task) or a list of results
           (many tasks).
 
-        Sync callables are auto-wrapped into trivial coroutine
-        functions at submission time so the runner sees a uniform
-        awaitable contract. The wrapped sync body still runs inline
-        on its loop thread (no implicit thread-pool offload).
+        Sync callables are auto-wrapped into coroutine functions at
+        submission time so the runner sees a uniform awaitable
+        contract; the wrapped sync body is offloaded to the taskforce's
+        sync executor so it never blocks a loop thread.
 
-        Reentrancy guard
-        ----------------
-        Calling :meth:`submit` from inside a function decorated
-        ``@no_command_submit`` raises :exc:`NestedCommandSubmitError`.
-        This guards against accidental "submit-inside-task" patterns
-        that can deadlock the loop when the task itself was running on
-        the same loop thread.
+        Nested submission
+        -----------------
+        Submitting from *inside* a running task is supported and
+        deadlock-free: while the parent awaits (or blocks in ``wait()``
+        on) the child future its taskforce slot is parked, so the child can
+        always be dispatched -- see
+        :mod:`laila.policy.central.command.schema.parking`.
+
+        Guards
+        ------
+        - Calling :meth:`submit` from inside a function decorated
+          ``@no_command_submit`` raises :exc:`NestedCommandSubmitError`.
+        - Submitting from a task running on taskforce *A* to a taskforce
+          *B* with a strictly higher ``rank`` raises
+          :exc:`NestedCommandSubmitError`: dependencies between
+          taskforces must point downward (user -> internal), never
+          upward, so the inter-taskforce wait-for graph stays acyclic.
 
         Parameters
         ----------
@@ -215,12 +245,40 @@ class _LAILA_IDENTIFIABLE_CENTRAL_COMMAND(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENT
         if taskforce_id is None:
             taskforce_id = self.alpha_taskforce
 
+        target = self.taskforces[taskforce_id]
+        self._check_rank(target)
+
         wrapped = [ensure_coroutine_function(t) for t in tasks]
 
-        return self.taskforces[taskforce_id].submit(
+        return target.submit(
             tasks=wrapped,
             wait=wait,
         )
+
+    def _check_rank(self, target: Any) -> None:
+        """Reject a submission that would point *up* the taskforce ranks.
+
+        Only applies when the caller is itself running inside a slot of
+        one of this command's taskforces; submissions from user threads
+        are never restricted.
+        """
+        from .parking import _CURRENT_SLOT
+
+        slot = _CURRENT_SLOT.get()
+        if slot is None:
+            return
+        source = slot.tf
+        if source is target or getattr(source, "global_id", None) not in self.taskforces:
+            return
+        src_rank = getattr(source, "rank", 2)
+        dst_rank = getattr(target, "rank", 2)
+        if dst_rank > src_rank:
+            raise NestedCommandSubmitError(
+                f"Task running on taskforce {source.global_id} (rank {src_rank}) "
+                f"may not submit to taskforce {target.global_id} (rank {dst_rank}): "
+                "submissions must target equal or lower rank so the taskforce "
+                "dependency graph stays acyclic."
+            )
 
     def shutdown(self, wait: bool = True, cancel_pending: bool = False) -> None:
         """Shut down every registered task-force.

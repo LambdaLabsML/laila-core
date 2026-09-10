@@ -105,7 +105,7 @@ laila.wait(future_remember)
 # .data unwraps the entry and returns your original object,
 # preserving the exact Python type that was memorized.
 print(type(future_remember.data))  # <class 'numpy.ndarray'>
-print(future_remember.data)        # your numpy array, intact
+print(future_remember.data)  # your numpy array, intact
 ```
 
 !!! note "What just happened?"

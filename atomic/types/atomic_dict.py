@@ -98,16 +98,20 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
             self._order = list(self.data.keys())
 
     def _ensure_order_synced(self) -> None:
-        """Re-sync the order list with the data dict if they diverge."""
+        """Re-sync the order list with the data dict if they diverge.
+
+        Every mutation path (:meth:`_set_nolock`, :meth:`_del_nolock`,
+        :meth:`pop_next`, :meth:`clear`, ...) keeps ``_order`` and
+        ``data`` in step, so divergence can only come from callers
+        mutating ``self.data`` directly. That is detected by the O(1)
+        length comparison. This method runs on *every* ``atomic()`` entry
+        and iteration -- the taskforce queue enters it once per submitted
+        task -- so it must not walk the keys: a full O(n) validation here
+        made every submit quadratic in the number of pending tasks. Use
+        :meth:`reindex` to force a rebuild after out-of-band edits.
+        """
         if len(self._order) != len(self.data):
             self._order = list(self.data.keys())
-            return
-        seen = set()
-        for k in self._order:
-            if k not in self.data or k in seen:
-                self._order = list(self.data.keys())
-                return
-            seen.add(k)
 
     def reindex(self) -> None:
         """Rebuild the insertion-order index from the underlying dict."""
@@ -198,13 +202,24 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
             return k, v
 
     def pop_next(self) -> tuple[K, V]:
-        """Remove and return the *first* inserted ``(key, value)`` pair."""
+        """Remove and return the *first* inserted ``(key, value)`` pair.
+
+        Hot path for queue-style consumers (the taskforce dispatcher pops
+        one item per task), so this deliberately avoids the O(n) Python
+        walk in :meth:`_ensure_order_synced`: the backing ``dict`` is
+        itself insertion-ordered and authoritative, so its first key *is*
+        the oldest entry. The ``_order`` index is patched in O(1) when it
+        agrees (the common case) and rebuilt otherwise.
+        """
         with self._lock:
-            self._ensure_order_synced()
-            if not self._order:
+            if not self.data:
                 raise KeyError("AtomicDict is empty")
-            k = self._order.pop(0)
+            k = next(iter(self.data))
             v = self.data.pop(k)
+            if self._order and self._order[0] == k:
+                del self._order[0]
+            else:
+                self._order = list(self.data.keys())
             return k, v
 
     def clear(self) -> None:

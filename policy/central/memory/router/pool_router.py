@@ -26,9 +26,9 @@ from pydantic import ConfigDict, Field, PrivateAttr
 
 from .....basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS, CLIExempt
 from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+from .....data.schema.base import _LAILA_IDENTIFIABLE_POOL
 from .....entry import Entry
 from .....macros.strings import _DEFAULT_POOL_NICKNAME, _POOL_ROUTER_SCOPE
-from .....data.schema.base import _LAILA_IDENTIFIABLE_POOL
 
 
 class _LAILA_IDENTIFIABLE_POOL_ROUTER(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
@@ -59,6 +59,7 @@ class _LAILA_IDENTIFIABLE_POOL_ROUTER(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIA
         calling :meth:`Policy.extend` with a "real" pool (filesystem,
         S3, postgres, ...).
         """
+        super().model_post_init(__context)
         if len(self.pools) == 0:
             from .....macros.defaults import DefaultPool
 

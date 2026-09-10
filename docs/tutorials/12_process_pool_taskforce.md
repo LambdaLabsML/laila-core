@@ -31,7 +31,7 @@ proc_tf.start()
 print(proc_tf.global_id)
 ```
 
-`laila.command.taskforces` is a dict keyed by `global_id`. After this call there are two taskforces registered — the default async-thread pool and our new process pool.
+`laila.command.taskforces` is a dict keyed by `global_id`. After this call there are three taskforces registered — the default async-thread **alpha** pool (user work), the **internal** pool (LAILA's own fetches and writes), and our new process pool.
 
 ## A CPU-bound workload
 

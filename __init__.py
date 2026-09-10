@@ -802,8 +802,8 @@ def build(entry, *, taskforce_id: Optional["str"] = None):
       ``await``\\ s :func:`Manifest.async_realized` to recursively
       materialize every referenced entry (each of which may itself be
       a complex build), then offloads the user's sync builder body to
-      :func:`asyncio.to_thread` so that any internal blocking ``.wait()``
-      calls don't deadlock the loop.
+      the taskforce's sync executor so that any internal blocking
+      ``.wait()`` calls park the slot instead of blocking the loop.
 
     Calling conventions
     -------------------
@@ -839,6 +839,17 @@ def build(entry, *, taskforce_id: Optional["str"] = None):
     RuntimeError
         Raised inside the future when *entry* has no constitution or is
         already built. (The submission itself does not raise.)
+    CyclicDependencyError
+        Raised *synchronously* when this call is made from inside a
+        resolution (build / remember) of the same entry -- i.e. the
+        entry's constitution transitively depends on the entry itself.
+
+    Notes
+    -----
+    Constitution bodies may freely call ``laila.remember`` /
+    ``laila.build`` / ``manifest.realized``: nested waits park the
+    taskforce slot, so deep or wide dependency trees cannot deadlock
+    the scheduler regardless of taskforce size.
 
     See Also
     --------
@@ -846,8 +857,21 @@ def build(entry, *, taskforce_id: Optional["str"] = None):
     laila.remember : fetch (and optionally build) an entry from a pool.
     laila.entry.Entry.variable : create an entry with a constitution.
     """
+    from .policy.central.command.schema.parking import _RESOLVE_CHAIN, check_resolve_cycle
+
+    # A build that (transitively, through its constitution body) triggers a
+    # build of the same entry can never finish; fail fast instead.
+    check_resolve_cycle(entry.global_id)
+
+    async def _build_on_chain():
+        token = _RESOLVE_CHAIN.set(_RESOLVE_CHAIN.get() + (entry.global_id,))
+        try:
+            return await entry._build_async()
+        finally:
+            _RESOLVE_CHAIN.reset(token)
+
     command = get_active_policy().central.command
-    return command.submit([entry._build_async], taskforce_id=taskforce_id)
+    return command.submit([_build_on_chain], taskforce_id=taskforce_id)
 
 
 def _route_memory_to_peer(proxy, op: str, args: tuple, kwargs: dict):
@@ -893,7 +917,9 @@ def _route_memory_to_peer(proxy, op: str, args: tuple, kwargs: dict):
 
             return _store
 
-        return command.submit([_make_store(e) for e in entries_list])
+        return command.submit(
+            [_make_store(e) for e in entries_list], taskforce_id=command.internal_taskforce
+        )
 
     if op == "remember":
         entry_ids = args[0] if args else kwargs.get("entry_ids")
@@ -910,7 +936,9 @@ def _route_memory_to_peer(proxy, op: str, args: tuple, kwargs: dict):
 
             return _fetch
 
-        return command.submit([_make_fetch(eid) for eid in ids])
+        return command.submit(
+            [_make_fetch(eid) for eid in ids], taskforce_id=command.internal_taskforce
+        )
 
     if op == "forget":
         entry_ids = args[0] if args else kwargs.get("entry_ids")
@@ -923,7 +951,7 @@ def _route_memory_to_peer(proxy, op: str, args: tuple, kwargs: dict):
         async def _delete_async():
             return await _asyncio.to_thread(_delete)
 
-        return command.submit([_delete_async])
+        return command.submit([_delete_async], taskforce_id=command.internal_taskforce)
 
     # Any other op: pass straight through (gids are JSON-safe).
     return getattr(proxy.central.memory, op)(*args, **kwargs)

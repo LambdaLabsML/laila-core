@@ -52,10 +52,10 @@ laila.memory.extend(s3_pool, pool_nickname="s3")
 matrix = np.random.randn(100, 100)
 np_entry = laila.constant(data=matrix, nickname="np_matrix")
 
-future = laila.memorize(np_entry, pool_nickname="s3")
-laila.wait(future)
+future = laila.memorize(np_entry, dst_pool="s3")
+laila.runtime.wait(future)
 
-print(f"Status: {laila.status(future)}")
+print(f"Status: {laila.runtime.status(future)}")
 print(f"Stored global_id: {np_entry.global_id}")
 ```
 
@@ -65,10 +65,10 @@ print(f"Stored global_id: {np_entry.global_id}")
 image_tensor = torch.randn(3, 224, 224)
 torch_entry = laila.constant(data=image_tensor, nickname="torch_img")
 
-future = laila.memorize(torch_entry, pool_nickname="s3")
-laila.wait(future)
+future = laila.memorize(torch_entry, dst_pool="s3")
+laila.runtime.wait(future)
 
-print(f"Status: {laila.status(future)}")
+print(f"Status: {laila.runtime.status(future)}")
 print(f"Stored global_id: {torch_entry.global_id}")
 ```
 
@@ -83,16 +83,16 @@ torch_gid = torch_entry.global_id
 del matrix, np_entry, image_tensor, torch_entry
 
 # Recall numpy array
-np_future = laila.remember(np_gid, pool_nickname="s3")
-laila.wait(np_future)
+np_future = laila.remember(np_gid, dst_pool="s3")
+laila.runtime.wait(np_future)
 recalled_np = np_future.data
 
 print(f"NumPy shape: {recalled_np.shape}")   # (100, 100)
 print(f"NumPy dtype: {recalled_np.dtype}")    # float64
 
 # Recall torch tensor
-torch_future = laila.remember(torch_gid, pool_nickname="s3")
-laila.wait(torch_future)
+torch_future = laila.remember(torch_gid, dst_pool="s3")
+laila.runtime.wait(torch_future)
 recalled_torch = torch_future.data
 
 print(f"Torch shape: {recalled_torch.shape}") # torch.Size([3, 224, 224])
@@ -105,7 +105,7 @@ LAILA provides several ways to inspect what happened during an async operation:
 
 ```python
 # Simple status check
-print(laila.status(np_future))
+print(laila.runtime.status(np_future))
 # FutureStatus.FINISHED
 
 # Detailed breakdown (useful for GroupFutures with multiple children)
@@ -122,15 +122,15 @@ print(future_obj.exception)  # None if everything succeeded
 ## Clean up
 
 ```python
-laila.forget(np_gid, pool_nickname="s3")
-laila.forget(torch_gid, pool_nickname="s3")
+laila.forget(np_gid, pool="s3")
+laila.forget(torch_gid, pool="s3")
 ```
 
 ## Summary
 
 - S3Pool takes bucket name and AWS credentials. The API is identical to local pools.
 - numpy arrays and PyTorch tensors are serialized and deserialized automatically — types and shapes are preserved.
-- `laila.status(future)` gives you a quick status check; `.what` and `.exception` provide deeper introspection.
+- `laila.runtime.status(future)` gives you a quick status check; `.what` and `.exception` provide deeper introspection.
 - Nicknames give entries stable, human-readable identities backed by deterministic UUIDs.
 
 Next: [Tutorial 4 — Model Checkpoint and Reload](04_model_checkpoint.md), where you dump an entire model and optimizer to S3 and reload from a single manifest.

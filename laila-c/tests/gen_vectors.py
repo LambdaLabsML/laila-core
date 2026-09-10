@@ -8,6 +8,7 @@ Writes JSON fixtures into laila-c/tests/vectors/ that the C++ `xlang` suite
 reads back, so laila-C is verified against laila's actual output (UUID5 +
 Entry.as_dict wire format).
 """
+
 import base64
 import json
 import os
@@ -60,13 +61,16 @@ samples = [
 entries = []
 for name, value in samples:
     e = laila.constant(data=value)
-    entries.append({
-        "name": name,
-        "as_dict": e.as_dict(),
-        "global_id": e.global_id,
-        "uuid": e.uuid,
-    })
+    entries.append(
+        {
+            "name": name,
+            "as_dict": e.as_dict(),
+            "global_id": e.global_id,
+            "uuid": e.uuid,
+        }
+    )
 write("entries.json", entries)
+
 
 # --- compdata vectors: entry.serialize(transformation_base64) per type ---
 # Each vector carries Python's real serialized form (base64(pickle/msgpack/npy)
@@ -88,7 +92,12 @@ def add(name, check, payload, **extra):
 # scalars + str/bytes -> pickle (the Python default serializer)
 add("str", "value", "hello laila", value="hello laila")
 add("empty_str", "value", "", value="")
-add("unicode", "value", "\u00fcn\u00efc\u00f6d\u00e9 \U0001f600", value="\u00fcn\u00efc\u00f6d\u00e9 \U0001f600")
+add(
+    "unicode",
+    "value",
+    "\u00fcn\u00efc\u00f6d\u00e9 \U0001f600",
+    value="\u00fcn\u00efc\u00f6d\u00e9 \U0001f600",
+)
 add("int_small", "value", 7, value=7)
 add("int_neg", "value", -98765, value=-98765)
 add("int_max64", "value", 9223372036854775807, value=9223372036854775807)
@@ -98,22 +107,51 @@ add("float_neg", "value", -2.5e-10, value=-2.5e-10)
 add("bool_true", "value", True, value=True)
 add("bool_false", "value", False, value=False)
 cd.append({"name": "none", "check": "none", "serialized": ser(None)})
-add("bytes", "bytes", b"\x00\x01\x02\xfe\xff", b64=base64.b64encode(b"\x00\x01\x02\xfe\xff").decode())
+add(
+    "bytes",
+    "bytes",
+    b"\x00\x01\x02\xfe\xff",
+    b64=base64.b64encode(b"\x00\x01\x02\xfe\xff").decode(),
+)
 
 # dict/list/tuple -> msgpack (byte-identical check)
 add("list", "value", [1, 2, 3, 4], value=[1, 2, 3, 4], mp_identity=True)
-add("dict_ordered", "value", {"b": 1, "a": 2, "z": 3}, value={"b": 1, "a": 2, "z": 3}, mp_identity=True)
-add("nested", "value", {"a": {"b": [1, 2, {"c": 3}]}}, value={"a": {"b": [1, 2, {"c": 3}]}}, mp_identity=True)
-add("mixed", "value", {"i": 1, "f": 2.5, "s": "x", "b": True, "n": None, "l": [1, "two"]},
-    value={"i": 1, "f": 2.5, "s": "x", "b": True, "n": None, "l": [1, "two"]}, mp_identity=True)
+add(
+    "dict_ordered",
+    "value",
+    {"b": 1, "a": 2, "z": 3},
+    value={"b": 1, "a": 2, "z": 3},
+    mp_identity=True,
+)
+add(
+    "nested",
+    "value",
+    {"a": {"b": [1, 2, {"c": 3}]}},
+    value={"a": {"b": [1, 2, {"c": 3}]}},
+    mp_identity=True,
+)
+add(
+    "mixed",
+    "value",
+    {"i": 1, "f": 2.5, "s": "x", "b": True, "n": None, "l": [1, "two"]},
+    value={"i": 1, "f": 2.5, "s": "x", "b": True, "n": None, "l": [1, "two"]},
+    mp_identity=True,
+)
 
 # nested bytes inside a dict (msgpack bin)
 _db = {"k": b"\xde\xad\xbe\xef"}
-cd.append({"name": "dict_bytes", "check": "nested_bytes", "serialized": ser(_db),
-           "key": "k", "b64": base64.b64encode(b"\xde\xad\xbe\xef").decode()})
+cd.append(
+    {
+        "name": "dict_bytes",
+        "check": "nested_bytes",
+        "serialized": ser(_db),
+        "key": "k",
+        "b64": base64.b64encode(b"\xde\xad\xbe\xef").decode(),
+    }
+)
 
 # arbitrary-precision int beyond int64 -> pickle LONG; laila-C must raise UNSUPPORTED
-cd.append({"name": "bignum", "check": "bignum_unsupported", "serialized": ser(10 ** 30)})
+cd.append({"name": "bignum", "check": "bignum_unsupported", "serialized": ser(10**30)})
 
 # numpy arrays -> .npy (byte-identical check)
 try:
@@ -124,11 +162,16 @@ try:
         ("npy_i32", np.array([1, 2, 3, 4, 5], dtype="<i4")),
         ("npy_u8", np.arange(6, dtype="u1").reshape(2, 3)),
     ]:
-        cd.append({
-            "name": nm, "check": "numpy", "serialized": ser(arr),
-            "dtype": arr.dtype.str, "shape": list(arr.shape),
-            "raw_b64": base64.b64encode(arr.tobytes()).decode(),
-        })
+        cd.append(
+            {
+                "name": nm,
+                "check": "numpy",
+                "serialized": ser(arr),
+                "dtype": arr.dtype.str,
+                "shape": list(arr.shape),
+                "raw_b64": base64.b64encode(arr.tobytes()).decode(),
+            }
+        )
 except ModuleNotFoundError:
     print("numpy missing; skipping npy vectors")
 

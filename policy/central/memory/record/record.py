@@ -53,6 +53,7 @@ class Record(BaseModel):
         Also pins ``borrower`` to ``None`` since the borrower-attribution
         flow is not yet wired through the rest of the system.
         """
+        super().model_post_init(__context)
         from ..... import active_policy
 
         if self.recorder is None:

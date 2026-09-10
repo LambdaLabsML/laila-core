@@ -449,7 +449,12 @@ class Logger(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
                     traceback.format_exception(type(exc), exc, exc.__traceback__)
                 )
 
-        result_id = getattr(future, "_result_global_id", None)
+        # ``result_global_id`` forces the lazy Entry wrap of a raw result;
+        # acceptable here because we only get this far when logging is on.
+        try:
+            result_id = getattr(future, "result_global_id", None)
+        except Exception:
+            result_id = None
 
         self.emit(
             build_record(

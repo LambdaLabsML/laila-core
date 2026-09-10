@@ -41,8 +41,8 @@ The trailing `-0` is what makes evolutions addressable: two entries with the sam
 `laila.remember(nickname=..., evolution=N)` derives the same `global_id` you saw above. Pass the evolution explicitly to round-trip a single version:
 
 ```python
-laila.memorize(v, pool_nickname="evo").wait()
-recovered = laila.remember(nickname="model.weights", evolution=0, pool_nickname="evo").wait()
+laila.memorize(v, dst_pool="evo").wait()
+recovered = laila.remember(nickname="model.weights", evolution=0, dst_pool="evo").wait()
 print(recovered.data)
 # [0.1, 0.2, 0.3]
 ```
@@ -55,7 +55,7 @@ print(recovered.data)
 history = [v]
 for step in range(1, 5):
     next_v = history[-1].evolve(data=[x + 0.1 for x in history[-1].data])
-    laila.memorize(next_v, pool_nickname="evo").wait()
+    laila.memorize(next_v, dst_pool="evo").wait()
     history.append(next_v)
 ```
 
@@ -63,7 +63,7 @@ All five evolutions now live in the pool as distinct keys. Recall any of them by
 
 ```python
 for i in range(5):
-    e = laila.remember(nickname="model.weights", evolution=i, pool_nickname="evo").wait()
+    e = laila.remember(nickname="model.weights", evolution=i, dst_pool="evo").wait()
     print(f"evolution {i}: {e.data}")
 ```
 

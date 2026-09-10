@@ -75,9 +75,9 @@ laila.memory.extend(DefaultPool(), pool_nickname="poly_store")
 
 triangle = Polygon(vertices=[(0.0, 0.0), (1.0, 0.0), (0.5, 1.0)])
 entry = laila.constant(data=triangle, nickname="my_triangle")
-laila.memorize(entry, pool_nickname="poly_store").wait()
+laila.memorize(entry, dst_pool="poly_store").wait()
 
-recovered = laila.remember(nickname="my_triangle", pool_nickname="poly_store", persist=False).wait()
+recovered = laila.remember(nickname="my_triangle", dst_pool="poly_store", persist=False).wait()
 print(recovered.data)
 # Polygon(vertices=[(0.0, 0.0), (1.0, 0.0), (0.5, 1.0)])
 ```

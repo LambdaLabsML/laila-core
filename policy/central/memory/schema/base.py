@@ -10,8 +10,9 @@ parts:
   destination and the cache target for ``remember(..., persist=True)``,
 - the per-pool :class:`TransformationSequence` that defines the
   serialization pipeline (e.g. ``base64 -> zlib -> msgpack``),
-- the alpha task-force, where every per-entry coroutine is submitted
-  for concurrent I/O.
+- the internal task-force (``command.internal_taskforce``), where every
+  per-entry coroutine is submitted for concurrent I/O, separate from
+  the alpha task-force that runs user-submitted work.
 
 Two operation flavors live side-by-side:
 
@@ -29,6 +30,7 @@ concurrently without polluting the caller's event loop.
 """
 
 import asyncio
+import functools
 import threading
 from contextlib import contextmanager
 from typing import Any
@@ -37,9 +39,9 @@ from pydantic import ConfigDict, Field, PrivateAttr
 
 from .....basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS
 from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+from .....data.schema.base import _LAILA_IDENTIFIABLE_POOL
 from .....entry import Entry
 from .....macros.strings import _CENTRAL_MEMORY_SCOPE, _DEFAULT_POOL_NICKNAME
-from .....data.schema.base import _LAILA_IDENTIFIABLE_POOL
 from .....utils.decorators.typecheck import ensure_list
 from ...command.schema.future.future.future_status import FutureStatus
 from ...command.schema.future.future.group_future import GroupFuture
@@ -88,6 +90,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         After this hook returns, ``self.alpha_pool`` is guaranteed to
         resolve through ``self.pool_router.pools[self.alpha_pool]``.
         """
+        super().model_post_init(__context)
         if self.pool_router is None:
             from .....macros.defaults import DefaultPoolRouter
 
@@ -261,7 +264,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
 
         duplicate_futures = {
             entry_id: ConcurrentPackageFuture(
-                taskforce_id=active_policy.central.command.alpha_taskforce,
+                taskforce_id=active_policy.central.command.internal_taskforce,
                 policy_id=active_policy.global_id,
                 purpose=f"duplicate_pool:{entry_id}",
             )
@@ -269,7 +272,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         }
 
         group_future = GroupFuture(
-            taskforce_id=active_policy.central.command.alpha_taskforce,
+            taskforce_id=active_policy.central.command.internal_taskforce,
             policy_id=active_policy.global_id,
             future_ids=[f.global_id for f in duplicate_futures.values()],
         )
@@ -380,7 +383,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         Returns
         -------
         Future or GroupFuture or None
-            A future identity (single entry), a group future (many
+            A future (single entry), a group future (many
             entries), or ``None`` if the pool path was synchronous and
             no future handle was needed.
         """
@@ -438,15 +441,15 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         2. ``await``\ s the pool's ``_write_async`` for the actual storage
            round-trip.
 
-        Submits one coroutine per entry to the alpha taskforce. Returns a
-        single future identity for one entry, or a :class:`GroupFuture`
+        Submits one coroutine per entry to the internal taskforce. Returns
+        the single future for one entry, or a :class:`GroupFuture`
         for many. Replaces the previous two-stage :class:`ComplexFuture`
         pipeline that double-queued each leg.
         """
         from ..... import active_policy
 
         cmd = active_policy.central.command
-        alpha_id = cmd.alpha_taskforce
+        internal_id = cmd.internal_taskforce
         policy_gid = active_policy.global_id
         transformations = pool.transformations
 
@@ -458,8 +461,10 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             await p._write_async(e.global_id, blob)
             return e.global_id
 
-        factories = [(lambda e=entry: _memorize_one(e=e)) for entry in entries]
-        return cmd.submit(tasks=factories, taskforce_id=alpha_id)
+        # ``partial`` of a coroutine function is recognised as one by
+        # ``ensure_coroutine_function`` and skips the sync-offload hop.
+        factories = [functools.partial(_memorize_one, e=entry) for entry in entries]
+        return cmd.submit(tasks=factories, taskforce_id=internal_id)
 
     def _batch_accelerated_record(
         self,
@@ -557,7 +562,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
 
         child_futures = {
             entry_id: ConcurrentPackageFuture(
-                taskforce_id=active_policy.central.command.alpha_taskforce,
+                taskforce_id=active_policy.central.command.internal_taskforce,
                 policy_id=active_policy.global_id,
                 purpose=f"remember_with_persist:{entry_id}",
             )
@@ -567,7 +572,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         group_future = None
         if len(child_futures) > 1:
             group_future = GroupFuture(
-                taskforce_id=active_policy.central.command.alpha_taskforce,
+                taskforce_id=active_policy.central.command.internal_taskforce,
                 policy_id=active_policy.global_id,
                 future_ids=[f.global_id for f in child_futures.values()],
             )
@@ -587,8 +592,12 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
                         "remember with persist requires a non-default source pool "
                         "that returns a future."
                     )
-                fetch_fut = active_policy.future_bank[fetch_ref.global_id]
-                fetched = await fetch_fut
+                # The fetch / memorize futures below are consumed right here
+                # and never handed out, so this coroutine owns their release.
+                try:
+                    fetched = await fetch_ref
+                finally:
+                    fetch_ref.release()
 
                 if isinstance(fetched, list):
                     entries = fetched
@@ -601,8 +610,10 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
                 if ready_entries:
                     memorize_ref = self.memorize(entries=ready_entries, pool_id=alpha_pool_id)
                     if memorize_ref is not None:
-                        memorize_fut = active_policy.future_bank[memorize_ref.global_id]
-                        await memorize_fut
+                        try:
+                            await memorize_ref
+                        finally:
+                            memorize_ref.release()
 
                 for entry, (entry_id, child_future) in zip(entries, child_futures.items()):
                     child_future.exception = None
@@ -620,7 +631,14 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
                     child_future.result = None
                     child_future.status = FutureStatus.ERROR
 
+        # Carry only the resolve chain (not the caller's slot context) onto
+        # the helper thread so cycle detection keeps working across it.
+        from ...command.schema.parking import _RESOLVE_CHAIN
+
+        resolve_chain = _RESOLVE_CHAIN.get()
+
         def _run_event_loop() -> None:
+            _RESOLVE_CHAIN.set(resolve_chain)
             try:
                 asyncio.run(_run())
             except Exception as exc:
@@ -649,8 +667,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         if group_future is not None:
             return group_future
 
-        single = next(iter(child_futures.values()))
-        return single.future_identity
+        return next(iter(child_futures.values()))
 
     def _fetch(
         self,
@@ -682,25 +699,33 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
            recursively hydrate any nested entries (which themselves may
            ``await`` further fetches on the same loop).
 
-        Submits one coroutine per entry to the alpha taskforce and
-        returns a single future identity (one entry) or a
+        Submits one coroutine per entry to the internal taskforce and
+        returns the single future (one entry) or a
         :class:`GroupFuture` (many). Replaces the previous two-stage
         :class:`ComplexFuture` pipeline.
         """
         from ..... import active_policy
+        from ...command.schema.parking import _RESOLVE_CHAIN, check_resolve_cycle
 
         cmd = active_policy.central.command
-        alpha_id = cmd.alpha_taskforce
+        internal_id = cmd.internal_taskforce
+        check_resolve_cycle(*entry_ids)
 
         async def _remember_one(eid=None, p=pool):
-            raw = await p._read_through_async(eid)
-            if raw is None:
-                raise KeyError(f"Entry {eid} not found in pool {p.global_id}")
-            record = await Record._build_async(raw)
-            return record["entry"]
+            # Extend the resolve chain for anything this fetch triggers
+            # (nested manifests, constitutions) so cycles are detected.
+            token = _RESOLVE_CHAIN.set(_RESOLVE_CHAIN.get() + (eid,))
+            try:
+                raw = await p._read_through_async(eid)
+                if raw is None:
+                    raise KeyError(f"Entry {eid} not found in pool {p.global_id}")
+                record = await Record._build_async(raw)
+                return record["entry"]
+            finally:
+                _RESOLVE_CHAIN.reset(token)
 
-        factories = [(lambda eid=entry_id: _remember_one(eid=eid)) for entry_id in entry_ids]
-        return cmd.submit(tasks=factories, taskforce_id=alpha_id)
+        factories = [functools.partial(_remember_one, eid=entry_id) for entry_id in entry_ids]
+        return cmd.submit(tasks=factories, taskforce_id=internal_id)
 
     def _batch_accelerated_fetch(
         self,
@@ -710,6 +735,144 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
     ):
         """Batch-accelerated fetch path (not yet implemented)."""
         raise NotImplementedError
+
+    # ------------------------------------------------------------------
+    # Direct-await resolver (internal, self-consumed reads)
+    # ------------------------------------------------------------------
+
+    def _direct_read_concurrency(self) -> int:
+        """Concurrency bound for :meth:`_read_entries_async`.
+
+        Mirrors what the per-entry submit path could have in flight on
+        the internal taskforce (``num_workers * max_async_per_thread``),
+        so switching to the direct resolver does not change the pressure
+        put on a pool backend.
+        """
+        from ..... import active_policy
+
+        cmd = active_policy.central.command
+        tf = cmd.taskforces.get(cmd.internal_taskforce)
+        workers = getattr(tf, "num_workers", 1) or 1
+        per_thread = getattr(tf, "max_async_per_thread", 64) or 64
+        return max(1, int(workers) * int(per_thread))
+
+    async def _read_entries_async(
+        self,
+        entry_ids: list[str],
+        *,
+        pool=None,
+        pool_id: str | None = None,
+        pool_nickname: str | None = None,
+        persist: bool = True,
+        max_concurrency: int | None = None,
+    ) -> list:
+        r"""Fetch *entry_ids* by ``await``\ ing the pool directly -- no per-entry futures.
+
+        This is the direct-await counterpart of :meth:`remember` for
+        callers that consume the entries themselves and never need a
+        per-entry handle (``Manifest.realized`` / ``async_realized``).
+        Semantics match :meth:`remember`:
+
+        - the pool is routed the same way (``pool`` > ``pool_id`` /
+          ``pool_nickname`` > router default);
+        - every id is checked against the current resolve chain and each
+          read extends the chain, so cyclic constitutions still raise
+          :class:`CyclicDependencyError`;
+        - with ``persist=True`` and a non-alpha source pool, the READY
+          entries are cached into the alpha pool before returning
+          (awaiting -- and releasing -- the single memorize group).
+
+        Reads run concurrently under an :class:`asyncio.Semaphore`
+        (default: the internal taskforce's slot capacity). Nested
+        fetches triggered while building an entry (nested manifests,
+        constitutions) still go through ``command.submit`` and park the
+        surrounding slot exactly as before.
+
+        Returns the entries in the order of *entry_ids*. Raises
+        :class:`KeyError` if any id is missing from the routed pool.
+        """
+        from ...command.schema.parking import _RESOLVE_CHAIN, check_resolve_cycle
+
+        entry_ids = list(entry_ids)
+        if not entry_ids:
+            return []
+
+        routed = self._route_pool(
+            entry_ids, pool=pool, pool_id=pool_id, pool_nickname=pool_nickname
+        )
+        if getattr(routed, "batch_accelerated", False):
+            # Same limitation as _fetch(): batch-accelerated pools have no
+            # implementation yet.
+            raise NotImplementedError
+
+        try:
+            from ..... import active_policy
+            from .....logger import get_logger
+
+            get_logger().record_remember(entry_ids=entry_ids, pool=routed, policy=active_policy)
+        except Exception:
+            pass
+
+        check_resolve_cycle(*entry_ids)
+        limit = max_concurrency if max_concurrency is not None else self._direct_read_concurrency()
+        sem = asyncio.Semaphore(max(1, limit))
+
+        async def _one(eid: str):
+            async with sem:
+                token = _RESOLVE_CHAIN.set(_RESOLVE_CHAIN.get() + (eid,))
+                try:
+                    raw = await routed._read_through_async(eid)
+                    if raw is None:
+                        raise KeyError(f"Entry {eid} not found in pool {routed.global_id}")
+                    record = await Record._build_async(raw)
+                    return record["entry"]
+                finally:
+                    _RESOLVE_CHAIN.reset(token)
+
+        entries = list(await asyncio.gather(*(_one(eid) for eid in entry_ids)))
+
+        if persist and routed.global_id != self.alpha_pool:
+            from .....entry.entry_state import EntryState
+
+            ready = [e for e in entries if e.state == EntryState.READY]
+            if ready:
+                ref = self.memorize(entries=ready, pool_id=self.alpha_pool)
+                if ref is not None:
+                    try:
+                        await ref
+                    finally:
+                        ref.release()
+
+        return entries
+
+    def _read_entries_direct(
+        self,
+        entry_ids: list[str],
+        *,
+        pool=None,
+        pool_id: str | None = None,
+        pool_nickname: str | None = None,
+        persist: bool = True,
+    ):
+        """Run :meth:`_read_entries_async` as *one* task on the internal taskforce.
+
+        Returns a single :class:`Future` whose ``.data`` is the list of
+        entries (one future for the whole batch instead of one per
+        entry). The caller owns the future: ``wait()`` / ``await`` it,
+        read ``.data`` and ``release()`` it.
+        """
+        from ..... import active_policy
+
+        cmd = active_policy.central.command
+        coro_factory = functools.partial(
+            self._read_entries_async,
+            list(entry_ids),
+            pool=pool,
+            pool_id=pool_id,
+            pool_nickname=pool_nickname,
+            persist=persist,
+        )
+        return cmd.submit(tasks=[coro_factory], taskforce_id=cmd.internal_taskforce)
 
     # ------------------------------------------------------------------
     # Cross-peer (over-the-wire) memorize / remember
@@ -941,11 +1104,11 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         from ..... import active_policy
 
         cmd = active_policy.central.command
-        alpha_id = cmd.alpha_taskforce
+        internal_id = cmd.internal_taskforce
 
         async def _delete_one(eid=None, p=pool):
             await p._delete_async(eid)
             return eid
 
-        factories = [(lambda eid=entry_id: _delete_one(eid=eid)) for entry_id in entry_ids]
-        return cmd.submit(tasks=factories, taskforce_id=alpha_id)
+        factories = [functools.partial(_delete_one, eid=entry_id) for entry_id in entry_ids]
+        return cmd.submit(tasks=factories, taskforce_id=internal_id)

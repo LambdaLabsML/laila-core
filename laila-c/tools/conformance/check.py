@@ -161,9 +161,7 @@ def check(repo_root: Path) -> list[Violation]:
                 )
             )
         else:
-            violations.append(
-                Violation("MISSING", name, f"{kind_label}: no C twin found")
-            )
+            violations.append(Violation("MISSING", name, f"{kind_label}: no C twin found"))
 
     for name in INVENTED_C:
         if _c_has(c, name) and name not in py_symbols:

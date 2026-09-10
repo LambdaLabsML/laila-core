@@ -112,6 +112,7 @@ A `STAGED` entry cannot be memorized — build it first, then memorize the mater
 
 - `Entry.variable(constitution=src, manifest=m)` produces a `STAGED` entry.
 - `laila.build(entry)` runs the recipe; both `.wait()` (sync) and `await` (async) work.
+- Constitution bodies run on an executor thread and may call `manifest.realized`, `laila.remember(...)` or even `laila.build(...)` on other staged entries; those nested waits park the taskforce slot, so deep or wide dependency trees cannot deadlock the scheduler. A body that transitively depends on its own entry fails fast with `CyclicDependencyError`.
 - Once built, the constitution is cleared and the entry is a plain `READY` entry.
 - `SimpleConstitution` is for ordered transform chains; `ComplexConstitution` is for arbitrary derivations driven by a manifest.
 

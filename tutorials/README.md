@@ -1,6 +1,6 @@
 # LAILA Tutorials
 
-A progressive series of hands-on Jupyter notebooks that walk you through LAILA's core concepts, from creating your first entry to peer-to-peer communication, custom serializers, and custom storage backends.
+A progressive series of hands-on Jupyter notebooks that walk you through LAILA's core concepts, from creating your first entry to peer-to-peer communication, transport selection, SQL-indexed manifests, custom serializers, custom storage backends, and ring buffers for fast producers.
 
 Each tutorial builds on the one before it. If you are new to LAILA, start at the top.
 
@@ -76,13 +76,25 @@ Starting with nothing but S3 credentials, bootstrap a minimal policy, remember t
 
 ### 9. Peer-to-Peer Communication on Localhost — `09_peer_request_entry.ipynb`
 
-Create two policies on `127.0.0.1`, peer them over TCP, store an entry on each node, and show that either side can request the other's data by switching `active_policy` to a peer proxy. Demonstrates `DefaultTCPIPProtocol`, `add_tcpip_peer`, `laila.peers`, and symmetric bidirectional access.
+Launch a second policy in a subprocess, peer with it over WebSocket via `laila.add_peer("ws://...", secret)`, and read, write, and delete entries on the peer with `dst_policy=` / `policy=` while the active policy stays local. Shows that peering is symmetric (the subprocess reads back from the notebook), introduces the `RemotePolicyProxy`, and covers **morph mode** (`laila.active_policy = laila.peers[gid]`, `RemoteFuture`) as the secondary path.
+
+**No credentials or external services required.**
+
+### 9a. The Transport Zoo — `09a_transport_zoo.ipynb`
+
+Run the same peer flow over **loopback**, **raw TCP**, **UDP**, a **Unix socket**, and **TLS** (self-signed cert, optional) using `Default{Loopback,TCP,UDP,UnixSocket,TLS}Protocol`, `add_connection`, and URI-driven `add_peer`; switch the wire codec to msgpack. Hold two transports to one peer and pin a channel with `comm=`, `laila.request(gid, comm_protocol=...)`, or `proxy.via(...)`. Tours the liveness loop (`liveness_interval`, `ping`, `remove_peer`), the backpressure knobs (`max_inflight_rpcs`, `rpc_backoff_*`, `BackpressureError`), and how transports appear in `laila.args.environment`.
+
+**No credentials or external services required.**
+
+### 9b. Peer Routing and 3-Party Relays — `09b_peer_routing_and_relay.ipynb`
+
+Address a peer by `global_id`, by its proxy object, or by **nickname**; understand `persist=` on peer reads and the string-only rule for peer-side pools. Then orchestrate a transfer between two *other* policies with `src_policy=` / `dst_policy=`: a **push relay** (`memorize`) and a **pull relay** (`remember`), with the topology rule (orchestrator peered to the source, source peered to the destination) enforced by `ConnectionError`.
 
 **No credentials or external services required.**
 
 ### 10. Accessing S3 Through a Remote Peer — `10_peer_remote_s3.ipynb`
 
-Peer with a subprocess that holds AWS credentials and an S3 pool, morph into its policy via a proxy, and store / retrieve entries on S3 — all without local S3 access. Demonstrates how peering turns a remote node's storage into a transparent backend for the local process.
+Peer with a subprocess that holds AWS credentials and an S3 pool, then memorize / remember / forget on S3 through it with `dst_policy=node_b, dst_pool="s3"` — all without local S3 access and without changing the active policy. A short morph-mode section shows the same thing with implicit routing. Demonstrates how peering turns a remote node's storage into a transparent backend for the local process.
 
 **Requires:** `pip install "laila-core[s3]"` and a `secrets.toml` with AWS credentials.
 
@@ -106,9 +118,15 @@ The default taskforce is async-thread-pool-backed — great for I/O, GIL-limited
 
 ### 14. Multi-pool Routing — `14_multi_pool_routing.ipynb`
 
-Register three pools (`hot` / `warm` / `cold`) under separate nicknames and use `pool_nickname=` (or `pool_id=`) on each `memorize` / `remember` call to direct it to a specific destination. Builds a `Manifest` whose leaves span all three pools and verifies the router resolves each leaf correctly at realization time.
+Register three pools (`hot` / `warm` / `cold`) under separate nicknames and use `dst_pool=` on each `memorize` / `remember` call (and `pool=` on `forget`) to direct it to a specific destination — by nickname, by gid, or by passing the pool object itself, including a standalone pool that was never registered. Builds a `Manifest` whose leaves span all three pools and verifies the router resolves each leaf correctly at realization time. Notes the `pool_nickname=` / `pool_id=` back-compat aliases.
 
 **Requires:** `pip install "laila-core[hdf5]"`
+
+### 14a. Querying a Manifest with SQL — `14a_manifest_sql_index.ipynb`
+
+Turn a manifest whose top-level values are metadata dicts into a small catalog and filter it with `Manifest.sql("SELECT ... FROM ... WHERE ...")`. Covers the supported grammar and what is rejected (`ORDER BY`, `LIMIT`, unquoted strings), explicit index control with `build_index(on=, composite=)`, automatic invalidation on `extend` / `+=`, `clear_index()`, reusable on-disk indexes via `persist=`, and flattening list-valued metadata through a `_sql_rows` override. The index is LAILA's sanctioned *non-memorizing algorithmic helper* — a local sqlite file under `<laila_root>/indices/` that never enters memory or the wire.
+
+**No credentials or external services required.**
 
 ### 15. Migrating Entries Between Pools — `15_pool_migration.ipynb`
 
@@ -124,7 +142,7 @@ Every async operation registers a future in `policy.future_bank` keyed by gid. S
 
 ### 17. Three-Node Mesh on Localhost — `17_three_node_mesh.ipynb`
 
-Three local policies, each on its own TCP listener, fully pair-peered. Memorize one entry per node, fetch any entry from any node via `laila.peers` or `laila.universe`, then disconnect one node and confirm the other two stay healthy. Extends Tutorial 9 (two-node) to an N-node mesh pattern.
+Three policies in one process, each on its own raw-TCP listener, fully pair-peered with `add_peer("tcp://...")`. Only the orchestrating node is activated, so cross-node reads and writes with `dst_policy=` really cross the wire. Seed one entry per node, fetch any entry from any node, compare `laila.peers` with `laila.universe`, then drop one link with `remove_peer` and take a node offline with `communication.stop()` while the rest of the mesh stays healthy. Extends Tutorial 9 (two-node) to an N-node mesh pattern.
 
 **No credentials or external services required.**
 
@@ -166,6 +184,12 @@ Subclass `_LAILA_IDENTIFIABLE_POOL`, override the six sync hooks (`_read`, `_wri
 
 **No credentials or external services required.**
 
+### 24. MultiBuffer — A Ring of Records for Fast Producers — `24_multibuffer.ipynb`
+
+Where a pool is a map keyed by `global_id`, `MultiBuffer` is a fixed ring of integer-indexed slots with independent read and write heads — the container a microcontroller puts in front of a camera or sensor that outruns persistence. Write `Entry`, `Record`, or raw payloads and read `Entry` objects back; watch the heads wrap and the producer lap the consumer; use `mapped=True` over externally owned memory (DMA-style `bytearray` slots) where `write()` only advances the head; then run the camera loop that `laila.memorize`s every frame. Explains why it is a `DataContainer` but not a pool.
+
+**No credentials or external services required.**
+
 ## Getting started
 
 ```bash
@@ -174,4 +198,4 @@ cd tutorials/
 jupyter notebook
 ```
 
-Open the first notebook and work through them in order. The Advanced track (18+) assumes you've completed at least the Manifest tutorials (5, 8a, 8b).
+Open the first notebook and work through them in order. The Advanced track (18+) assumes you've completed at least the Manifest tutorials (5, 8a, 8b, 14a).

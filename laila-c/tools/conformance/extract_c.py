@@ -30,9 +30,24 @@ _CALLABLE_RE = re.compile(r"\b([a-zA-Z_]\w*)\s*\(")
 
 # Tokens that are never API names even though they match ``name(``.
 _CALLABLE_STOPWORDS = {
-    "if", "for", "while", "switch", "return", "sizeof", "static_cast",
-    "reinterpret_cast", "const_cast", "dynamic_cast", "decltype", "noexcept",
-    "explicit", "catch", "throw", "and", "or", "not",
+    "if",
+    "for",
+    "while",
+    "switch",
+    "return",
+    "sizeof",
+    "static_cast",
+    "reinterpret_cast",
+    "const_cast",
+    "dynamic_cast",
+    "decltype",
+    "noexcept",
+    "explicit",
+    "catch",
+    "throw",
+    "and",
+    "or",
+    "not",
 }
 
 
@@ -51,11 +66,7 @@ class CSurface:
     files: list[str] = field(default_factory=list)
 
     def has(self, name: str) -> bool:
-        return (
-            name in self.classes
-            or name in self.using_aliases
-            or name in self.callables
-        )
+        return name in self.classes or name in self.using_aliases or name in self.callables
 
 
 def _strip_block_comments(text: str) -> str:

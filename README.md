@@ -23,12 +23,12 @@ LAILA is **type-free** — whatever type you memorize is exactly the type you ge
 import torch, laila
 
 dict_entry = laila.constant(data={"key": [1, 2, 3]})
-laila.memorize(dict_entry)                          # memorize a dict
-laila.remember(dict_entry.global_id).data            # returns a dict
+laila.memorize(dict_entry)  # memorize a dict
+laila.remember(dict_entry.global_id).data  # returns a dict
 
 tensor_entry = laila.constant(data=torch.randn(128, 64))
-laila.memorize(tensor_entry)                         # memorize a tensor
-laila.remember(tensor_entry.global_id).data           # returns a tensor
+laila.memorize(tensor_entry)  # memorize a tensor
+laila.remember(tensor_entry.global_id).data  # returns a tensor
 ```
 
 
@@ -50,16 +50,16 @@ laila.memory.extend(cf_pool, pool_nickname="cloudflare")
 
 entry = laila.constant(data=torch.randn(128, 64))
 
-laila.memorize(entry, pool_nickname="s3")          # write to S3
-laila.memorize(entry, pool_nickname="hdf5")        # write to HDF5
+laila.memorize(entry, pool_nickname="s3")  # write to S3
+laila.memorize(entry, pool_nickname="hdf5")  # write to HDF5
 laila.memorize(entry, pool_nickname="cloudflare")  # write to Cloudflare R2
 
-laila.remember(entry.global_id, pool_nickname="s3")          # read from S3
-laila.remember(entry.global_id, pool_nickname="hdf5")        # read from HDF5
+laila.remember(entry.global_id, pool_nickname="s3")  # read from S3
+laila.remember(entry.global_id, pool_nickname="hdf5")  # read from HDF5
 laila.remember(entry.global_id, pool_nickname="cloudflare")  # read from Cloudflare R2
 
-laila.forget(entry.global_id, pool_nickname="s3")          # delete from S3
-laila.forget(entry.global_id, pool_nickname="hdf5")        # delete from HDF5
+laila.forget(entry.global_id, pool_nickname="s3")  # delete from S3
+laila.forget(entry.global_id, pool_nickname="hdf5")  # delete from HDF5
 laila.forget(entry.global_id, pool_nickname="cloudflare")  # delete from Cloudflare R2
 ```
 
@@ -69,8 +69,8 @@ Every operation returns a **future** you can wait on synchronously or `await` as
 
 ```python
 future = laila.memorize(entry)
-laila.wait(future)    # blocking
-await future          # or async
+laila.wait(future)  # blocking
+await future  # or async
 ```
 
 ## Quick example
@@ -112,8 +112,8 @@ print(laila.alpha_pool.exists(entry.global_id))  # False — not cached yet
 blob = laila.alpha_pool[entry.global_id]
 
 print(laila.alpha_pool.exists(entry.global_id))  # True  — cached in memory
-print(hdf5_pool.exists(entry.global_id))          # True  — cached on disk
-print(s3_pool.exists(entry.global_id))            # True  — the origin
+print(hdf5_pool.exists(entry.global_id))  # True  — cached on disk
+print(s3_pool.exists(entry.global_id))  # True  — the origin
 ```
 
 ## Installation extras

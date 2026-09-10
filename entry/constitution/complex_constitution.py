@@ -191,7 +191,11 @@ class ComplexConstitution(Constitution):
         import laila
 
         ref = laila.remember(self._manifest_global_id)
-        resolved = ref.wait(None)
+        try:
+            resolved = ref.wait(None)
+        finally:
+            # Internal, self-consumed future: release it from the bank.
+            ref.release()
         return self._record_resolved_manifest(resolved)
 
     async def _resolve_manifest_async(self):
@@ -212,7 +216,10 @@ class ComplexConstitution(Constitution):
         import laila
 
         ref = laila.remember(self._manifest_global_id)
-        resolved = await ref
+        try:
+            resolved = await ref
+        finally:
+            ref.release()
         return self._record_resolved_manifest(resolved)
 
     def _resolve_manifest(self, *, asynchronous: bool = False):

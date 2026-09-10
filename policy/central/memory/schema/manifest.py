@@ -5,7 +5,10 @@ dictionary whose leaves are ``global_id`` strings (or lists thereof).
 A manifest is therefore a normal `READY` entry — its payload is the
 blueprint dict itself.  The ``manifest.realized`` property batch-fetches
 every referenced entry through the active policy's central memory and
-returns a nested dict of ``Entry`` objects mirroring the blueprint.
+returns a nested dict of ``Entry`` objects mirroring the blueprint. The
+fetch uses the memory's direct-await resolver (``_read_entries_async`` /
+``_read_entries_direct``): one task for the whole batch rather than one
+future per child, released as soon as the entries have been collected.
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ import re
 import sqlite3
 from collections.abc import Hashable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import PrivateAttr
 
@@ -105,7 +108,7 @@ class Manifest(Entry):
         Composite identifier used to set identity.
     """
 
-    _scopes: list[str] = PrivateAttr(default_factory=lambda: [_MANIFEST_SCOPE])
+    _DEFAULT_SCOPES: ClassVar[list[str]] = [_MANIFEST_SCOPE]
     _pending_entries: list | None = PrivateAttr(default=None)
     _sql_state: _SqlState | None = PrivateAttr(default=None)
     _sql_finalizer: Any = PrivateAttr(default=None)
@@ -183,10 +186,16 @@ class Manifest(Entry):
             return Manifest._rebuild_with_entries(bp, {})
 
         memory = laila.get_active_policy().central.memory
-        ref = memory.remember(entry_ids=all_gids)
-        results = ref.wait(None)
-        if not isinstance(results, list):
-            results = [results]
+        # Direct-await resolver: one task on the internal taskforce reads
+        # every child concurrently, instead of one future per child.
+        ref = memory._read_entries_direct(all_gids)
+        try:
+            results = ref.wait(None).data
+        finally:
+            # The manifest owns this future; release it from the bank once
+            # consumed so a large realized() does not pin its children.
+            ref.release()
+        results = list(results)
 
         if len(results) != len(all_gids) or any(r is None for r in results):
             raise KeyError("Manifest.realized: one or more referenced entries failed to resolve.")
@@ -222,11 +231,22 @@ class Manifest(Entry):
             if not all_gids:
                 return Manifest._rebuild_with_entries(bp, {})
 
+            from ...command.schema.parking import _CURRENT_SLOT
+
             memory = laila.get_active_policy().central.memory
-            ref = memory.remember(entry_ids=all_gids)
-            results = await ref
-            if not isinstance(results, list):
-                results = [results]
+            if _CURRENT_SLOT.get() is not None:
+                # Already running on a taskforce loop: await the pool
+                # directly -- zero futures for the whole batch.
+                results = await memory._read_entries_async(all_gids)
+            else:
+                # Foreign loop (user's asyncio.run): keep pool I/O on the
+                # taskforce loops via a single submitted task.
+                ref = memory._read_entries_direct(all_gids)
+                try:
+                    results = (await ref).data
+                finally:
+                    ref.release()
+            results = list(results)
 
             if len(results) != len(all_gids) or any(r is None for r in results):
                 raise KeyError(
@@ -277,7 +297,7 @@ class Manifest(Entry):
         all_future_ids.extend(Manifest._collect_future_ids(self_ref))
 
         return GroupFuture(
-            taskforce_id=policy.central.command.alpha_taskforce,
+            taskforce_id=policy.central.command.internal_taskforce,
             policy_id=policy.global_id,
             future_ids=all_future_ids,
         )
@@ -308,7 +328,7 @@ class Manifest(Entry):
             all_future_ids.extend(Manifest._collect_future_ids(ref))
 
         return GroupFuture(
-            taskforce_id=policy.central.command.alpha_taskforce,
+            taskforce_id=policy.central.command.internal_taskforce,
             policy_id=policy.global_id,
             future_ids=all_future_ids,
         )
@@ -342,7 +362,7 @@ class Manifest(Entry):
         all_future_ids.extend(Manifest._collect_future_ids(self_ref))
 
         return GroupFuture(
-            taskforce_id=policy.central.command.alpha_taskforce,
+            taskforce_id=policy.central.command.internal_taskforce,
             policy_id=policy.global_id,
             future_ids=all_future_ids,
         )
@@ -995,11 +1015,22 @@ class Manifest(Entry):
 
     @staticmethod
     def _collect_future_ids(ref) -> list[str]:
-        """Extract future IDs from a GroupFuture or a single future identity."""
+        """Extract future IDs from a GroupFuture or a single future identity.
+
+        The children are re-parented into the manifest-level
+        :class:`GroupFuture` returned to the caller, so an intermediate
+        per-batch group shell is released here (children untouched); the
+        caller releases the returned group, which releases the children.
+        """
         if ref is None:
             return []
         if hasattr(ref, "future_ids"):
-            return list(ref.future_ids)
+            from ...command.schema.future.future.group_future import GroupFuture
+
+            ids = list(ref.future_ids)
+            if isinstance(ref, GroupFuture):
+                ref.release(children=False)
+            return ids
         return [ref.global_id]
 
     @staticmethod

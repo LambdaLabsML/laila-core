@@ -1,74 +1,70 @@
 # Tutorial 9: Peer-to-Peer Communication on Localhost
 
-LAILA policies can **peer** over TCP so that each node transparently operates on the other's memory. In this tutorial two policies run on `127.0.0.1` in **separate processes** — the remote peer is a subprocess that shares nothing with the notebook except the TCP link. After peering, either side can store and retrieve entries that physically live on the other node.
+LAILA policies can **peer** with each other so that one policy can read, write, and delete entries that physically live in another policy's memory. In this tutorial two policies run on `127.0.0.1` in **separate processes** — the remote peer is a subprocess that shares nothing with the notebook except a WebSocket link.
 
-## Prerequisites
+You will:
 
-```bash
-pip install "laila-core"
-```
+- Launch a remote policy in a subprocess and peer with it via `laila.add_peer("ws://...")`
+- Read, write, and delete entries on the peer with `dst_policy=` / `policy=` — without touching the active policy
+- See that peering is symmetric (the subprocess reads from the notebook too)
+- Use the `RemotePolicyProxy` directly, and briefly enter **morph mode**
 
-No credentials or external services required.
-
-## Setup
+**Prerequisites:** `pip install laila-core`. No credentials or external services required.
 
 ```python
-import sys
 import subprocess
+import sys
 import textwrap
 import time
+
 import laila
-from laila.macros.defaults import DefaultPolicy, DefaultPool, DefaultTCPIPProtocol
+from laila.macros.defaults import DefaultPolicy, DefaultPool, DefaultWebSocketProtocol
 ```
 
 ## Step 1: Launch the remote peer as a subprocess
 
-The remote process creates its own `DefaultPolicy`, registers a pool, stores an entry, and opens a TCP listener on a random port. It prints its `PORT`, `SECRET`, and `ENTRY_ID` to stdout so the notebook can connect to it.
+The remote process activates its own `DefaultPolicy`, registers a pool under the nickname `remote-store`, stores an entry, and opens a WebSocket listener on a random port (`port=0`). It prints `PORT`, `SECRET`, `ENTRY_ID`, and `POLICY_ID` to stdout so the notebook can connect.
 
-After printing `READY` the subprocess waits for the main process to peer with it. Once peered, it reads the main's entry ID and pool nickname from stdin, requests that entry via the peer proxy, and prints the result — demonstrating the reverse direction.
+After `READY` it waits until the notebook has peered with it, then reads the notebook's entry id from stdin and fetches that entry back across the link — demonstrating the reverse direction.
+
+`DefaultWebSocketProtocol` is the WebSocket transport (it answers to `ws://` / `wss://` URIs; the alias `DefaultTCPIPProtocol` points at the same class).
 
 ```python
 REMOTE_SCRIPT = textwrap.dedent("""\
     import sys, time, uuid, laila
-    from laila.macros.defaults import DefaultPolicy, DefaultPool, DefaultTCPIPProtocol
+    from laila.macros.defaults import DefaultPolicy, DefaultPool, DefaultWebSocketProtocol
 
-    policy = DefaultPolicy()
-    pool = DefaultPool()
-    laila.memory.extend(pool=pool, pool_nickname="remote-store")
+    node = DefaultPolicy()
+    laila.activate_policy(node)
+    laila.memory.extend(DefaultPool(), pool_nickname="remote-store")
 
     entry = laila.constant(
         data={"message": "Hello from the remote process"},
         nickname="remote-entry",
     )
     with laila.guarantee:
-        laila.memorize(entries=entry, pool_nickname="remote-store")
+        laila.memorize(entry, dst_pool="remote-store")
 
-    tcp = DefaultTCPIPProtocol(
-        host="127.0.0.1",
-        port=0,
-        peer_secret_key=uuid.uuid4().hex,
-    )
-    laila.communication.add_connection(tcp)
+    ws = DefaultWebSocketProtocol(host="127.0.0.1", port=0, peer_secret_key=uuid.uuid4().hex)
+    laila.communication.add_connection(ws)
 
-    print(f"PORT={tcp.port}", flush=True)
-    print(f"SECRET={tcp.peer_secret_key}", flush=True)
+    print(f"PORT={ws.bound_port}", flush=True)
+    print(f"SECRET={ws.peer_secret_key}", flush=True)
     print(f"ENTRY_ID={entry.global_id}", flush=True)
+    print(f"POLICY_ID={node.global_id}", flush=True)
     print("READY", flush=True)
 
+    # Wait until the notebook has peered with us.
     while not laila.peers:
         time.sleep(0.2)
     time.sleep(0.3)
 
+    # Reverse direction: read an entry that lives in the notebook's pool.
     main_entry_id = sys.stdin.readline().strip()
-    main_pool_nickname = sys.stdin.readline().strip()
-
-    peer_id = list(laila.peers.keys())[0]
-    proxy = laila.peers[peer_id]
-    laila.active_policy = proxy
-    with laila.guarantee:
-        result = laila.remember(entry_ids=main_entry_id, pool_nickname=main_pool_nickname)
-
-    print(f"REMOTE_RETRIEVED={result.data[0]}", flush=True)
+    main_pool = sys.stdin.readline().strip()
+    main_id = next(iter(laila.peers))
+    got = laila.remember(main_entry_id, dst_policy=main_id, dst_pool=main_pool, persist=False)
+    print(f"REMOTE_RETRIEVED={got.data}", flush=True)
 
     while True:
         time.sleep(1)
@@ -81,85 +77,102 @@ proc = subprocess.Popen(
     text=True,
 )
 
-remote_port = None
-remote_secret = None
-remote_entry_id = None
+info = {}
 for line in proc.stdout:
     line = line.strip()
-    if line.startswith("PORT="):
-        remote_port = int(line.split("=", 1)[1])
-    elif line.startswith("SECRET="):
-        remote_secret = line.split("=", 1)[1]
-    elif line.startswith("ENTRY_ID="):
-        remote_entry_id = line.split("=", 1)[1]
-    elif line == "READY":
+    if line == "READY":
         break
+    key, _, value = line.partition("=")
+    info[key] = value
+
+remote_port = int(info["PORT"])
+remote_secret = info["SECRET"]
+remote_entry_id = info["ENTRY_ID"]
 
 print(f"Remote subprocess started  (pid {proc.pid})")
-print(f"  PORT:     {remote_port}")
-print(f"  SECRET:   {remote_secret}")
-print(f"  ENTRY_ID: {remote_entry_id}")
+print(f"  PORT:      {remote_port}")
+print(f"  SECRET:    {remote_secret}")
+print(f"  ENTRY_ID:  {remote_entry_id}")
+print(f"  POLICY_ID: {info['POLICY_ID']}")
 ```
 
 ## Step 2: Create the local node and store an entry
 
-The main process gets its own policy, pool, and entry — completely independent from the subprocess:
+The notebook gets its own policy, pool, and entry — completely independent from the subprocess.
 
 ```python
 local_node = DefaultPolicy()
-local_pool = DefaultPool()
-laila.memory.extend(pool=local_pool, pool_nickname="main-store")
+laila.activate_policy(local_node)
+laila.memory.extend(DefaultPool(), pool_nickname="main-store")
 
 local_entry = laila.constant(
     data={"message": "Hello from the main process"},
     nickname="main-entry",
 )
 with laila.guarantee:
-    laila.memorize(entries=local_entry, pool_nickname="main-store")
+    laila.memorize(local_entry, dst_pool="main-store")
 
+print("Local node: ", local_node.global_id)
 print("Local entry:", local_entry.global_id)
 ```
 
 ## Step 3: Peer the two processes
 
-Open a TCP listener on the local side and call `add_tcpip_peer` with the remote's port and secret. The handshake is symmetric — both processes see each other as peers afterwards.
+Register a WebSocket transport on the local side with `add_connection`, then call `laila.add_peer(uri, secret)`. The URI scheme picks the transport (`ws://` here); the secret must match the remote's `peer_secret_key`. `add_peer` returns the remote policy's `global_id`, which is also the key under which its `RemotePolicyProxy` appears in `laila.peers`.
+
+The handshake is symmetric — afterwards both processes see each other as peers.
 
 ```python
-local_tcp = DefaultTCPIPProtocol(
-    host="127.0.0.1",
-    port=0,
-    peer_secret_key=remote_secret,
-)
+local_ws = DefaultWebSocketProtocol(host="127.0.0.1", port=0, peer_secret_key=remote_secret)
+laila.communication.add_connection(local_ws)
 
-laila.active_policy = local_node
-laila.communication.add_connection(local_tcp)
-remote_id = laila.communication.add_tcpip_peer("127.0.0.1", remote_port, remote_secret)
+remote_id = laila.add_peer(f"ws://127.0.0.1:{remote_port}", remote_secret)
 time.sleep(0.3)
 
-remote_proxy = laila.peers[remote_id]
-
 print("Peered successfully.")
-print(f"Local node:  {local_node.global_id}")
-print(f"Remote peer: {remote_id}")
-print(f"Peers:       {list(laila.peers.keys())}")
+print(f"Remote peer:            {remote_id}")
+print(f"Matches POLICY_ID:      {remote_id == info['POLICY_ID']}")
+print(f"laila.peers:            {list(laila.peers)}")
+print(f"laila.remote_policies:  {list(laila.remote_policies)}")
 ```
 
-## Step 4: Main process requests the remote's entry
+## Step 4: Read the remote's entry with `dst_policy=`
 
-Setting `active_policy` to the remote proxy routes all `laila.*` calls to the subprocess over the TCP link. `remember` fetches the entry that only the remote process holds.
+`laila.remember` accepts `dst_policy=` — the peer that **holds** the data — and `dst_pool=` naming a pool **on that peer**. The active policy stays untouched; the call returns an ordinary local future whose `.data` is the payload and whose `.wait()` yields the rebuilt `Entry`. The entry crosses the wire as its serialized blob and is rebuilt locally — no shared pool is needed.
+
+`persist=False` skips the cache-back into the *peer's* alpha pool (with the default `persist=True` the peer would also keep a copy in its alpha pool).
 
 ```python
-laila.active_policy = remote_proxy
-with laila.guarantee:
-    result_b = laila.remember(entry_ids=remote_entry_id, pool_nickname="remote-store")
+got = laila.remember(remote_entry_id, dst_policy=remote_id, dst_pool="remote-store", persist=False)
 
-print("Main process retrieved from remote:")
-print(" ", result_b.data[0])
+print("Main process retrieved from remote:", got.data)
+print("Rebuilt entry gid matches:         ", got.wait().global_id == remote_entry_id)
+print("Active policy unchanged:           ", laila.active_policy.global_id == local_node.global_id)
 ```
 
-## Step 5: Remote subprocess requests the main's entry
+## Step 5: Write into and delete from the remote
 
-Peering is symmetric — the subprocess also sees the main process as a peer. Send the main entry's ID and pool nickname to the subprocess via stdin. It uses its own peer proxy to call `remember` on the main process and prints the result to stdout.
+`laila.memorize(entry, dst_policy=..., dst_pool=...)` pushes an entry into the peer's pool; the returned future resolves to the stored gid. `laila.forget(gid, policy=..., pool=...)` deletes it on the peer. For a peer target, `dst_pool` / `pool` must be a **string** (nickname or gid that exists on the peer) — a standalone pool object cannot be shipped across the wire.
+
+```python
+pushed = laila.constant(data={"message": "written by main into remote"}, nickname="pushed-entry")
+
+stored_gid = laila.memorize(pushed, dst_policy=remote_id, dst_pool="remote-store").data
+print("Stored on remote:", stored_gid)
+
+back = laila.remember(pushed.global_id, dst_policy=remote_id, dst_pool="remote-store", persist=False)
+print("Read back:       ", back.data)
+
+laila.forget(pushed.global_id, policy=remote_id, pool="remote-store").wait()
+try:
+    laila.remember(pushed.global_id, dst_policy=remote_id, dst_pool="remote-store", persist=False).data
+except RuntimeError as exc:
+    print("After forget:    ", str(exc)[:80], "...")
+```
+
+## Step 6: The remote reads the notebook's entry
+
+Peering is symmetric — the subprocess also has the notebook in its `laila.peers`. Send it the local entry's id and pool nickname over stdin; it runs the same `laila.remember(..., dst_policy=..., dst_pool=...)` call in the other direction.
 
 ```python
 proc.stdin.write(local_entry.global_id + "\n")
@@ -172,37 +185,39 @@ for line in proc.stdout:
         remote_got = line.split("=", 1)[1]
         break
 
-print("Remote subprocess retrieved from main:")
-print(" ", remote_got)
+print("Remote subprocess retrieved from main:", remote_got)
 ```
 
-## Step 5b: One-liner peer access with `policy_id`
+## Step 7: The proxy and morph mode
 
-Morphing the active policy works, but for a quick "ask a peer for an entry"
-you can skip it entirely. `laila.remember` and `laila.memorize` accept a
-`policy_id` argument that points at a connected peer (by its `global_id`).
-`remember` reads from the peer, `memorize` writes into the peer's pool
-(selected by `pool_id` / `pool_nickname` on the peer). The active policy is
-left untouched:
+`laila.peers[remote_id]` is a `RemotePolicyProxy`. Any attribute chain you *call* on it becomes one JSON-RPC round-trip executed on the peer — this is the explicit, always-available way to talk to a peer.
 
-```python
-# read from the peer
-result = laila.remember(
-    entry_ids=remote_entry_id,
-    pool_nickname="remote-store",
-    policy_id=remote_id,
-)
-print("Read from remote:", result.wait())
-```
+Assigning the proxy to `laila.active_policy` enters **morph mode**: every `laila.*` call is now executed on the peer, and futures come back as `RemoteFuture` objects that materialise their result over the wire. Morph mode is convenient for scripting against a single peer, but `dst_policy=` routing (Steps 4-5) is the preferred path because it leaves the active policy alone.
 
-## Step 6: Clean up
-
-Remove the local TCP connection and terminate the remote subprocess:
+> A process should hold only **one** local policy when it morphs: `RemoteFuture` registers in the local future bank, and with several local policies LAILA cannot pick one.
 
 ```python
+proxy = laila.peers[remote_id]
+print("Proxy:", proxy)
+
+laila.active_policy = proxy
+print("Active policy is now the peer:", laila.active_policy.global_id == remote_id)
+
+rf = laila.remember(remote_entry_id, dst_pool="remote-store", persist=False)
+print("Future type:", type(rf).__name__)
+print("Payload:    ", rf.data)
+
 laila.active_policy = local_node
-laila.communication.remove_connection(local_tcp)
-print("Local connection removed.")
+print("Back to local policy:", laila.active_policy.global_id == local_node.global_id)
+```
+
+## Step 8: Clean up
+
+Remove the local transport (which disconnects the peer) and terminate the subprocess.
+
+```python
+laila.communication.remove_connection(local_ws)
+print("Local connection removed. Peers:", list(laila.peers))
 
 proc.terminate()
 proc.wait(timeout=5)
@@ -211,11 +226,11 @@ print("Remote subprocess terminated.")
 
 ## Summary
 
-- The remote peer ran in a **separate subprocess** — the two sides shared nothing except the TCP link.
-- `DefaultTCPIPProtocol` opens a TCP listener; `port=0` auto-selects a free port.
-- `add_tcpip_peer` establishes the handshake; both sides must share the same `peer_secret_key`.
-- After peering, `laila.peers[remote_global_id]` returns a **proxy** for the remote policy.
-- Setting `laila.active_policy` to that proxy makes `memorize`, `remember`, and `forget` operate on the remote node.
-- Peering is symmetric — both the main process and the subprocess successfully requested entries from each other.
+- The remote peer ran in a **separate subprocess** — the two sides shared nothing except the WebSocket link.
+- `DefaultWebSocketProtocol(host, port=0, peer_secret_key=...)` opens a listener on a free port; `add_connection` starts it.
+- `laila.add_peer("ws://host:port", secret)` performs the handshake and returns the peer's `global_id`; the transport is chosen from the URI scheme.
+- `laila.remember(gid, dst_policy=peer, dst_pool="...")`, `laila.memorize(entry, dst_policy=peer, dst_pool="...")`, and `laila.forget(gid, policy=peer, pool="...")` operate on the peer while the active policy stays local; `dst_policy` accepts a gid, a proxy object, or a policy nickname.
+- Peering is symmetric — both processes read from each other.
+- `laila.peers[gid]` is a `RemotePolicyProxy`; activating it enters morph mode and yields `RemoteFuture`s.
 
-Next: [Tutorial 10 — Accessing S3 Through a Remote Peer](10_peer_remote_s3.md), where you use peering to access cloud storage without local credentials.
+Next: [Tutorial 9a — Transport Zoo](09a_transport_zoo.md) swaps the WebSocket for other transports (loopback, TCP, UDP, Unix sockets) and pins a channel with `comm=`; [Tutorial 9b — Peer Routing and Relays](09b_peer_routing_and_relay.md) covers nickname addressing and 3-party relays; [Tutorial 10 — Accessing S3 Through a Remote Peer](10_peer_remote_s3.md) uses peering to reach S3 without local credentials.

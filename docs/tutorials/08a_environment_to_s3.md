@@ -71,6 +71,15 @@ for pool_id, pool_cfg in pools_section.items():
         print(f"    {k}: {v}")
 ```
 
+The snapshot also walks `central.communication`. The hub's own knobs (`liveness_interval`, `liveness_enabled`, `max_inflight_rpcs`) are captured, and every transport registered through `add_connection` appears under `central.communication.connections.<protocol_gid>` with its CLI-eligible fields (`host`, `port`, `peer_secret_key`, `codec`, ...). Runtime state such as the `peers` registry is `CLIExempt` and never mirrored. This is what lets Tutorial 8b restore a policy *with its transports* from the snapshot alone:
+
+```python
+comm_section = env["central"]["communication"]
+print("hub knobs:", {k: v for k, v in comm_section.items() if k != "connections"})
+for proto_gid, proto_cfg in comm_section.get("connections", {}).items():
+    print(f"  {proto_gid}: {proto_cfg}")
+```
+
 ## Step 3: Wrap the environment in a Manifest
 
 Turn the dict into an immutable Entry, then wrap it in a Manifest under the key `"config"`. The manifest's blueprint maps that key to the entry's `global_id`.
@@ -115,9 +124,9 @@ Reconstruct the manifest identity from its nickname, remember the blueprint, the
 manifest = Manifest(nickname="env_manifest_v1")
 
 with laila.guarantee:
-    ref = laila.remember(manifest.global_id, pool_nickname="s3")
+    ref = laila.remember(manifest.global_id, dst_pool="s3")
 
-blueprint = ref.data[0]
+blueprint = ref.data
 manifest = Manifest(data=blueprint, nickname="env_manifest_v1")
 
 print(f"Blueprint recovered: {manifest.blueprint}")
@@ -142,6 +151,7 @@ print("Round-trip verified — recovered environment matches the original")
 
 - `laila.args.environment.policies[<global_id>]` is a live, JSON-serialisable mirror of every CLI-capable policy's configuration.
 - Runtime-only fields (`resource`, `transformations`, etc.) are excluded — only reconstructable settings are captured.
+- Transports show up under `central.communication.connections.<gid>`, alongside the hub's `liveness_*` and `max_inflight_rpcs` settings; the `peers` registry does not.
 - Wrapping the dict in `laila.constant` + a `Manifest` turns it into a first-class LAILA artefact that can be memorised, remembered, and forgotten like any other entry.
 - The manifest nickname (`"env_manifest_v1"`) is all you need to recover the environment later.
 

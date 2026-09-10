@@ -32,7 +32,7 @@ entries = [
     for i in range(5)
 ]
 for e in entries:
-    laila.memorize(e, pool_nickname="warm").wait()
+    laila.memorize(e, dst_pool="warm").wait()
 
 gids = [e.global_id for e in entries]
 ```
@@ -41,19 +41,19 @@ gids = [e.global_id for e in entries]
 
 Three steps per entry:
 
-1. `remember(gid, pool_nickname="warm", persist=False)` — fetch without re-caching into the alpha pool.
-2. `memorize(entry, pool_nickname="cold")` — write to the destination.
-3. `forget(gid, pool_nickname="warm")` — drop the source copy.
+1. `remember(gid, dst_pool="warm", persist=False)` — fetch without re-caching into the alpha pool.
+2. `memorize(entry, dst_pool="cold")` — write to the destination.
+3. `forget(gid, pool="warm")` — drop the source copy.
 
 The `persist=False` is critical. With the default `persist=True` the read would also cache into the alpha pool, defeating the purpose of the move:
 
 ```python
 for gid in gids:
-    entry = laila.remember(gid, pool_nickname="warm", persist=False).wait()
+    entry = laila.remember(gid, dst_pool="warm", persist=False).wait()
     if isinstance(entry, list):
         entry = entry[0]
-    laila.memorize(entry, pool_nickname="cold").wait()
-    laila.forget(gid, pool_nickname="warm").wait()
+    laila.memorize(entry, dst_pool="cold").wait()
+    laila.forget(gid, pool="warm").wait()
 ```
 
 ## Verify

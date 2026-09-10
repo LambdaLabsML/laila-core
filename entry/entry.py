@@ -113,7 +113,7 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
 
     _ALLOWS_NON_NA_STATE: ClassVar[bool] = True
 
-    _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_ENTRY_SCOPE]))
+    _DEFAULT_SCOPES: ClassVar[list[str]] = [_ENTRY_SCOPE]
     _state: EntryState = PrivateAttr(default=EntryState.STAGED)
     _constitution: Constitution | None = PrivateAttr(default=None)
     _payload: ComputationalData | None = PrivateAttr(default=None)
@@ -494,13 +494,16 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
              to fetch the manifest if only its global_id was carried
              through serialization;
           2. ``await target.async_realized`` to recursively materialize
-             every entry the manifest references (via
-             ``laila.remember(...)`` calls that flow through the same
-             loop without ever blocking on a sync ``Future.wait()``);
-          3. offload the user's *sync* constitution body to
-             :func:`asyncio.to_thread` so any internal blocking calls
-             (``manifest.realized``, ``Future.wait()``) don't deadlock
-             the loop.
+             every entry the manifest references (the memory's
+             direct-await resolver reads the pool on this very loop
+             without creating per-child futures or blocking on a sync
+             ``Future.wait()``);
+          3. offload the user's *sync* constitution body to the owning
+             taskforce's sync executor (``run_sync``) -- or
+             :func:`asyncio.to_thread` outside a taskforce -- so any
+             internal blocking calls (``manifest.realized``,
+             ``Future.wait()``) park the slot instead of blocking the
+             loop.
 
         On success the entry is mutated in place: ``_payload`` is set,
         ``_constitution`` becomes ``None``, ``_state`` becomes
@@ -537,10 +540,18 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
 
             await target.async_realized
             # User constitution code is sync and may itself call
-            # `manifest.realized` (a sync wait). Offload to a worker
-            # thread so it doesn't block the loop and can safely call
-            # blocking ``Future.wait()`` paths.
-            result = await asyncio.to_thread(_exec_one_fn(c._code), target)
+            # `manifest.realized` (a sync wait). Offload to an executor
+            # thread so it doesn't block the loop; blocking ``wait()``
+            # paths inside the body park the taskforce slot.
+            from ..policy.central.command.schema.parking import _CURRENT_SLOT
+
+            body = _exec_one_fn(c._code)
+            slot = _CURRENT_SLOT.get()
+            tf = getattr(slot, "tf", None)
+            if tf is not None and hasattr(tf, "run_sync"):
+                result = await tf.run_sync(body, target)
+            else:
+                result = await asyncio.to_thread(body, target)
             self._post_build(result)
             self.constitution = None
             self.state = EntryState.READY

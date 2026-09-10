@@ -8,10 +8,15 @@ extended with three things the standard library doesn't provide:
   so it can be referenced across processes (see
   :class:`RemoteFuture`) and looked up in the owning policy's
   ``future_bank`` after the local handle has gone out of scope.
-- **Result-as-Entry.** Setting ``future.result = value`` automatically
-  wraps non-:class:`Entry` values in :meth:`Entry.constant`, so
-  every future ultimately resolves to an addressable entry that can
-  be ``laila.remember``'d on a peer.
+- **Result-as-Entry.** Reading ``future.result`` always yields an
+  :class:`Entry`: non-Entry values set by the producer are wrapped in
+  :meth:`Entry.constant` lazily on first read, so every future
+  ultimately resolves to an addressable entry that can be
+  ``laila.remember``'d on a peer without the runner paying for the
+  wrap up front.
+- **Explicit release.** Every future is registered in the owning
+  policy's ``future_bank`` and stays there until :meth:`Future.release`
+  is called -- nothing evicts futures automatically.
 - **Status callbacks.** Multiple callbacks can be registered against
   any :class:`FutureStatus` transition via :meth:`add_status_callback`;
   late registrations on already-fired statuses fire immediately to
@@ -38,6 +43,24 @@ from pydantic import ConfigDict, Field, PrivateAttr
 from .......utils.decorators.synchronized import synchronized
 from .future_identity import _LAILA_IDENTIFIABLE_FUTURE
 from .future_status import FutureStatus
+
+
+def _make_status_setter(status: FutureStatus) -> Callable[[Any], None]:
+    def _set(f: Any) -> None:
+        f.status = status
+
+    _set.__name__ = f"_set_status_{status.name.lower()}"
+    return _set
+
+
+_DEFAULT_STATUS_CALLBACKS: dict[FutureStatus, Callable[[Any], None]] = {
+    st: _make_status_setter(st) for st in FutureStatus
+}
+"""Shared "set my status to X" table used by every :class:`Future`.
+
+Stateless, so one dict serves all instances -- building seven closures
+per future was measurable on the per-task hot path.
+"""
 
 
 class Future(_LAILA_IDENTIFIABLE_FUTURE):
@@ -68,27 +91,33 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
     _return_value: Any = PrivateAttr(default=None)
     _exception: Exception | None = PrivateAttr(default=None)
     _result_global_id: str | None = PrivateAttr(default=None)
+    _result_pending_wrap: bool = PrivateAttr(default=False)
     _timeout_ms: int = PrivateAttr(default=100)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    _default_callbacks: dict[FutureStatus, Callable[..., Any]] = PrivateAttr(default_factory=dict)
-    _status_callbacks: dict[FutureStatus, list[Callable[..., Any]]] = PrivateAttr(
-        default_factory=dict
-    )
+    # ``_default_callbacks`` is shared and immutable (see
+    # ``_DEFAULT_STATUS_CALLBACKS``); ``_status_callbacks`` is created in
+    # ``model_post_init``. Neither uses ``PrivateAttr(default_factory=...)``
+    # because pydantic re-inspects a private factory's signature on every
+    # instantiation -- futures are constructed on the per-task hot path.
+    _default_callbacks: dict[FutureStatus, Callable[..., Any]] = PrivateAttr(default=None)
+    _status_callbacks: dict[FutureStatus, list[Callable[..., Any]]] = PrivateAttr(default=None)
     callbacks: dict[FutureStatus, Callable[..., Any]] = Field(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
-        """Wire default per-status callbacks and self-register with the
-        active local policy.
+        """Apply staged identity, wire default per-status callbacks and
+        self-register with the active local policy.
 
-        Performs three things:
+        Performs four things:
 
-        1. Populate :attr:`_default_callbacks` with the no-op
-           "set my status to X when callback X fires" entries.
-        2. Resolve the active *local* policy (``_get_active_local_policy``
+        1. Chain to :meth:`_LAILA_IDENTIFIABLE_OBJECT.model_post_init`
+           so ``self.global_id`` reflects any explicit ``uuid=``.
+        2. Point :attr:`_default_callbacks` at the shared
+           "set my status to X when callback X fires" table.
+        3. Resolve the active *local* policy (``_get_active_local_policy``
            lazily activates a ``DefaultPolicy`` if needed).
-        3. Register ``self`` in every currently-open guarantee scope
+        4. Register ``self`` in every currently-open guarantee scope
            on this thread, then drop a reference into
            ``policy.future_bank`` so the future can be looked up by
            gid even after the local handle goes out of scope.
@@ -96,6 +125,7 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
         Logging the creation event is best-effort -- failures here
         never block construction.
         """
+        super().model_post_init(__context)
         self._setup_default_callbacks()
         from ....... import _get_active_local_policy
 
@@ -110,28 +140,10 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
             pass
 
     def _setup_default_callbacks(self) -> None:
-        """Populate default status-transition callbacks."""
-        self._default_callbacks[FutureStatus.ERROR] = lambda f: setattr(
-            f, "status", FutureStatus.ERROR
-        )
-        self._default_callbacks[FutureStatus.CANCELLED] = lambda f: setattr(
-            f, "status", FutureStatus.CANCELLED
-        )
-        self._default_callbacks[FutureStatus.NOT_STARTED] = lambda f: setattr(
-            f, "status", FutureStatus.NOT_STARTED
-        )
-        self._default_callbacks[FutureStatus.RUNNING] = lambda f: setattr(
-            f, "status", FutureStatus.RUNNING
-        )
-        self._default_callbacks[FutureStatus.POLL_TIMEOUT] = lambda f: setattr(
-            f, "status", FutureStatus.POLL_TIMEOUT
-        )
-        self._default_callbacks[FutureStatus.UNKNOWN] = lambda f: setattr(
-            f, "status", FutureStatus.UNKNOWN
-        )
-        self._default_callbacks[FutureStatus.FINISHED] = lambda f: setattr(
-            f, "status", FutureStatus.FINISHED
-        )
+        """Attach the shared default status-transition table and an empty
+        per-instance status-callback registry."""
+        self._default_callbacks = _DEFAULT_STATUS_CALLBACKS
+        self._status_callbacks = {}
 
     @property
     @synchronized
@@ -207,36 +219,69 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
             if self._status in [FutureStatus.ERROR, FutureStatus.CANCELLED]:
                 raise self._exception
             if self._status == FutureStatus.FINISHED:
-                return self._return_value
+                return self._materialize_result()
         self.wait(timeout=None)
         with self.atomic():
             if self._status in [FutureStatus.ERROR, FutureStatus.CANCELLED]:
                 raise self._exception
-            return self._return_value
+            return self._materialize_result()
 
     @result.setter
     @synchronized
     def result(self, result: Any) -> None:
-        """Record the future's result, auto-wrapping non-Entry values.
+        """Record the future's result; non-Entry values are wrapped lazily.
 
         - ``None`` clears both the value and the result-id slot.
         - A live :class:`Entry` is stored as-is and its ``global_id``
-          is captured into ``_result_global_id``.
-        - Anything else is wrapped via :meth:`Entry.constant` so the
-          outcome is always addressable across processes.
+          is captured into ``_result_global_id`` immediately.
+        - Anything else is stored raw and wrapped via
+          :meth:`Entry.constant` on first read (``result`` / ``data`` /
+          :attr:`result_global_id`), so the producer's hot path does not
+          pay for an entry nobody may ever look at. The outcome is still
+          always addressable across processes once read.
         """
         from .......entry import Entry
 
         if result is None:
             self._return_value = None
             self._result_global_id = None
+            self._result_pending_wrap = False
         elif isinstance(result, Entry):
             self._return_value = result
             self._result_global_id = result.global_id
+            self._result_pending_wrap = False
         else:
-            wrapped = Entry.constant(data=result)
-            self._return_value = wrapped
-            self._result_global_id = wrapped.global_id
+            self._return_value = result
+            self._result_global_id = None
+            self._result_pending_wrap = True
+
+    def _materialize_result(self) -> Any:
+        """Return the result as an :class:`Entry`, wrapping a raw value on first use.
+
+        Must be called with the atomic lock held (it is re-entrant, so
+        callers already inside ``with self.atomic()`` are fine).
+        """
+        with self.atomic():
+            if self._result_pending_wrap:
+                from .......entry import Entry
+
+                wrapped = Entry.constant(data=self._return_value)
+                self._return_value = wrapped
+                self._result_global_id = wrapped.global_id
+                self._result_pending_wrap = False
+            return self._return_value
+
+    @property
+    def result_global_id(self) -> str | None:
+        """``global_id`` of the result entry, or ``None`` if there is no result yet.
+
+        Forces the lazy :meth:`Entry.constant` wrap for raw results so the
+        id is stable from the first time anyone asks for it. Never blocks.
+        """
+        with self.atomic():
+            if self._result_pending_wrap:
+                self._materialize_result()
+            return self._result_global_id
 
     @property
     def data(self) -> Any:
@@ -322,6 +367,34 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
             purpose=self.purpose,
             uuid=self._uuid,
         )
+
+    def release(self) -> None:
+        """Remove this future from its owning policy's ``future_bank``.
+
+        The bank holds a strong reference to every future (and therefore
+        to its result payload) until this is called; nothing releases a
+        future automatically. Call it once the result has been consumed
+        and drop your own handle to let the object be collected.
+
+        Idempotent and legal in any state: a still-running task keeps
+        its own reference to the future, so releasing early only removes
+        the gid-based lookup (``laila.runtime.status(gid)``,
+        :class:`RemoteFuture` RPCs, identity handles) -- completion is
+        unaffected. Open guarantee scopes are left untouched; they are
+        transient and drained on exit.
+        """
+        from ....... import _local_policies
+
+        gid = self.global_id
+        pid = self.policy_id.global_id if hasattr(self.policy_id, "global_id") else self.policy_id
+        policy = _local_policies.get(pid) if isinstance(pid, str) else None
+        if policy is not None and policy.future_bank.get(gid) is self:
+            policy.future_bank.pop(gid, None)
+            return
+        for policy in _local_policies.values():
+            if policy.future_bank.get(gid) is self:
+                policy.future_bank.pop(gid, None)
+                return
 
     def wait(self, timeout: float | None = None) -> Any:
         """Block until the future completes. Subclasses must override.

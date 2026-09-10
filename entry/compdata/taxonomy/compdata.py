@@ -28,6 +28,8 @@ automatically -- subclasses with bespoke serialization
 
 from __future__ import annotations
 
+from typing import Any, ClassVar
+
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from ..transformation.serialization import PickleSerializer
@@ -94,7 +96,21 @@ class ComputationalData(BaseModel):
     )
 
     data: object
-    _serializer: PickleSerializer = PrivateAttr(default_factory=PickleSerializer)
+
+    # The serializer is created lazily on first access rather than via
+    # ``PrivateAttr(default_factory=...)``: pydantic re-inspects a private
+    # factory's signature on every instantiation and ComputationalData is
+    # built for every Entry. Subclasses override ``_SERIALIZER_CLS``.
+    _SERIALIZER_CLS: ClassVar[type] = PickleSerializer
+    _serializer: Any = PrivateAttr(default=None)
+
+    def _ensure_serializer(self):
+        """Return the instance serializer, constructing the class default on first use."""
+        serializer = self._serializer
+        if serializer is None:
+            serializer = type(self)._SERIALIZER_CLS()
+            self._serializer = serializer
+        return serializer
 
     # --- Serializer getter/setter ---
     @property
@@ -103,10 +119,10 @@ class ComputationalData(BaseModel):
 
         Defaults to :class:`PickleSerializer`. Subclasses with bespoke
         serializers (e.g. :class:`CDNumpy` -> NumPy npy serializer,
-        :class:`CDTorch` -> torch.save serializer) override the
-        ``default_factory`` of the underlying private attribute.
+        :class:`CDTorch` -> torch.save serializer) override
+        :attr:`_SERIALIZER_CLS`.
         """
-        return self._serializer
+        return self._ensure_serializer()
 
     @serializer.setter
     def serializer(self, value):

@@ -20,7 +20,7 @@ laila.enable_logging(level="DEBUG", display=True)
 laila.memory.extend(DefaultPool(), pool_nickname="obs")
 
 entry = laila.constant(data={"hello": "world"}, nickname="obs_entry")
-laila.memorize(entry, pool_nickname="obs").wait()
+laila.memorize(entry, dst_pool="obs").wait()
 ```
 
 ## Changing the level
@@ -29,7 +29,7 @@ laila.memorize(entry, pool_nickname="obs").wait()
 
 ```python
 laila.set_log_level("WARNING")
-laila.memorize(laila.constant(data=42, nickname="quiet"), pool_nickname="obs").wait()
+laila.memorize(laila.constant(data=42, nickname="quiet"), dst_pool="obs").wait()
 # (no output)
 ```
 

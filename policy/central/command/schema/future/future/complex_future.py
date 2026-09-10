@@ -159,6 +159,12 @@ class ComplexFuture(Future):
                     break
         return out
 
+    def release(self) -> None:
+        """Release every stage future constructed so far, then this future."""
+        for stage in self.stage_futures():
+            stage.release()
+        super().release()
+
     def _resolve_future(self, value: Any) -> Any:
         """Return the underlying Future or GroupFuture for *value*.
 
@@ -313,19 +319,21 @@ class ComplexFuture(Future):
             If called from a thread that owns an async event loop.
         """
         from ...exceptions import _check_not_loop_thread
+        from ...parking import park_sync
 
         _check_not_loop_thread()
+        return park_sync(self._wait_impl, timeout)
 
+    def _wait_impl(self, timeout: float | None) -> Any:
         deadline = None if timeout is None else time.monotonic() + timeout
         poll_interval_s = 0.01
         while True:
             with self.atomic():
                 status = self._status
                 exc = self._exception
-                value = self._return_value
 
             if status == FutureStatus.FINISHED:
-                return value
+                return self._materialize_result()
             if status in (FutureStatus.ERROR, FutureStatus.CANCELLED):
                 if exc is not None:
                     raise exc
@@ -338,7 +346,11 @@ class ComplexFuture(Future):
             time.sleep(poll_interval_s)
 
     def __await__(self):
-        """Await the pipeline's terminal status by yielding to the event loop."""
+        """Await the pipeline's terminal status by yielding to the event loop.
+
+        Parks the current taskforce slot (if any) while pending.
+        """
+        from ...parking import park_async
 
         async def _await_terminal():
             poll_interval_s = 0.01
@@ -346,10 +358,9 @@ class ComplexFuture(Future):
                 with self.atomic():
                     status = self._status
                     exc = self._exception
-                    value = self._return_value
 
                 if status == FutureStatus.FINISHED:
-                    return value
+                    return self._materialize_result()
                 if status in (FutureStatus.ERROR, FutureStatus.CANCELLED):
                     if exc is not None:
                         raise exc
@@ -358,4 +369,4 @@ class ComplexFuture(Future):
                     )
                 await asyncio.sleep(poll_interval_s)
 
-        return _await_terminal().__await__()
+        return park_async(_await_terminal()).__await__()

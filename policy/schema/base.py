@@ -22,9 +22,9 @@ from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from ...basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS, CLIExempt
 from ...basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+from ...data.schema.base import _LAILA_IDENTIFIABLE_POOL
 from ...entry import Entry
 from ...macros.strings import _POLICY_SCOPE
-from ...data.schema.base import _LAILA_IDENTIFIABLE_POOL
 from ..central.command.schema.base import _LAILA_IDENTIFIABLE_CENTRAL_COMMAND
 
 
@@ -41,7 +41,10 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
     Plus a ``future_bank`` keyed by future ``global_id`` that every
     :class:`Future` self-registers into on construction. The bank is the
     single source of truth that lets remote-policy RPCs and
-    ``laila.runtime.wait`` look futures up by id.
+    ``laila.runtime.wait`` look futures up by id. It is a plain dict with
+    strong references and **nothing is evicted automatically**: a future
+    (and its result payload) stays in the bank until the holder calls
+    ``future.release()``.
 
     Lazy wiring
     -----------
@@ -78,6 +81,11 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
     # Core components
     central: Central = CLIExempt(default_factory=Central)
     future_bank: dict[str, Any] = CLIExempt(default_factory=dict)
+    """Live registry of every future this policy owns, keyed by ``global_id``.
+
+    Entries persist until ``Future.release()`` / ``GroupFuture.release()``
+    is called on them; there is no automatic pruning.
+    """
 
     def model_post_init(self, __context: Any) -> None:
         """Lazily wire the default central sub-systems if the user didn't supply them.
@@ -93,6 +101,7 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
         ``logic`` is intentionally left ``None`` -- it is reserved for
         future higher-level orchestration.
         """
+        super().model_post_init(__context)
         from ...macros.defaults import (
             DefaultCentralCommand,
             DefaultCentralCommunication,
@@ -255,14 +264,14 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
         future = self.future_bank.get(future_id)
         if future is None:
             raise KeyError(f"Future {future_id} not in bank")
-        if hasattr(future, "_result_global_id"):
-            return future._result_global_id
+        if hasattr(future, "result_global_id"):
+            return future.result_global_id
         if hasattr(future, "future_ids"):
             ids = []
             for fid in future.future_ids:
                 child = self.future_bank.get(fid)
-                if child and hasattr(child, "_result_global_id"):
-                    ids.append(child._result_global_id)
+                if child and hasattr(child, "result_global_id"):
+                    ids.append(child.result_global_id)
                 else:
                     ids.append(None)
             return ids
@@ -280,8 +289,8 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
         if future is None:
             raise KeyError(f"Future {future_id} not in bank")
         future.wait(timeout)
-        if hasattr(future, "_result_global_id"):
-            return future._result_global_id
+        if hasattr(future, "result_global_id"):
+            return future.result_global_id
         return None
 
     def _serialize_future_result(self, future: Any) -> Any:

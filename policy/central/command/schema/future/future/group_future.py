@@ -18,9 +18,9 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, ClassVar
 
-from pydantic import ConfigDict, Field, PrivateAttr
+from pydantic import ConfigDict, Field
 
 from .......basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from .......macros.strings import _GROUP_FUTURE_SCOPE
@@ -46,7 +46,7 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
     children's results in registration order.
     """
 
-    _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_GROUP_FUTURE_SCOPE]))
+    _DEFAULT_SCOPES: ClassVar[list[str]] = [_GROUP_FUTURE_SCOPE]
 
     taskforce_id: _LAILA_IDENTIFIABLE_OBJECT | str
     policy_id: _LAILA_IDENTIFIABLE_OBJECT | str
@@ -56,6 +56,7 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
 
     def model_post_init(self, __context: Any) -> None:
         """Register this group future with the active local policy's future bank."""
+        super().model_post_init(__context)
         from ....... import _get_active_local_policy
 
         policy = _get_active_local_policy()
@@ -72,6 +73,35 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
         """Look up child Future objects from the future bank."""
         bank = _get_future_bank()
         return [bank[fid] for fid in self.future_ids]
+
+    def release(self, *, children: bool = True) -> None:
+        """Release this group -- and by default every child -- from the future bank.
+
+        Children are reachable only through the bank (the group stores
+        ``future_ids``), so the group owns their release. Pass
+        ``children=False`` to drop only the group shell, e.g. when the
+        child ids have been re-parented into another group. Idempotent:
+        children that are already gone are skipped. Nothing calls this
+        automatically -- the holder of the group handle must.
+        """
+        from ....... import _local_policies
+
+        if children:
+            for fid in list(self.future_ids):
+                for policy in _local_policies.values():
+                    child = policy.future_bank.get(fid)
+                    if child is not None:
+                        release = getattr(child, "release", None)
+                        if release is not None:
+                            release()
+                        else:
+                            policy.future_bank.pop(fid, None)
+                        break
+        gid = self.global_id
+        for policy in _local_policies.values():
+            if policy.future_bank.get(gid) is self:
+                policy.future_bank.pop(gid, None)
+                return
 
     # ---------- computed status ----------
     @property
@@ -164,17 +194,23 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
             If a child does not expose a ``wait`` method.
         """
         from ...exceptions import _check_not_loop_thread
+        from ...parking import park_sync
 
         _check_not_loop_thread()
 
-        children = self._resolve_children()
-        return_values = []
-        for f in children:
-            if hasattr(f, "wait"):
-                return_values.append(f.wait(timeout))
-            else:
-                raise RuntimeError("Future is not associated with a native future.")
-        return return_values
+        def _wait_all() -> list[Any]:
+            children = self._resolve_children()
+            return_values = []
+            for f in children:
+                if hasattr(f, "wait"):
+                    return_values.append(f.wait(timeout))
+                else:
+                    raise RuntimeError("Future is not associated with a native future.")
+            return return_values
+
+        # Park once for the whole group so nested child waits do not
+        # release/re-acquire the slot per child.
+        return park_sync(_wait_all)
 
     @property
     def result(self) -> list[Any]:
@@ -199,13 +235,17 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
         return [f.data for f in children]
 
     def __await__(self):
-        """Await all children concurrently via ``asyncio.gather``."""
+        """Await all children concurrently via ``asyncio.gather``.
+
+        Parks the current taskforce slot (if any) for the whole group.
+        """
+        from ...parking import park_async
 
         async def _await_all():
             children = self._resolve_children()
             return await asyncio.gather(*children)
 
-        return _await_all().__await__()
+        return park_async(_await_all()).__await__()
 
     # ---------- introspection ----------
     @property

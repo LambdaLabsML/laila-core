@@ -23,10 +23,10 @@ Usage:
     export LAILA_CLAUDE_TOKEN=sk-ant-...
     python tools/laila_translate.py app.py --target esp32 --stage full -o out/
 """
+
 from __future__ import annotations
 
 import argparse
-import glob
 import os
 import re
 import subprocess
@@ -34,7 +34,11 @@ import sys
 import tempfile
 
 SUPPORTED_TARGETS = [
-    "posix", "baremetal_singlecore", "esp32", "rp2040", "stm32",
+    "posix",
+    "baremetal_singlecore",
+    "esp32",
+    "rp2040",
+    "stm32",
 ]
 
 # Repo root (the laila-C tree: this file is at <root>/tools/laila_translate.py).
@@ -46,9 +50,21 @@ _HAL_INCLUDE = os.path.join(_ROOT, "hal", "include")
 # These are injected verbatim so the model uses REAL symbols (the "anchor") rather
 # than inventing them. ~52KB total -- comfortably within context.
 _ANCHOR_HEADERS = [
-    "laila.hpp", "value.hpp", "entry.hpp", "future.hpp", "policy.hpp",
-    "communication.hpp", "pool.hpp", "pools.hpp", "status.hpp", "identity.hpp",
-    "constitution.hpp", "manifest.hpp", "logger.hpp", "runtime.hpp", "json.hpp",
+    "laila.hpp",
+    "value.hpp",
+    "entry.hpp",
+    "future.hpp",
+    "policy.hpp",
+    "communication.hpp",
+    "pool.hpp",
+    "pools.hpp",
+    "status.hpp",
+    "identity.hpp",
+    "constitution.hpp",
+    "manifest.hpp",
+    "logger.hpp",
+    "runtime.hpp",
+    "json.hpp",
 ]
 
 
@@ -78,6 +94,7 @@ def api_anchor() -> str:
 def _compiler() -> str | None:
     for cc in ("g++", "c++", "clang++"):
         from shutil import which
+
         if which(cc):
             return cc
     return None
@@ -105,6 +122,7 @@ def syntax_check(cpp_text: str, defines: list[str] | None = None) -> tuple[bool,
         return proc.returncode == 0, proc.stderr.strip()
     finally:
         os.unlink(tmp)
+
 
 SYSTEM_PROMPT = """You are the laila translation compiler. You translate programs
 that use the Python `laila` library into laila-C (a generic, platform-independent
@@ -162,35 +180,36 @@ Cross-policy routing (peer / policy_id):
 
 STAGE_INSTRUCTIONS = {
     "py2c": "Translate the following Python `laila` program into generic laila-C "
-            "(platform-independent C++17 using <laila/laila.hpp>). Keep it generic; "
-            "do not assume a specific platform. Honor the cross-policy routing rule: "
-            "policy_id/peer targets become laila->add_tcpip_peer(...) + "
-            "RememberOpts.policy_id; inbound serving is just "
-            "add_connection(DefaultTCPIPProtocol(...)) (it serves automatically; "
-            "there is no listen()/poll()).",
+    "(platform-independent C++17 using <laila/laila.hpp>). Keep it generic; "
+    "do not assume a specific platform. Honor the cross-policy routing rule: "
+    "policy_id/peer targets become laila->add_tcpip_peer(...) + "
+    "RememberOpts.policy_id; inbound serving is just "
+    "add_connection(DefaultTCPIPProtocol(...)) (it serves automatically; "
+    "there is no listen()/poll()).",
     "c2target": "Specialize the following generic laila-C for platform '{target}'. "
-                "Select the {target} HAL backend, set the appropriate build options "
-                "(e.g. LAILA_SINGLE_CORE for single-core MCUs), and replace any "
-                "capability the target cannot honor with a LAILA_UNSUPPORTED error. "
-                "Use ONLY the laila-C API from the anchor below -- do not invent types, "
-                "methods, or headers. For target 'esp32': "
-                "(a) include ONLY <laila/laila.hpp> and <cstdio>; "
-                "(b) the entry point is `extern \"C\" void app_main()`; "
-                "(c) the ONLY device-specific extern is "
-                "`void laila_esp32_wifi_connect(const char* ssid, const char* pass)` "
-                "(provided by the scaffold) -- call it FIRST; do not invent any other "
-                "esp32_*/laila_esp32_* helpers or platform headers; "
-                "(d) create+activate a local policy with "
-                "`auto p = std::make_shared<laila_c::Policy>(); laila_c::activate_policy(p);` "
-                "(or rely on the lazily-created active policy via get_active_policy()); "
-                "(e) read Future results with ->data()/->wait() and LailaValue accessors "
-                "(as_string()/as_int()/...), NOT to_string(); use std::printf for logs; "
-                "(f) if it serves peers, call "
-                "laila->add_connection(std::make_shared<DefaultTCPIPProtocol>(...)) "
-                "(it serves in the background automatically; there is no poll()); "
-                "(g) use the deployment config values below for host/port/secret/ssid. "
-                "Keep cooperative (single-core) Futures.",
+    "Select the {target} HAL backend, set the appropriate build options "
+    "(e.g. LAILA_SINGLE_CORE for single-core MCUs), and replace any "
+    "capability the target cannot honor with a LAILA_UNSUPPORTED error. "
+    "Use ONLY the laila-C API from the anchor below -- do not invent types, "
+    "methods, or headers. For target 'esp32': "
+    "(a) include ONLY <laila/laila.hpp> and <cstdio>; "
+    '(b) the entry point is `extern "C" void app_main()`; '
+    "(c) the ONLY device-specific extern is "
+    "`void laila_esp32_wifi_connect(const char* ssid, const char* pass)` "
+    "(provided by the scaffold) -- call it FIRST; do not invent any other "
+    "esp32_*/laila_esp32_* helpers or platform headers; "
+    "(d) create+activate a local policy with "
+    "`auto p = std::make_shared<laila_c::Policy>(); laila_c::activate_policy(p);` "
+    "(or rely on the lazily-created active policy via get_active_policy()); "
+    "(e) read Future results with ->data()/->wait() and LailaValue accessors "
+    "(as_string()/as_int()/...), NOT to_string(); use std::printf for logs; "
+    "(f) if it serves peers, call "
+    "laila->add_connection(std::make_shared<DefaultTCPIPProtocol>(...)) "
+    "(it serves in the background automatically; there is no poll()); "
+    "(g) use the deployment config values below for host/port/secret/ssid. "
+    "Keep cooperative (single-core) Futures.",
 }
+
 
 # ESP-IDF project scaffold emitted alongside the translated main for `esp32`.
 # These are static, token-free templates so a device build is one `idf.py build`
@@ -222,8 +241,9 @@ def _scaffold_files(cfg: dict) -> dict:
         ),
     }
 
+
 # Real Wi-Fi station bring-up (the function esp32_main.cpp forward-declares).
-_WIFI_CPP = r'''// Wi-Fi station bring-up for laila-C on ESP32 (generated by laila-translate).
+_WIFI_CPP = r"""// Wi-Fi station bring-up for laila-C on ESP32 (generated by laila-translate).
 #include <cstring>
 #include "esp_event.h"
 #include "esp_netif.h"
@@ -259,7 +279,7 @@ extern "C" void laila_esp32_wifi_connect(const char* ssid, const char* pass) {
   esp_wifi_start();
   xEventGroupWaitBits(s_wifi_eg, GOT_IP, false, true, portMAX_DELAY);
 }
-'''
+"""
 
 
 def get_token() -> str:
@@ -334,8 +354,12 @@ def to_host_checkable(cpp_text: str) -> str:
     headers (esp_*, freertos/*, lwip/*, driver/*, nvs_flash). Only the laila-C
     surface remains under test."""
     out = re.sub(r'extern\s+"C"\s+void\s+app_main\s*\(\s*\)', "int main()", cpp_text)
-    out = re.sub(r"^\s*#\s*include\s*[<\"](esp_|freertos/|lwip/|driver/|nvs_flash|esp_wifi|esp_netif).*$",
-                 "", out, flags=re.MULTILINE)
+    out = re.sub(
+        r"^\s*#\s*include\s*[<\"](esp_|freertos/|lwip/|driver/|nvs_flash|esp_wifi|esp_netif).*$",
+        "",
+        out,
+        flags=re.MULTILINE,
+    )
     stub_line = 'extern "C" void laila_esp32_wifi_connect(const char*, const char*) {}'
     needs_stub = "laila_esp32_wifi_connect" in out and stub_line not in out
     return (stub_line + "\n" + out) if needs_stub else out
@@ -354,8 +378,15 @@ def _repair(token: str, model: str, code: str, errors: str) -> str:
     return _strip_fences(call_claude(token, model, SYSTEM_PROMPT, user))
 
 
-def verify_and_fix(token: str, model: str, code: str, defines: list[str],
-                   label: str, rounds: int, host_check: bool = False) -> tuple[str, bool]:
+def verify_and_fix(
+    token: str,
+    model: str,
+    code: str,
+    defines: list[str],
+    label: str,
+    rounds: int,
+    host_check: bool = False,
+) -> tuple[str, bool]:
     """Compile-gate `code` against laila-C, repairing via the model up to `rounds`
     times. Returns (final_code, ok). `host_check` rewrites a platform TU to a host-
     checkable form for the gate only (the returned code is the real target code)."""
@@ -366,14 +397,21 @@ def verify_and_fix(token: str, model: str, code: str, defines: list[str],
         probe = to_host_checkable(code) if host_check else code
         ok, errs = syntax_check(probe, defines)
         if ok:
-            sys.stderr.write(f"[laila-translate] verify {label}: OK"
-                             + (f" (after {attempt} fix round(s))" if attempt else "") + "\n")
+            sys.stderr.write(
+                f"[laila-translate] verify {label}: OK"
+                + (f" (after {attempt} fix round(s))" if attempt else "")
+                + "\n"
+            )
             return code, True
         if attempt == rounds:
-            sys.stderr.write(f"[laila-translate] verify {label}: STILL FAILING after "
-                             f"{rounds} fix round(s); writing best effort.\n{errs[:1500]}\n")
+            sys.stderr.write(
+                f"[laila-translate] verify {label}: STILL FAILING after "
+                f"{rounds} fix round(s); writing best effort.\n{errs[:1500]}\n"
+            )
             return code, False
-        sys.stderr.write(f"[laila-translate] verify {label}: fixing (round {attempt + 1}/{rounds})...\n")
+        sys.stderr.write(
+            f"[laila-translate] verify {label}: fixing (round {attempt + 1}/{rounds})...\n"
+        )
         code = _repair(token, model, code, errs)
     return code, True
 
@@ -392,14 +430,27 @@ def write_scaffold(out_dir: str, cfg: dict, app_main: str | None) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Translate Python laila -> laila-C -> targeted C via Claude.")
+    ap = argparse.ArgumentParser(
+        description="Translate Python laila -> laila-C -> targeted C via Claude."
+    )
     ap.add_argument("source", help="Path to the Python laila source file.")
-    ap.add_argument("--target", default="posix", choices=SUPPORTED_TARGETS,
-                    help="Target platform for the c2target/full stages.")
-    ap.add_argument("--stage", default="full", choices=["py2c", "c2target", "full"],
-                    help="Which translation stage(s) to run.")
-    ap.add_argument("--model", default=os.environ.get("LAILA_CLAUDE_MODEL", "claude-sonnet-4-5"),
-                    help="Claude model id (override with LAILA_CLAUDE_MODEL).")
+    ap.add_argument(
+        "--target",
+        default="posix",
+        choices=SUPPORTED_TARGETS,
+        help="Target platform for the c2target/full stages.",
+    )
+    ap.add_argument(
+        "--stage",
+        default="full",
+        choices=["py2c", "c2target", "full"],
+        help="Which translation stage(s) to run.",
+    )
+    ap.add_argument(
+        "--model",
+        default=os.environ.get("LAILA_CLAUDE_MODEL", "claude-sonnet-4-5"),
+        help="Claude model id (override with LAILA_CLAUDE_MODEL).",
+    )
     ap.add_argument("-o", "--out-dir", default="laila_c_out", help="Output directory.")
     # Deployment config baked into the device main / scaffold (esp32).
     ap.add_argument("--project", default="laila_app", help="ESP-IDF project name.")
@@ -408,15 +459,28 @@ def main() -> int:
     ap.add_argument("--peer-host", help="Peer (your machine) host/IP.")
     ap.add_argument("--peer-port", type=int, help="Peer port.")
     ap.add_argument("--peer-secret", help="Peer shared secret (peer_secret_key).")
-    ap.add_argument("--listen-port", type=int,
-                    help="Local port to serve on (so a peer can pull from this device).")
-    ap.add_argument("--scaffold-only", action="store_true",
-                    help="Write the esp32 ESP-IDF scaffold (Wi-Fi + build) without calling Claude.")
-    ap.add_argument("--no-verify", action="store_true",
-                    help="Skip the laila-C compile-gate (by default each stage must "
-                         "-fsyntax-only compile against the real laila-C headers).")
-    ap.add_argument("--max-fix-rounds", type=int, default=2,
-                    help="Max model repair rounds when the compile-gate fails (default 2).")
+    ap.add_argument(
+        "--listen-port",
+        type=int,
+        help="Local port to serve on (so a peer can pull from this device).",
+    )
+    ap.add_argument(
+        "--scaffold-only",
+        action="store_true",
+        help="Write the esp32 ESP-IDF scaffold (Wi-Fi + build) without calling Claude.",
+    )
+    ap.add_argument(
+        "--no-verify",
+        action="store_true",
+        help="Skip the laila-C compile-gate (by default each stage must "
+        "-fsyntax-only compile against the real laila-C headers).",
+    )
+    ap.add_argument(
+        "--max-fix-rounds",
+        type=int,
+        default=2,
+        help="Max model repair rounds when the compile-gate fails (default 2).",
+    )
     args = ap.parse_args()
 
     cfg = {
@@ -440,7 +504,7 @@ def main() -> int:
         return 0
 
     token = get_token()  # exits if missing -- the token is mandatory
-    with open(args.source, "r", encoding="utf-8") as f:
+    with open(args.source, encoding="utf-8") as f:
         source = f.read()
 
     # Single-core MCU backends compile the core with LAILA_SINGLE_CORE; platform
@@ -466,15 +530,23 @@ def main() -> int:
         targeted = run_stage(token, args.model, "c2target", stage1, args.target, cfg)
         if not args.no_verify:
             defines = ["-DLAILA_SINGLE_CORE=1"] if args.target in single_core else []
-            targeted, ok = verify_and_fix(token, args.model, targeted, defines,
-                                          f"c2target ({args.target})", rounds,
-                                          host_check=args.target in host_only)
+            targeted, ok = verify_and_fix(
+                token,
+                args.model,
+                targeted,
+                defines,
+                f"c2target ({args.target})",
+                rounds,
+                host_check=args.target in host_only,
+            )
             gate_ok = gate_ok and ok
         if args.target == "esp32":
             # Translated app -> main/app_main.cpp, plus the ESP-IDF + Wi-Fi scaffold.
             write_scaffold(args.out_dir, cfg, app_main=targeted)
         else:
-            with open(os.path.join(args.out_dir, f"main_{args.target}.cpp"), "w", encoding="utf-8") as f:
+            with open(
+                os.path.join(args.out_dir, f"main_{args.target}.cpp"), "w", encoding="utf-8"
+            ) as f:
                 f.write(targeted)
 
     status = "done" if gate_ok else "done (compile-gate FAILED -- see diagnostics above)"

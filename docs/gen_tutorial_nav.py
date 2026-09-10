@@ -3,7 +3,8 @@
 Scans for tutorial markdown files, extracts the first ``# Title`` line
 from each, and writes a ``tutorials/SUMMARY.md`` consumed by
 mkdocs-literate-nav.  Tutorials 01-07 are grouped under **Basics**,
-08-17 under **Intermediate**, and 18+ under **Advanced**.
+08-17 under **Intermediate**, and 18+ under **Advanced** (an ``a``/``b``
+suffix such as ``09a`` sorts with its base number).
 
 Also copies the matching Jupyter notebooks into the virtual
 ``tutorials/notebooks/`` directory so each tutorial page can offer a

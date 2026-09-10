@@ -40,12 +40,12 @@ Wrap the integers 1 through 10 as LAILA constant entries and push them to S3. `m
 ```python
 entries = [laila.constant(data=i, nickname=f"number_{i}") for i in range(1, 11)]
 
-upload_future = laila.memorize(entries, pool_nickname="async_pool")
-print("Before await:", laila.status(upload_future))
+upload_future = laila.memorize(entries, dst_pool="async_pool")
+print("Before await:", laila.runtime.status(upload_future))
 
 await upload_future
 
-print("After await: ", laila.status(upload_future))
+print("After await: ", laila.runtime.status(upload_future))
 ```
 
 ## Step 2: Define the async doubling function
@@ -53,8 +53,8 @@ print("After await: ", laila.status(upload_future))
 An `async` function that remembers entries from S3, doubles every value, and writes the results back. Each I/O call returns a future that you `await`, so the event loop stays free between operations:
 
 ```python
-async def double_entries(entry_ids, pool_nickname):
-    remember_future = laila.remember(entry_ids, pool_nickname=pool_nickname)
+async def double_entries(entry_ids, pool):
+    remember_future = laila.remember(entry_ids, dst_pool=pool)
     remembered = await remember_future
 
     doubled = []
@@ -65,7 +65,7 @@ async def double_entries(entry_ids, pool_nickname):
         )
         doubled.append(new_entry)
 
-    upload_future = laila.memorize(doubled, pool_nickname=pool_nickname)
+    upload_future = laila.memorize(doubled, dst_pool=pool)
     await upload_future
 
     return doubled
@@ -77,7 +77,7 @@ Jupyter runs its own `asyncio` event loop, so top-level `await` works out of the
 
 ```python
 original_ids = [e.global_id for e in entries]
-doubled_entries = await double_entries(original_ids, pool_nickname="async_pool")
+doubled_entries = await double_entries(original_ids, pool="async_pool")
 
 for orig, dbl in zip(entries, doubled_entries):
     print(f"  {orig.data} -> {dbl.data}")
@@ -91,7 +91,7 @@ Delete local references and recall the doubled entries purely by their `global_i
 doubled_ids = [e.global_id for e in doubled_entries]
 del doubled_entries
 
-verify_future = laila.remember(doubled_ids, pool_nickname="async_pool")
+verify_future = laila.remember(doubled_ids, dst_pool="async_pool")
 verified = await verify_future
 
 for i, entry in enumerate(verified, start=1):
@@ -110,14 +110,14 @@ bank = laila.get_active_policy().future_bank
 
 async with laila.guarantee_async:
     for gid in doubled_ids:
-        ref = laila.remember(gid, pool_nickname="async_pool")
+        ref = laila.remember(gid, dst_pool="async_pool")
         recalled = await bank[ref.global_id]
 
         quad_entry = laila.constant(
             data=recalled.data * 2,
             nickname=f"quadrupled_{recalled.nickname}",
         )
-        laila.memorize(quad_entry, pool_nickname="async_pool")
+        laila.memorize(quad_entry, dst_pool="async_pool")
         quadrupled_entries.append(quad_entry)
 
 print(f"Processed {len(quadrupled_entries)} entries inside guarantee_async")
@@ -125,15 +125,27 @@ print(f"Processed {len(quadrupled_entries)} entries inside guarantee_async")
 
 ## Step 6: Inspect futures
 
-Every future created by LAILA is stored in the active policy's **future bank**. You can query status at any time with `laila.status(future)`, which returns a percentage breakdown for `GroupFuture` objects:
+Every future created by LAILA is stored in the active policy's **future bank**. You can query status at any time with `laila.runtime.status(future)`, which returns a percentage breakdown for `GroupFuture` objects:
 
 ```python
-print("upload_future status:", laila.status(upload_future))
+print("upload_future status:", laila.runtime.status(upload_future))
 print(f"  children: {len(upload_future)}")
 
 future_bank = laila.get_active_policy().future_bank
 print(f"Total futures in bank: {len(future_bank)}")
 ```
+
+## Step 7: Release futures when you are done
+
+The future bank never evicts anything on its own: every future you create stays registered (together with its result payload) until you call `release()` on it. Once you have read a result, release the future and drop your reference:
+
+```python
+upload_future.release()      # a GroupFuture releases all its children too
+verify_future.release()
+print(f"Futures still in bank: {len(future_bank)}")
+```
+
+Futures returned to you by `laila.memorize` / `laila.remember` / `laila.command.submit` are yours to release. LAILA releases the futures it creates and consumes internally (for example inside `manifest.realized`).
 
 ## Clean up
 
@@ -145,7 +157,7 @@ all_ids = (
 )
 
 async with laila.guarantee_async:
-    laila.forget(all_ids, pool_nickname="async_pool")
+    laila.forget(all_ids, pool="async_pool")
 ```
 
 ## Summary
@@ -154,7 +166,9 @@ async with laila.guarantee_async:
 - For a single-entry operation, look up the future in the **future bank** (`laila.get_active_policy().future_bank`) and `await` that.
 - **`async with laila.guarantee_async:`** tracks every future created in its scope and awaits them all on exit — ideal for reactive loops where entries arrive one at a time.
 - `GroupFuture.__await__` uses `asyncio.gather` internally, so all children resolve concurrently.
-- `laila.status(future)` returns a percentage breakdown (`finished`, `running`, `error`, etc.) at any point.
+- You can run coroutines like `double_entries` *on* a taskforce too — `laila.command.submit([functools.partial(double_entries, ids, pool)])` — and still `await laila.remember(...)` inside them. While a submitted task awaits a LAILA future its taskforce slot is **parked** (released and re-acquired afterwards), so nested submissions never deadlock, however small the taskforce.
+- `laila.runtime.status(future)` returns a percentage breakdown (`finished`, `running`, `error`, etc.) at any point.
+- Call `future.release()` once you have consumed a result — nothing is removed from the future bank automatically.
 - This pattern generalises to any async data pipeline — transform, filter, enrich, or route entries without blocking.
 
 Next: [Tutorial 8a — Saving the Environment to S3](08a_environment_to_s3.md), where you capture and persist the full policy configuration as a manifest.

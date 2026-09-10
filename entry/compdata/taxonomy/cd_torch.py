@@ -9,7 +9,7 @@ attempts to pool a tensor will fall back to :class:`CD_generic`
 (pickle), which works but is much slower and not GPU-aware.
 """
 
-from pydantic import PrivateAttr
+from typing import ClassVar
 
 from ..transformation.serialization import TorchSerializer
 from .compdata import ComputationalData, _scalar_len, register_cdtype
@@ -37,13 +37,13 @@ if _HAVE_TORCH:
         """
 
         data: "torch.Tensor"  # type: ignore[name-defined]
-        _serializer: TorchSerializer = PrivateAttr(default_factory=TorchSerializer)
+        _SERIALIZER_CLS: ClassVar[type] = TorchSerializer
 
         # --- Serializer getter/setter ---
         @property
         def serializer(self) -> TorchSerializer:
             """Return the serializer instance (public accessor)."""
-            return self._serializer
+            return self._ensure_serializer()
 
         @serializer.setter
         def serializer(self, value: TorchSerializer):
