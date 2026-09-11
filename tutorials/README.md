@@ -190,6 +190,22 @@ Where a pool is a map keyed by `global_id`, `MultiBuffer` is a fixed ring of int
 
 **No credentials or external services required.**
 
+## Examples — `../examples/image_dataset/`
+
+Longer, end-to-end walkthroughs that combine several features into one workflow. They are rendered under the **Examples** tab of the documentation site.
+
+### Example 1. Dataset Creation — Random Images to Cloudflare R2 — `01_dataset_creation.ipynb`
+
+Set up a Cloudflare R2 bucket and API token step by step, generate random PNG and JPEG images with Pillow, store each one as an entry whose payload is the raw file bytes, and index them all under a `Manifest` nicknamed `my_dataset`. Finishes by recovering the dataset from a cold start using only the nickname.
+
+**Requires:** `pip install "laila-core[cloudflare]" pillow` and a `secrets.toml` with `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`.
+
+### Example 2. Data Loader — Prefetching Through memory << hdd << cloudflare — `02_data_loader.ipynb`
+
+Wire `laila.alpha_pool << hdd << r2` and build a `LailaDataLoader` with a four-batch lookahead: each sample runs `await laila.remember(gid)` through the proxy chain and a bytes-to-`torch.Tensor` cast on a LAILA taskforce, so `next()` never waits on Cloudflare. Consumed batches are forgotten from the alpha pool, and optionally from the HDF5 cache, to bound memory and disk. Cleans up the dataset created in Example 1.
+
+**Requires:** `pip install "laila-core[cloudflare,hdf5,torch]" pillow`, the same `secrets.toml`, and the `my_dataset` manifest from Example 1.
+
 ## Getting started
 
 ```bash

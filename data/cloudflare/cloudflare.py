@@ -13,6 +13,11 @@ except ImportError:
     boto3 = None  # type: ignore
     BotocoreConfig = None  # type: ignore
 
+try:
+    import aioboto3
+except ImportError:
+    aioboto3 = None  # type: ignore
+
 
 class CloudflarePool(BotoPool):
     """
@@ -26,16 +31,20 @@ class CloudflarePool(BotoPool):
     access_key_id: str = Field(...)
     secret_access_key: str = Field(...)
 
+    @property
+    def endpoint_url(self) -> str:
+        """The R2 S3-compatible endpoint derived from ``account_id``."""
+        return f"https://{self.account_id}.r2.cloudflarestorage.com"
+
     def _get_client(self):
         """Return a boto3 S3 client configured for Cloudflare R2."""
         if self._client is not None:
             return self._client
         if boto3 is None or BotocoreConfig is None:
             raise ImportError("boto3 is required for CloudflarePool")
-        endpoint = f"https://{self.account_id}.r2.cloudflarestorage.com"
         self._client = boto3.client(
             "s3",
-            endpoint_url=endpoint,
+            endpoint_url=self.endpoint_url,
             aws_access_key_id=self.access_key_id,
             aws_secret_access_key=self.secret_access_key,
             config=BotocoreConfig(
@@ -44,3 +53,20 @@ class CloudflarePool(BotoPool):
             ),
         )
         return self._client
+
+    def _get_aio_session(self):
+        """Return a cached :class:`aioboto3.Session` carrying the R2 API token."""
+        if aioboto3 is None:
+            raise ImportError(
+                "aioboto3 is required for the async R2 path; install with `pip install aioboto3`"
+            )
+        if self._aio_session is None:
+            self._aio_session = aioboto3.Session(
+                aws_access_key_id=self.access_key_id,
+                aws_secret_access_key=self.secret_access_key,
+            )
+        return self._aio_session
+
+    def _aio_client_kwargs(self):
+        """Point the aioboto3 client at the R2 endpoint instead of AWS."""
+        return {"endpoint_url": self.endpoint_url}

@@ -13,6 +13,11 @@ except ImportError:
     boto3 = None  # type: ignore
     BotocoreConfig = None  # type: ignore
 
+try:
+    import aioboto3
+except ImportError:
+    aioboto3 = None  # type: ignore
+
 
 class BackblazePool(BotoPool):
     """
@@ -42,3 +47,20 @@ class BackblazePool(BotoPool):
             ),
         )
         return self._client
+
+    def _get_aio_session(self):
+        """Return a cached :class:`aioboto3.Session` carrying the B2 application key."""
+        if aioboto3 is None:
+            raise ImportError(
+                "aioboto3 is required for the async B2 path; install with `pip install aioboto3`"
+            )
+        if self._aio_session is None:
+            self._aio_session = aioboto3.Session(
+                aws_access_key_id=self.application_key_id,
+                aws_secret_access_key=self.application_key,
+            )
+        return self._aio_session
+
+    def _aio_client_kwargs(self):
+        """Point the aioboto3 client at the B2 endpoint instead of AWS."""
+        return {"endpoint_url": self.endpoint_url}

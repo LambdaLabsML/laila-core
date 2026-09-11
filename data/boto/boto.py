@@ -162,6 +162,15 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
             max_pool_connections=self.max_pool_connections,
         )
 
+    def _aio_client_kwargs(self) -> dict[str, Any]:
+        """Extra keyword arguments for ``session.client("s3", ...)`` on the async path.
+
+        The default is empty (plain AWS S3). S3-compatible vendors override
+        this to inject their ``endpoint_url`` so the aioboto3 client talks to
+        the same host as the sync :meth:`_get_client`.
+        """
+        return {}
+
     @asynccontextmanager
     async def _aio_client(self):
         """Yield a shared aioboto3 S3 client cached on the running event loop.
@@ -200,7 +209,9 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
                 return cached[0]
 
             session = self._get_aio_session()
-            ctx = session.client("s3", config=self._aio_client_config())
+            ctx = session.client(
+                "s3", config=self._aio_client_config(), **self._aio_client_kwargs()
+            )
             client = await ctx.__aenter__()
             self._aio_clients[loop_id] = (client, ctx, loop)
             return client
