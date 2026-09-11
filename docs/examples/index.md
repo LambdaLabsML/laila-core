@@ -7,9 +7,9 @@ End-to-end walkthroughs that combine several LAILA features into one workflow. W
 Two examples that together form a complete dataset workflow on Cloudflare R2:
 
 1. [Dataset Creation — Random Images to Cloudflare R2](01_dataset_creation.md)
-   Set up an R2 bucket and API token, generate random PNG and JPEG images, store each one as an entry whose payload is the raw file bytes, and index them all under a `Manifest` named `my_dataset`.
+   Set up an R2 bucket and API token, generate random PNG images, store each one as an entry whose payload is the raw file bytes, and index them all under a `Manifest` named `my_dataset`.
 
 2. [Data Loader — Prefetching Through memory << hdd << cloudflare](02_data_loader.md)
-   Wire `laila.alpha_pool << hdd << r2`, then write a `LailaDataLoader` that keeps four batches in flight, runs `laila.remember` and a bytes-to-`torch.Tensor` cast per sample on a LAILA taskforce, and `forget`s each batch from memory (and optionally disk) once the model has consumed it.
+   Wire `laila.alpha_pool << hdd << r2`, then write `LailaDataLoader`, a `torch.utils.data.DataLoader` subclass that keeps four batches in flight, runs `laila.remember` and a bytes-to-`torch.Tensor` cast per sample on a LAILA taskforce, and `forget`s each batch from memory (and optionally disk) once the model has consumed it.
 
 **Requires:** `pip install "laila-core[cloudflare,hdf5,torch]" pillow` and a `secrets.toml` with Cloudflare R2 credentials. Example 1 walks through obtaining them.

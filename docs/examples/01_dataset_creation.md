@@ -1,6 +1,6 @@
 # Example 1: Dataset Creation — Random Images to Cloudflare R2
 
-Build an image dataset from scratch and push it to Cloudflare R2. Every image is encoded as PNG or JPEG bytes and stored as one LAILA entry, so what lives in the bucket is exactly the file you would get from `PIL.Image.save`. A single **Manifest** named `my_dataset` records the `global_id` of every image under its own key (`image_0000`, `image_0001`, ...), which is all a consumer needs to find and slice the dataset later.
+Build an image dataset from scratch and push it to Cloudflare R2. Every image is encoded as PNG bytes and stored as one LAILA entry, so what lives in the bucket is exactly the file you would get from `PIL.Image.save`. A single **Manifest** named `my_dataset` records the `global_id` of every image under its own key (`image_0000`, `image_0001`, ...), which is all a consumer needs to find and slice the dataset later.
 
 [Example 2](02_data_loader.md) reads this dataset back through a `memory << hdd << cloudflare` cache chain with a prefetching data loader.
 
@@ -63,55 +63,64 @@ r2 = CloudflarePool(
 laila.memory.extend(r2, pool_nickname="r2")
 ```
 
-## Generate random images
+## Generate and upload images as they are created
 
-Draw `uint8` noise, turn it into a `PIL.Image`, and encode it into an in-memory buffer. Even-numbered images are saved as PNG, odd-numbered ones as JPEG, so the dataset mixes both formats. The bytes in the buffer are what gets stored; the entry's `data` is the file contents, nothing more.
+Draw `uint8` noise and encode it as PNG **in memory**: `encode_png` writes into a `BytesIO` buffer, never to disk, and returns the file bytes. Each iteration wraps those bytes in a `laila.constant` and calls `laila.memorize(..., dst_pool="r2")` right away. `memorize` returns a future immediately, so the upload of image *i* is already in flight while image *i+1* is being generated. Nothing is kept locally except the entry's `global_id`, which goes into a plain dict, the **blueprint**, under the key `image_0000`, `image_0001`, ...
+
+The loop sits inside `with laila.guarantee:` so the block only exits once every upload has finished.
 
 ```python
 N_IMAGES = 64
 HEIGHT = WIDTH = 32
 
-rng = np.random.default_rng(seed=0)
-entries = []
 
-for i in range(N_IMAGES):
-    pixels = rng.integers(0, 256, size=(HEIGHT, WIDTH, 3), dtype=np.uint8)
-    image = Image.fromarray(pixels, mode="RGB")
-
+def encode_png(pixels: np.ndarray) -> bytes:
+    """Encode an H x W x 3 uint8 array as PNG bytes, entirely in memory."""
     buffer = io.BytesIO()
-    if i % 2 == 0:
-        image.save(buffer, format="PNG")
-    else:
-        image.save(buffer, format="JPEG", quality=90)
+    Image.fromarray(pixels, mode="RGB").save(buffer, format="PNG")  # into the buffer, not a file
+    return buffer.getvalue()
 
-    entries.append(laila.constant(data=buffer.getvalue()))
 
-print(f"Created {len(entries)} image entries")
-print(f"  image 0 (PNG):  {len(entries[0].data):,} bytes, starts with {entries[0].data[:4]!r}")
-print(f"  image 1 (JPEG): {len(entries[1].data):,} bytes, starts with {entries[1].data[:4]!r}")
+rng = np.random.default_rng(seed=0)
+blueprint = {}
+total_bytes = 0
+
+with laila.guarantee:  # every future created inside is awaited when the block exits
+    for i in range(N_IMAGES):
+        pixels = rng.integers(0, 256, size=(HEIGHT, WIDTH, 3), dtype=np.uint8)
+        png = encode_png(pixels)
+        entry = laila.constant(data=png)
+
+        laila.memorize(entry, dst_pool="r2")          # upload starts now, in the background
+        blueprint[f"image_{i:04d}"] = entry.global_id  # keep only the id
+
+        total_bytes += len(png)
+
+print(f"Uploaded {len(blueprint)} PNG images ({total_bytes:,} bytes) to R2")
+print(f"image_0000 -> {blueprint['image_0000']}")
+print(f"image_0000 in R2? {r2.exists(blueprint['image_0000'])}")
+print(f"first bytes: {png[:4]!r}")
 ```
 
 Expected output:
 
 ```
-Created 64 image entries
-  image 0 (PNG):  3,209 bytes, starts with b'\x89PNG'
-  image 1 (JPEG): 2,301 bytes, starts with b'\xff\xd8\xff\xe0'
+Uploaded 64 PNG images (203,008 bytes) to R2
+image_0000 -> LAILA:ENTRY:GLOBAL_ID:3b9c...
+image_0000 in R2? True
+first bytes: b'\x89PNG'
 ```
 
-The byte counts vary with the random seed, but the magic numbers show that each entry holds a real PNG or JPEG file.
+The byte count varies with the random seed, but the `\x89PNG` magic number shows that each entry holds a real PNG file.
 
-## Build the manifest
+## Build the manifest from the blueprint
 
-A `Manifest` wraps a nested dict of entries and extracts a **blueprint**: the same structure with `global_id` strings in place of the entries. Give it the nickname `my_dataset` so anyone can rebuild its identity later without knowing the UUID.
+A `Manifest` can be constructed directly from a blueprint: a dict whose leaves are `global_id` strings. Because the images are already in R2, there is nothing pending to upload; the manifest is only an index. Give it the nickname `my_dataset` so anyone can rebuild its identity later without knowing the UUID.
 
-Each image gets its **own top-level key** (`image_0000` ... `image_0063`) rather than all of them sitting in one list. Top-level keys are what `manifest.sub_manifest([...])` slices on, and that is how the data loader in Example 2 fetches one batch at a time.
+Each image has its **own top-level key** (`image_0000` ... `image_0063`) rather than all of them sitting in one list. Top-level keys are what `manifest.sub_manifest([...])` slices on, and that is how the data loader in Example 2 fetches one batch at a time.
 
 ```python
-manifest = Manifest(
-    data={f"image_{i:04d}": entry for i, entry in enumerate(entries)},
-    nickname="my_dataset",
-)
+manifest = Manifest(data=blueprint, nickname="my_dataset")
 
 print(f"Manifest global_id: {manifest.global_id}")
 print(f"Images in manifest:  {len(manifest)}")
@@ -126,35 +135,32 @@ Images in manifest:  64
 image_0000 ->        LAILA:ENTRY:GLOBAL_ID:3b9c...
 ```
 
-## Push everything to R2
+## Store the manifest in R2
 
-`manifest.memorize()` uploads all 64 image entries **and** the manifest blueprint itself in one call. Wrap it in `laila.guarantee` to block until every write has finished:
+A `Manifest` is itself an `Entry` whose payload is the blueprint, so `laila.memorize` stores it like any other entry. This is the only remaining upload; the images are already there:
 
 ```python
 with laila.guarantee:
-    manifest.memorize(pool_nickname="r2")
+    laila.memorize(manifest, dst_pool="r2")
 
 print(f"Manifest stored in R2? {r2.exists(manifest.global_id)}")
-print(f"First image in R2?     {r2.exists(manifest['image_0000'])}")
 ```
 
 Expected output:
 
 ```
 Manifest stored in R2? True
-First image in R2?     True
 ```
 
 ## Verify from a cold start
 
-Pretend this is a fresh process that knows nothing but the name `my_dataset`. Rebuild the manifest identity from the nickname, remember the blueprint from R2, then pull one image and decode it:
+Pretend this is a fresh process that knows nothing but the name `my_dataset`. `laila.remember` accepts the shorthand `"MANIFEST:my_dataset"`: it expands to the full id `LAILA:MANIFEST:GLOBAL_ID:<uuid5(my_dataset)>` (the `LAILA` prefix and `GLOBAL_ID` postfix are the defaults of the `prefix_scopes` / `postfix_scopes` arguments), and the read path rebuilds a `Manifest` rather than a plain `Entry` because the stored id carries the `MANIFEST` scope. Then pull one image and decode it:
 
 ```python
-del entries, manifest
+del blueprint, manifest
 
-cold = Manifest(nickname="my_dataset")
-ref = laila.remember(cold.global_id, dst_pool="r2")
-manifest = Manifest(data=ref.wait().data, nickname="my_dataset")
+ref = laila.remember("MANIFEST:my_dataset", dst_pool="r2")   # nickname shorthand -> full manifest id
+manifest = ref.wait()   # a Manifest, rebuilt by its MANIFEST scope
 ref.release()
 
 first_gid = manifest["image_0000"]
@@ -179,16 +185,17 @@ Leave the dataset in the bucket. Example 2 consumes it and takes care of cleanin
 ## What just happened
 
 1. **`CloudflarePool`** wrapped an R2 bucket behind the same `memorize` / `remember` / `forget` API as every other LAILA pool.
-2. Each random image was encoded with Pillow and wrapped as a `laila.constant` whose payload is the raw PNG or JPEG **bytes**.
-3. **`Manifest(data={"image_0000": ..., ...}, nickname="my_dataset")`** extracted the blueprint of `global_id` strings (one top-level key per image) and stashed the entries for upload.
-4. **`manifest.memorize(pool_nickname="r2")`** pushed all images plus the blueprint to R2 in a single call.
-5. The dataset was recovered from nothing but the nickname: `Manifest(nickname="my_dataset")` gives the manifest's `global_id`, `remember` fetches the blueprint, and each leaf `global_id` fetches an image.
+2. Each random image was PNG-encoded in memory, wrapped as a `laila.constant` whose payload is the raw PNG **bytes**, and handed to **`laila.memorize(entry, dst_pool="r2")`** in the same loop iteration, so uploads overlapped with generation. Only the `global_id` was kept, in the `blueprint` dict.
+3. **`Manifest(data=blueprint, nickname="my_dataset")`** built the index from `global_id` strings (one top-level key per image) with nothing left to upload.
+4. **`laila.memorize(manifest, dst_pool="r2")`** stored the manifest itself; the images were already in the bucket.
+5. The dataset was recovered from nothing but the nickname: `laila.remember("MANIFEST:my_dataset")` expands the shorthand to the manifest's id and returns the `Manifest` directly, and each leaf `global_id` fetches an image.
 
 ## Summary
 
-- Entries hold **bytes**; encode images with Pillow and store `buffer.getvalue()`.
+- Entries hold **bytes**; encode images with Pillow into a `BytesIO` and store the buffer contents. Nothing touches the local disk.
 - A `Manifest` is the dataset index: one `global_id` per top-level key under a stable nickname, sliceable with `sub_manifest`.
-- `manifest.memorize()` uploads entries and blueprint together; `laila.guarantee` waits for all of them.
+- Memorize each image the moment it is created; `laila.memorize` returns at once, and `with laila.guarantee:` around the loop waits for all uploads at the end.
+- A manifest built from a blueprint is just an index; `laila.memorize(manifest, dst_pool=...)` stores it as one more entry.
 - Consumers only need the nickname `my_dataset` and access to the same bucket.
 
 Next: [Example 2 — Data Loader](02_data_loader.md), where a prefetching loader streams this dataset through `memory << hdd << cloudflare` and yields torch tensors.

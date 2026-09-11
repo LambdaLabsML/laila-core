@@ -265,6 +265,7 @@ class Manifest(Entry):
     def memorize(
         self,
         *,
+        pool=None,
         pool_nickname: str | None = None,
         pool_id: str | None = None,
         batch_size: int = 128,
@@ -274,6 +275,19 @@ class Manifest(Entry):
         Collects any pending ``Entry`` objects provided at construction time,
         uploads them in batches, then stores the manifest itself (whose
         payload is the blueprint dict).
+
+        ``laila.memorize(manifest, dst_pool=...)`` dispatches here, so the
+        two spellings are equivalent.
+
+        Parameters
+        ----------
+        pool : pool object | str, optional
+            Destination pool -- a live pool, its ``global_id`` or a
+            registered nickname (same forms as ``laila.memorize(dst_pool=)``).
+        pool_nickname, pool_id : str, optional
+            Back-compat aliases for *pool*.
+        batch_size : int, default 128
+            Number of pending entries per underlying ``laila.memorize`` call.
         """
         import laila
 
@@ -282,18 +296,21 @@ class Manifest(Entry):
         if self.data is None:
             raise RuntimeError("Nothing to memorize — manifest has no blueprint.")
 
-        pool_kwargs = Manifest._build_pool_kwargs(pool_nickname, pool_id)
+        routed = Manifest._resolve_pool(pool, pool_nickname, pool_id)
         all_future_ids: list[str] = []
         policy = laila.get_active_policy()
 
         if self._pending_entries:
             for i in range(0, len(self._pending_entries), batch_size):
                 batch = self._pending_entries[i : i + batch_size]
-                ref = laila.memorize(batch, **pool_kwargs)
+                ref = laila.memorize(batch, dst_pool=routed)
                 all_future_ids.extend(Manifest._collect_future_ids(ref))
             self._pending_entries = None
 
-        self_ref = laila.memorize(self, **pool_kwargs)
+        # Wrapped in a list on purpose: a *bare* Manifest handed to
+        # ``laila.memorize`` dispatches back to this method, whereas a
+        # list stores the manifest as a plain entry (blueprint payload).
+        self_ref = laila.memorize([self], dst_pool=routed)
         all_future_ids.extend(Manifest._collect_future_ids(self_ref))
 
         return GroupFuture(
@@ -305,11 +322,30 @@ class Manifest(Entry):
     def remember(
         self,
         *,
+        pool=None,
         pool_nickname: str | None = None,
         pool_id: str | None = None,
         batch_size: int = 128,
+        persist: bool = True,
     ):
-        """Recall all referenced entries from the pool."""
+        """Recall all referenced entries from the pool.
+
+        ``laila.remember(manifest, dst_pool=...)`` dispatches here. The
+        returned ``GroupFuture``'s ``.data`` is the flat list of entries in
+        ``list(manifest)`` order.
+
+        Parameters
+        ----------
+        pool : pool object | str, optional
+            Source pool (live pool, ``global_id`` or nickname).
+        pool_nickname, pool_id : str, optional
+            Back-compat aliases for *pool*.
+        batch_size : int, default 128
+            Number of gids per underlying ``laila.remember`` call.
+        persist : bool, default True
+            Forwarded to ``laila.remember`` -- cache fetched entries into
+            the alpha pool.
+        """
         import laila
 
         from ...command.schema.future.future.group_future import GroupFuture
@@ -317,14 +353,14 @@ class Manifest(Entry):
         if self.data is None:
             raise RuntimeError("No blueprint to resolve — manifest is empty.")
 
-        pool_kwargs = Manifest._build_pool_kwargs(pool_nickname, pool_id)
+        routed = Manifest._resolve_pool(pool, pool_nickname, pool_id)
         all_gids = list(self)
         all_future_ids: list[str] = []
         policy = laila.get_active_policy()
 
         for i in range(0, len(all_gids), batch_size):
             batch = all_gids[i : i + batch_size]
-            ref = laila.remember(batch, **pool_kwargs)
+            ref = laila.remember(batch, dst_pool=routed, persist=persist)
             all_future_ids.extend(Manifest._collect_future_ids(ref))
 
         return GroupFuture(
@@ -336,11 +372,24 @@ class Manifest(Entry):
     def forget(
         self,
         *,
+        pool=None,
         pool_nickname: str | None = None,
         pool_id: str | None = None,
         batch_size: int = 128,
     ):
-        """Delete all referenced entries and the manifest itself from the pool."""
+        """Delete all referenced entries and the manifest itself from the pool.
+
+        ``laila.forget(manifest, pool=...)`` dispatches here.
+
+        Parameters
+        ----------
+        pool : pool object | str, optional
+            Pool to delete from (live pool, ``global_id`` or nickname).
+        pool_nickname, pool_id : str, optional
+            Back-compat aliases for *pool*.
+        batch_size : int, default 128
+            Number of gids per underlying ``laila.forget`` call.
+        """
         import laila
 
         from ...command.schema.future.future.group_future import GroupFuture
@@ -348,17 +397,17 @@ class Manifest(Entry):
         if self.data is None:
             raise RuntimeError("No blueprint — nothing to forget.")
 
-        pool_kwargs = Manifest._build_pool_kwargs(pool_nickname, pool_id)
+        routed = Manifest._resolve_pool(pool, pool_nickname, pool_id)
         all_gids = list(self)
         all_future_ids: list[str] = []
         policy = laila.get_active_policy()
 
         for i in range(0, len(all_gids), batch_size):
             batch = all_gids[i : i + batch_size]
-            ref = laila.forget(batch, **pool_kwargs)
+            ref = laila.forget(batch, pool=routed)
             all_future_ids.extend(Manifest._collect_future_ids(ref))
 
-        self_ref = laila.forget(self.global_id, **pool_kwargs)
+        self_ref = laila.forget(self.global_id, pool=routed)
         all_future_ids.extend(Manifest._collect_future_ids(self_ref))
 
         return GroupFuture(
@@ -1034,17 +1083,24 @@ class Manifest(Entry):
         return [ref.global_id]
 
     @staticmethod
-    def _build_pool_kwargs(
+    def _resolve_pool(
+        pool=None,
         pool_nickname: str | None = None,
         pool_id: str | None = None,
-    ) -> dict[str, str]:
-        """Build keyword arguments for pool routing."""
-        kwargs: dict[str, str] = {}
-        if pool_nickname is not None:
-            kwargs["pool_nickname"] = pool_nickname
+    ):
+        """Collapse ``pool`` / ``pool_id`` / ``pool_nickname`` into one routing value.
+
+        Precedence mirrors the top-level shims: an explicit ``pool`` wins,
+        then ``pool_id``, then ``pool_nickname``. ``None`` means the alpha
+        (default) pool. The result is accepted as-is by
+        ``laila.memorize(dst_pool=)`` / ``laila.remember(dst_pool=)`` /
+        ``laila.forget(pool=)``.
+        """
+        if pool is not None:
+            return pool
         if pool_id is not None:
-            kwargs["pool_id"] = pool_id
-        return kwargs
+            return pool_id
+        return pool_nickname
 
     @staticmethod
     def _classify_data(data: dict) -> tuple[bool, bool]:

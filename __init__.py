@@ -72,6 +72,7 @@ machinery.
 """
 
 import os
+import re
 import sys
 import types
 import uuid
@@ -102,7 +103,7 @@ from .logger import (
 )
 from .macros.aliases import *
 from .macros.defaults import *
-from .macros.strings import _ENTRY_SCOPE
+from .macros.strings import _ENTRY_SCOPE, _GLOBAL_ID_SCOPE, _TOPMOST_SCOPE
 from .policy.central.command import taskforce as TaskForce
 from .policy.schema.base import _LAILA_IDENTIFIABLE_POLICY
 from .utils import guarantee, guarantee_async
@@ -1130,6 +1131,21 @@ def _relay_transfer(
         _active_policy_gid = previous_gid
 
 
+def _lone_manifest(args):
+    """Return the :class:`Manifest` when *args* is exactly one bare manifest.
+
+    Used by :func:`memorize` / :func:`remember` / :func:`forget` to
+    dispatch to the manifest's own bulk operation. Only a *bare* manifest
+    triggers this -- a manifest inside a list is treated as a regular
+    entry (its payload is the blueprint), which is also how
+    :meth:`Manifest.memorize` stores the manifest itself without
+    recursing back into the shim.
+    """
+    if len(args) == 1 and isinstance(args[0], Manifest):
+        return args[0]
+    return None
+
+
 def memorize(
     *args,
     src_policy=None,
@@ -1170,9 +1186,19 @@ def memorize(
     submission may return ``None`` -- callers that need a future-shaped
     handle should pick a non-default pool or use ``with laila.guarantee:``.
 
+    Manifests
+    ---------
+    Passing a single :class:`Manifest` (``laila.memorize(manifest, ...)``)
+    is equivalent to :meth:`Manifest.memorize`: every pending entry the
+    manifest was built from *and* the manifest itself are stored, and
+    one :class:`GroupFuture` covering all writes is returned. A manifest
+    inside a list is stored as a plain entry (blueprint only). Manifest
+    dispatch applies to local writes only; when ``dst_policy`` /
+    ``src_policy`` names a peer the manifest travels as a regular entry.
+
     Parameters
     ----------
-    entries : Entry | list[Entry]
+    entries : Entry | Manifest | list[Entry]
         The entry or entries to store. Already-list inputs are passed
         through; single entries are auto-wrapped.
     pool_id : str, optional
@@ -1234,20 +1260,141 @@ def memorize(
         # active -> peer push (2-party).
         return _route_to_policy(dst_gid, "memorize", args, {"pool": dst_pool}, comm=comm)
 
+    # A bare Manifest -> its bulk operation (pending entries + itself).
+    man = _lone_manifest(args)
+    if man is not None:
+        return man.memorize(pool=dst_pool, **kwargs)
+
     # Purely local / standalone write into the active policy's pool.
     return get_active_policy().central.memory.memorize(
         *args, pool=dst_pool, affinity=affinity, **kwargs
     )
 
 
-def __resolve_nickname(kwargs):
+_SHORTHAND_EVOLUTION_RE = re.compile(r"^(?P<nickname>.+?)-(?P<evolution>\d+)$")
+
+
+def _strip_affix(scopes: list[str], prefix: list[str], postfix: list[str]) -> list[str]:
+    """Drop *prefix* / *postfix* from *scopes* when the caller spelled them out."""
+    if prefix and scopes[: len(prefix)] == prefix:
+        scopes = scopes[len(prefix) :]
+    if postfix and len(scopes) >= len(postfix) and scopes[-len(postfix) :] == postfix:
+        scopes = scopes[: -len(postfix)]
+    return scopes
+
+
+def resolve_global_id(
+    ref: str,
+    *,
+    evolution: int | None = None,
+    prefix_scopes: list[str] | None = None,
+    postfix_scopes: list[str] | None = None,
+    parse_evolution: bool = True,
+) -> str:
+    """Expand a nickname shorthand into a full ``global_id``.
+
+    Accepted forms for *ref*:
+
+    - A complete global id (``LAILA:ENTRY:GLOBAL_ID:<uuid>[-<evo>]``) --
+      returned unchanged.
+    - ``SCOPE[:SCOPE...]:nickname[-<evo>]`` -- the scopes are slotted
+      between *prefix_scopes* and *postfix_scopes*, the nickname is
+      turned into a UUID-5 under the active namespace, and an optional
+      trailing ``-<digits>`` is read as the evolution counter:
+
+      ``"MANIFEST:my_dataset"``  -> ``LAILA:MANIFEST:GLOBAL_ID:<uuid5>``
+      ``"ENTRY:counter-3"``      -> ``LAILA:ENTRY:GLOBAL_ID:<uuid5>-3``
+
+    - ``nickname[-<evo>]`` with no scope segment -- assumed to be an
+      ``ENTRY``.
+
+    Parameters
+    ----------
+    ref : str
+        Global id or shorthand.
+    evolution : int, optional
+        Explicit evolution counter. Takes precedence over a ``-<digits>``
+        suffix parsed from *ref*; pass it when the nickname itself ends
+        in ``-<digits>``.
+    prefix_scopes : list[str], optional
+        Scopes placed before the user-supplied ones. Defaults to
+        ``["LAILA"]``.
+    postfix_scopes : list[str], optional
+        Scopes placed after the user-supplied ones. Defaults to
+        ``["GLOBAL_ID"]``.
+    parse_evolution : bool, default True
+        Whether a trailing ``-<digits>`` on the nickname segment is read
+        as the evolution counter. The ``nickname=`` keyword form passes
+        ``False`` so the nickname is always taken literally.
+
+    Returns
+    -------
+    str
+        The assembled global id.
+    """
+    if not isinstance(ref, str):
+        raise ValueError(f"entry reference must be a string, got {type(ref).__name__}")
+    if Entry.is_laila_resource(ref):
+        return ref
+
+    prefix = list(prefix_scopes) if prefix_scopes is not None else [_TOPMOST_SCOPE]
+    postfix = list(postfix_scopes) if postfix_scopes is not None else [_GLOBAL_ID_SCOPE]
+
+    *scopes, tail = ref.split(":")
+    if not tail:
+        raise ValueError(f"Invalid entry reference (empty nickname): {ref!r}")
+
+    nickname = tail
+    if evolution is None and parse_evolution:
+        m = _SHORTHAND_EVOLUTION_RE.match(tail)
+        if m is not None:
+            nickname = m.group("nickname")
+            evolution = int(m.group("evolution"))
+
+    scopes = _strip_affix(scopes, prefix, postfix)
+    if not scopes:
+        scopes = [_ENTRY_SCOPE]
+
+    head = ":".join([*prefix, *scopes, *postfix])
+    gid = f"{head}:{Entry.generate_uuid_from_nickname(nickname)}"
+    return gid if evolution is None else f"{gid}-{evolution}"
+
+
+def _resolve_entry_refs(args, prefix_scopes, postfix_scopes):
+    """Expand nickname shorthands in the leading ``entry_ids`` positional.
+
+    Strings (and strings inside a list/tuple) go through
+    :func:`resolve_global_id`; anything else (``Manifest``, ``Entry``,
+    ...) is passed through untouched.
+    """
+    if not args:
+        return args
+    head, *rest = args
+
+    def one(x):
+        return (
+            resolve_global_id(x, prefix_scopes=prefix_scopes, postfix_scopes=postfix_scopes)
+            if isinstance(x, str)
+            else x
+        )
+
+    if isinstance(head, str):
+        head = one(head)
+    elif isinstance(head, (list, tuple)):
+        head = type(head)(one(x) for x in head)
+    return (head, *rest)
+
+
+def __resolve_nickname(kwargs, prefix_scopes=None, postfix_scopes=None):
     """Translate a ``nickname=`` (and optional ``evolution=``) kwarg pair
     into the canonical ``[global_id]`` shape consumed by
     :meth:`memory.remember` / :meth:`memory.forget`.
 
-    Routed through :func:`Entry.to_global_id` so the resulting gid uses
-    the *active* UUID-5 namespace (see :func:`get_active_namespace`).
-    Anyone in the same namespace who calls with the same nickname will
+    The nickname may carry a scope shorthand (``"MANIFEST:my_dataset"``);
+    a bare nickname resolves to an ``ENTRY``. See
+    :func:`resolve_global_id` for the grammar. The resulting gid uses
+    the *active* UUID-5 namespace (see :func:`get_active_namespace`), so
+    anyone in the same namespace who calls with the same nickname will
     derive the same gid -- that's what makes nicknames usable for
     cross-process entry resolution.
 
@@ -1256,6 +1403,8 @@ def __resolve_nickname(kwargs):
     kwargs : dict
         Caller's kwargs dict; expects ``nickname`` (str) and optionally
         ``evolution`` (int).
+    prefix_scopes, postfix_scopes : list[str], optional
+        Forwarded to :func:`resolve_global_id`.
 
     Returns
     -------
@@ -1267,17 +1416,17 @@ def __resolve_nickname(kwargs):
     ValueError
         If ``kwargs["nickname"]`` is not a string.
     """
-    if isinstance(kwargs["nickname"], str):
-        args = [
-            Entry.to_global_id(
-                nickname=kwargs["nickname"],
-                scopes=[_ENTRY_SCOPE],
-                evolution=kwargs.get("evolution", None),
-            )
-        ]
-        return args
-    else:
+    if not isinstance(kwargs["nickname"], str):
         raise ValueError("nickname must be a string")
+    return [
+        resolve_global_id(
+            kwargs["nickname"],
+            evolution=kwargs.get("evolution", None),
+            prefix_scopes=prefix_scopes,
+            postfix_scopes=postfix_scopes,
+            parse_evolution=False,
+        )
+    ]
 
 
 def remember(
@@ -1288,6 +1437,8 @@ def remember(
     dst_policy=None,
     dst_pool=None,
     comm=None,
+    prefix_scopes: list[str] | None = None,
+    postfix_scopes: list[str] | None = None,
     policy_id=None,
     pool_id=None,
     pool_nickname=None,
@@ -1322,26 +1473,51 @@ def remember(
 
     Identifying entries
     -------------------
-    Either pass explicit ``entry_ids=...`` or use the convenience
-    ``nickname=...`` form which derives the gid via
-    :func:`Entry.to_global_id` against the active namespace. The
-    ``nickname`` and ``evolution`` kwargs are consumed and removed
-    before the call is forwarded.
+    Pass full ``global_id`` strings, or a *nickname shorthand* of the
+    form ``SCOPE[:SCOPE...]:nickname[-<evolution>]``. The shorthand is
+    expanded by :func:`resolve_global_id`: ``prefix_scopes`` (default
+    ``["LAILA"]``) go in front, ``postfix_scopes`` (default
+    ``["GLOBAL_ID"]``) go after, and the nickname becomes a UUID-5 under
+    the active namespace::
+
+        laila.remember("MANIFEST:my_dataset")   # LAILA:MANIFEST:GLOBAL_ID:<uuid5>
+        laila.remember("ENTRY:counter-3")       # LAILA:ENTRY:GLOBAL_ID:<uuid5>-3
+        laila.remember("counter")               # no scope -> ENTRY
+
+    The keyword form ``nickname=...`` (+ optional ``evolution=``) is
+    still accepted and may also carry a scope prefix
+    (``nickname="MANIFEST:my_dataset"``); there the nickname is taken
+    literally (no ``-<evolution>`` suffix parsing). The ``nickname`` and
+    ``evolution`` kwargs are consumed before the call is forwarded.
+
+    Passing a single :class:`Manifest` (``laila.remember(manifest, ...)``)
+    is equivalent to :meth:`Manifest.remember`: every ``global_id`` the
+    manifest references is fetched and one :class:`GroupFuture` is
+    returned whose ``.data`` is the list of entries in ``list(manifest)``
+    order. ``persist`` is honoured. Local reads only -- with a peer
+    ``dst_policy`` / ``src_policy`` the manifest is treated as an id.
 
     Parameters
     ----------
-    entry_ids : str | list[str]
-        The ``global_id``(s) of the entries to recall.
+    entry_ids : str | Manifest | list[str]
+        The ``global_id``(s) -- or nickname shorthand(s) -- of the
+        entries to recall.
     pool_id : str, optional
         Explicit pool ``global_id`` to read from.
     pool_nickname : str, optional
         Pool alias registered via :meth:`Policy.extend`.
     nickname : str, optional
         Convenience alias -- converted to a deterministic ``global_id``
-        via :func:`Entry.to_global_id` against the active namespace.
+        via :func:`resolve_global_id` against the active namespace.
         Mutually exclusive with ``entry_ids`` for that slot.
     evolution : int, optional
         Optional evolution suffix to append to the nickname-derived gid.
+    prefix_scopes : list[str], optional
+        Scopes prepended when expanding a nickname shorthand. Defaults
+        to ``["LAILA"]``.
+    postfix_scopes : list[str], optional
+        Scopes appended (before the UUID) when expanding a nickname
+        shorthand. Defaults to ``["GLOBAL_ID"]``.
     persist : bool, default True
         Cache-back into the alpha pool. See "persist semantics" above.
         When ``policy_id`` names a peer, the cache-back happens on the
@@ -1361,13 +1537,17 @@ def remember(
     """
     if "nickname" in kwargs:
         args = ()
-        kwargs["entry_ids"] = __resolve_nickname(kwargs)
+        kwargs["entry_ids"] = __resolve_nickname(kwargs, prefix_scopes, postfix_scopes)
         del kwargs["nickname"]
         kwargs.pop("evolution", None)
 
     # Accept the leading positional via the ``entry_ids=`` keyword too.
     if not args and "entry_ids" in kwargs:
         args = (kwargs.pop("entry_ids"),)
+
+    # Expand nickname shorthands ("MANIFEST:my_dataset") into full gids
+    # before any routing so peers always receive canonical ids.
+    args = _resolve_entry_refs(args, prefix_scopes, postfix_scopes)
 
     # Back-compat: policy_id -> dst_policy, pool_id/pool_nickname -> dst_pool.
     if dst_policy is None:
@@ -1399,6 +1579,11 @@ def remember(
             dst_gid, "remember", args, {"persist": persist, "pool": dst_pool}, comm=comm
         )
 
+    # A bare Manifest -> fetch every entry it references.
+    man = _lone_manifest(args)
+    if man is not None:
+        return man.remember(pool=dst_pool, persist=persist, **kwargs)
+
     # Purely local / standalone read from the active policy's pool.
     return get_active_policy().central.memory.remember(
         *args, persist=persist, pool=dst_pool, **kwargs
@@ -1410,6 +1595,8 @@ def forget(
     policy=None,
     pool=None,
     comm=None,
+    prefix_scopes: list[str] | None = None,
+    postfix_scopes: list[str] | None = None,
     policy_id=None,
     pool_id=None,
     pool_nickname=None,
@@ -1428,22 +1615,36 @@ def forget(
     explicitly.
 
     Identifying entries follows the same rules as :func:`remember`: pass
-    either ``entry_ids`` or the convenience ``nickname`` (+ optional
-    ``evolution``) form.
+    full ``entry_ids``, a nickname shorthand such as
+    ``"MANIFEST:my_dataset"`` (expanded with ``prefix_scopes`` /
+    ``postfix_scopes``), or the convenience ``nickname`` (+ optional
+    ``evolution``) keyword form.
+
+    Passing a single :class:`Manifest` (``laila.forget(manifest, ...)``)
+    is equivalent to :meth:`Manifest.forget`: every referenced entry
+    *and* the manifest itself are deleted from the routed pool, and one
+    :class:`GroupFuture` is returned. Local deletes only.
 
     Parameters
     ----------
-    entry_ids : str | list[str]
-        The ``global_id``(s) of the entries to delete.
+    entry_ids : str | Manifest | list[str]
+        The ``global_id``(s) -- or nickname shorthand(s) -- of the
+        entries to delete.
     pool_id : str, optional
         Explicit pool ``global_id`` to delete from.
     pool_nickname : str, optional
         Pool alias registered via :meth:`Policy.extend`.
     nickname : str, optional
         Convenience alias -- converted to a deterministic ``global_id``
-        via :func:`Entry.to_global_id`.
+        via :func:`resolve_global_id`.
     evolution : int, optional
         Optional evolution suffix for the nickname form.
+    prefix_scopes : list[str], optional
+        Scopes prepended when expanding a nickname shorthand. Defaults
+        to ``["LAILA"]``.
+    postfix_scopes : list[str], optional
+        Scopes appended (before the UUID) when expanding a nickname
+        shorthand. Defaults to ``["GLOBAL_ID"]``.
 
     Returns
     -------
@@ -1452,13 +1653,15 @@ def forget(
     """
     if "nickname" in kwargs:
         args = ()
-        kwargs["entry_ids"] = __resolve_nickname(kwargs)
+        kwargs["entry_ids"] = __resolve_nickname(kwargs, prefix_scopes, postfix_scopes)
         del kwargs["nickname"]
         kwargs.pop("evolution", None)
 
     # Accept the leading positional via the ``entry_ids=`` keyword too.
     if not args and "entry_ids" in kwargs:
         args = (kwargs.pop("entry_ids"),)
+
+    args = _resolve_entry_refs(args, prefix_scopes, postfix_scopes)
 
     # Back-compat: policy_id -> policy, pool_id/pool_nickname -> pool.
     if policy is None:
@@ -1471,6 +1674,12 @@ def forget(
 
     if target_gid is not None and target_gid != active_gid:
         return _route_to_policy(target_gid, "forget", args, {"pool": pool}, comm=comm)
+
+    # A bare Manifest -> delete every referenced entry plus the manifest.
+    man = _lone_manifest(args)
+    if man is not None:
+        return man.forget(pool=pool, **kwargs)
+
     return get_active_policy().central.memory.forget(*args, pool=pool, **kwargs)
 
 
