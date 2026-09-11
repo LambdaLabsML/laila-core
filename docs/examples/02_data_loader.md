@@ -8,7 +8,7 @@ laila.alpha_pool << hdd << r2
 
 and keeps a **lookahead of 4 batches** in flight: while the model consumes batch *i*, batches *i+1 … i+4* are already being pulled from R2 into the local HDF5 cache and decoded into tensors on a background taskforce. By the time `next()` reaches them, they are ready.
 
-Each sample goes through the same async pipeline: `laila.remember(gid)` (which cascades memory ← hdd ← cloudflare), then a cast from image bytes to a `torch.Tensor`. After a batch has been through the model, its entries are always forgotten from the in-memory alpha pool and, optionally, from the HDD cache too.
+A batch is a **sub-manifest**: `manifest.sub_manifest([...])` slices the dataset manifest down to the keys of one batch, and `await sub.async_realized` remembers every entry in it through the proxy chain (memory ← hdd ← cloudflare). Each realized entry is then cast from image bytes to a `torch.Tensor`. After a batch has been through the model, its entries are always forgotten from the in-memory alpha pool and, optionally, from the HDD cache too.
 
 ## Prerequisites
 
@@ -21,7 +21,6 @@ Run [Example 1](01_dataset_creation.md) first so the `my_dataset` manifest exist
 ## Setup
 
 ```python
-import asyncio
 import collections
 import functools
 import io
@@ -72,7 +71,7 @@ hdd   -> CloudflarePool
 r2    -> None
 ```
 
-`<<` reads as "is a cache for". A `laila.remember(gid)` routed to the alpha pool (the default) now does the following on a cold key:
+`<<` reads as "is a cache for". Any read routed to the alpha pool (the default) now does the following on a cold key:
 
 1. alpha misses → asks `hdd`
 2. `hdd` misses → asks `r2`
@@ -84,7 +83,7 @@ On the second epoch step 2 becomes a disk hit and R2 is never contacted. Writes 
 
 ## Load the manifest
 
-Rebuild the manifest identity from its nickname and fetch the blueprint from R2. The flat list of `global_id` strings is the dataset index:
+Rebuild the manifest identity from its nickname and fetch the blueprint from R2. Its top-level keys (`image_0000` … `image_0063`) are the dataset index:
 
 ```python
 cold = Manifest(nickname="my_dataset")
@@ -92,15 +91,37 @@ ref = laila.remember(cold.global_id, dst_pool="r2", persist=False)
 manifest = Manifest(data=ref.wait().data, nickname="my_dataset")
 ref.release()
 
-gids = list(manifest)
-print(f"{len(gids)} images in my_dataset")
+keys = list(manifest.keys())
+print(f"{len(keys)} images in my_dataset: {keys[0]} ... {keys[-1]}")
 ```
 
 Expected output:
 
 ```
-64 images in my_dataset
+64 images in my_dataset: image_0000 ... image_0063
 ```
+
+## Slicing a batch with `sub_manifest`
+
+`sub_manifest` returns a new `Manifest` holding only the requested top-level keys. It is a pure blueprint operation, nothing is fetched yet:
+
+```python
+sub = manifest.sub_manifest(keys[:8])
+
+print(f"sub-manifest keys: {list(sub.keys())}")
+print(f"first global_id:   {sub['image_0000']}")
+print(f"alpha has it?      {laila.alpha_pool.exists(sub['image_0000'])}")
+```
+
+Expected output:
+
+```
+sub-manifest keys: ['image_0000', 'image_0001', 'image_0002', 'image_0003', 'image_0004', 'image_0005', 'image_0006', 'image_0007']
+first global_id:   LAILA:ENTRY:GLOBAL_ID:3b9c...
+alpha has it?      False
+```
+
+`await sub.async_realized` is the fetch: it remembers every entry in the sub-manifest through the default pool, i.e. the front of the proxy chain, and returns a dict `{key: Entry}` mirroring the blueprint.
 
 ## The transform: bytes to tensor
 
@@ -115,21 +136,20 @@ def bytes_to_tensor(image_bytes: bytes) -> torch.Tensor:
 
 ## The data loader
 
-`LailaDataLoader` is a plain Python iterator. The important pieces:
+`LailaDataLoader` is a plain Python iterator over a `Manifest`. The important pieces:
 
-- **`_prepare_sample`** is the per-datapoint pipeline: `await laila.remember(gid)` through the proxy chain, then `transform`.
-- **`_prepare_batch`** runs every sample of a batch concurrently with `asyncio.gather` and stacks the tensors.
+- **`_prepare_batch`** is the per-batch pipeline: slice a sub-manifest, `await sub.async_realized` to pull every entry through the proxy chain, then `transform` each realized entry in key order and stack.
 - **`_schedule_next`** hands `_prepare_batch` to LAILA's taskforce with `laila.command.submit`, which returns a future immediately. That future is the "pre-ask".
 - **`__iter__`** schedules the first `lookahead` batches; **`__next__`** waits on the oldest future, immediately schedules one more to keep the window full, forgets the finished batch, and returns the tensor.
 
 ```python
 class LailaDataLoader:
-    """Iterate a list of global_ids as stacked torch tensors, prefetching
-    ``lookahead`` batches through ``alpha << hdd << r2``."""
+    """Iterate a Manifest as stacked torch tensors, prefetching ``lookahead``
+    batches through ``alpha << hdd << r2`` one sub-manifest at a time."""
 
     def __init__(
         self,
-        gids,
+        manifest,
         batch_size,
         *,
         lookahead=4,
@@ -137,47 +157,45 @@ class LailaDataLoader:
         forget_from_hdd=False,
         hdd_pool="hdd",
     ):
-        self.gids = list(gids)
+        self.manifest = manifest
+        self.keys = list(manifest.keys())
         self.batch_size = batch_size
         self.lookahead = lookahead
         self.transform = transform
         self.forget_from_hdd = forget_from_hdd
         self.hdd_pool = hdd_pool
 
-        self._pending = collections.deque()   # (batch_gids, future), oldest first
+        self._pending = collections.deque()   # (sub_manifest, future), oldest first
         self._next_to_schedule = 0
         self.last_wait_s = 0.0                # time spent blocked in the last __next__
 
     def __len__(self):
-        return math.ceil(len(self.gids) / self.batch_size)
+        return math.ceil(len(self.keys) / self.batch_size)
 
-    def _batch_gids(self, idx):
-        return self.gids[idx * self.batch_size : (idx + 1) * self.batch_size]
+    def _batch_manifest(self, idx):
+        batch_keys = self.keys[idx * self.batch_size : (idx + 1) * self.batch_size]
+        return self.manifest.sub_manifest(batch_keys)
 
     # -- async pipeline, runs on LAILA's taskforce -------------------------
-    async def _prepare_sample(self, gid):
-        ref = laila.remember(gid)             # alpha << hdd << r2 cascade
-        entry = await ref
-        ref.release()
-        return self.transform(entry.data)     # bytes -> torch.Tensor
-
-    async def _prepare_batch(self, batch_gids):
-        tensors = await asyncio.gather(*(self._prepare_sample(g) for g in batch_gids))
+    async def _prepare_batch(self, sub):
+        realized = await sub.async_realized   # {key: Entry}, via alpha << hdd << r2
+        tensors = [self.transform(realized[k].data) for k in sub.keys()]
         return torch.stack(tensors)
 
     # -- scheduling ---------------------------------------------------------
     def _schedule_next(self):
         if self._next_to_schedule >= len(self):
             return
-        batch_gids = self._batch_gids(self._next_to_schedule)
-        future = laila.command.submit([functools.partial(self._prepare_batch, batch_gids)])
-        self._pending.append((batch_gids, future))
+        sub = self._batch_manifest(self._next_to_schedule)
+        future = laila.command.submit([functools.partial(self._prepare_batch, sub)])
+        self._pending.append((sub, future))
         self._next_to_schedule += 1
 
-    def _forget(self, batch_gids):
-        futures = [laila.forget(batch_gids)]                       # alpha pool: always
+    def _forget(self, sub):
+        gids = list(sub)                                           # leaf global_ids of the batch
+        futures = [laila.forget(gids)]                             # alpha pool: always
         if self.forget_from_hdd:
-            futures.append(laila.forget(batch_gids, pool=self.hdd_pool))
+            futures.append(laila.forget(gids, pool=self.hdd_pool))
         for f in futures:
             f.wait()
             f.release()
@@ -193,7 +211,7 @@ class LailaDataLoader:
     def __next__(self):
         if not self._pending:
             raise StopIteration
-        batch_gids, future = self._pending.popleft()
+        sub, future = self._pending.popleft()
 
         start = time.perf_counter()
         future.wait()                         # returns at once if the lookahead kept up
@@ -202,16 +220,16 @@ class LailaDataLoader:
         future.release()
 
         self._schedule_next()                 # keep `lookahead` batches in flight
-        self._forget(batch_gids)              # batch is done: free memory (and optionally disk)
+        self._forget(sub)                     # batch is done: free memory (and optionally disk)
         return batch
 ```
 
-Nothing in `__next__` talks to R2 directly. The only place the network is touched is inside `_prepare_sample`, and that runs on the taskforce up to four batches before the loop asks for it.
+Nothing in `__next__` talks to R2 directly. The only place the network is touched is `await sub.async_realized` inside `_prepare_batch`, and that runs on the taskforce up to four batches before the loop asks for it. Because `async_realized` is awaited from a taskforce coroutine, it reads the pool directly with no per-entry futures: one sub-manifest, one concurrent read of its entries.
 
 ## Epoch 1: cold start, R2 → HDD → memory
 
 ```python
-loader = LailaDataLoader(gids, batch_size=8, lookahead=4)
+loader = LailaDataLoader(manifest, batch_size=8, lookahead=4)
 
 for step, batch in enumerate(loader):
     loss = batch.mean()                       # stand-in for a model step
@@ -220,25 +238,25 @@ for step, batch in enumerate(loader):
         f"waited {loader.last_wait_s * 1000:6.1f} ms  loss={loss:.3f}"
     )
 
-first = gids[0]
-print(f"\nalpha has image 0? {laila.alpha_pool.exists(first)}")
-print(f"hdd   has image 0? {hdd.exists(first)}")
+first = manifest["image_0000"]
+print(f"\nalpha has image_0000? {laila.alpha_pool.exists(first)}")
+print(f"hdd   has image_0000? {hdd.exists(first)}")
 ```
 
 Expected output (timings depend on your connection):
 
 ```
-step 0: batch (8, 3, 32, 32) torch.float32 waited  346.3 ms  loss=0.500
-step 1: batch (8, 3, 32, 32) torch.float32 waited    6.2 ms  loss=0.498
-step 2: batch (8, 3, 32, 32) torch.float32 waited    0.3 ms  loss=0.500
-step 3: batch (8, 3, 32, 32) torch.float32 waited    0.2 ms  loss=0.497
-step 4: batch (8, 3, 32, 32) torch.float32 waited  306.2 ms  loss=0.499
+step 0: batch (8, 3, 32, 32) torch.float32 waited  353.8 ms  loss=0.500
+step 1: batch (8, 3, 32, 32) torch.float32 waited    0.2 ms  loss=0.498
+step 2: batch (8, 3, 32, 32) torch.float32 waited    0.2 ms  loss=0.500
+step 3: batch (8, 3, 32, 32) torch.float32 waited    1.5 ms  loss=0.497
+step 4: batch (8, 3, 32, 32) torch.float32 waited  333.0 ms  loss=0.499
 step 5: batch (8, 3, 32, 32) torch.float32 waited    0.2 ms  loss=0.498
 step 6: batch (8, 3, 32, 32) torch.float32 waited    0.2 ms  loss=0.496
 step 7: batch (8, 3, 32, 32) torch.float32 waited    0.2 ms  loss=0.499
 
-alpha has image 0? False
-hdd   has image 0? True
+alpha has image_0000? False
+hdd   has image_0000? True
 ```
 
 Step 0 pays for the first R2 round-trip. The first four batches were requested at the same time, so batches 1–3 arrive together with batch 0 and cost nothing. Step 4 shows a second round-trip only because the stand-in "model step" here takes microseconds: batch 4 was scheduled the instant batch 0 was handed out, and the loop reached it before Cloudflare could answer. With a real model, four steps of forward/backward pass are far longer than one fetch, and every `next()` after the first finds its tensor waiting. Increase `lookahead` if your steps are shorter than your network latency.
@@ -257,35 +275,36 @@ for step, batch in enumerate(loader):
 Expected output:
 
 ```
-step 0: waited   70.0 ms
-step 1: waited   22.9 ms
-step 2: waited    0.2 ms
+step 0: waited   50.1 ms
+step 1: waited    0.2 ms
+step 2: waited   27.0 ms
+step 3: waited    0.2 ms
 ...
 ```
 
-Step 0 still shows the decode cost of the first batch, but it is disk latency rather than a round-trip to Cloudflare.
+The remaining waits are HDF5 reads plus PNG/JPEG decoding, tens of milliseconds rather than a round-trip to Cloudflare.
 
 ## Optional: free disk after each batch
 
 If the dataset is larger than your disk, set `forget_from_hdd=True`. Every batch is then forgotten from **both** the alpha pool and the HDD cache once the model has seen it, so at most `lookahead + 1` batches are ever on disk:
 
 ```python
-lean_loader = LailaDataLoader(gids, batch_size=8, lookahead=4, forget_from_hdd=True)
+lean_loader = LailaDataLoader(manifest, batch_size=8, lookahead=4, forget_from_hdd=True)
 
 for step, batch in enumerate(lean_loader):
     pass
 
-print(f"alpha has image 0? {laila.alpha_pool.exists(first)}")
-print(f"hdd   has image 0? {hdd.exists(first)}")
-print(f"r2    has image 0? {r2.exists(first)}")
+print(f"alpha has image_0000? {laila.alpha_pool.exists(first)}")
+print(f"hdd   has image_0000? {hdd.exists(first)}")
+print(f"r2    has image_0000? {r2.exists(first)}")
 ```
 
 Expected output:
 
 ```
-alpha has image 0? False
-hdd   has image 0? False
-r2    has image 0? True
+alpha has image_0000? False
+hdd   has image_0000? False
+r2    has image_0000? True
 ```
 
 The origin is untouched: `forget` is pool-local, so evicting from the caches never deletes from R2.
@@ -313,16 +332,17 @@ manifest still in R2? False
 ## What just happened
 
 1. **`laila.alpha_pool << hdd << r2`** turned the default pool into the front of a read-through cache: memory ← disk ← cloud.
-2. **`laila.command.submit`** put `_prepare_batch` on a LAILA taskforce and returned a future immediately. The loader keeps four of these futures queued, so the network work for batch *i+4* starts as soon as batch *i* is handed to the training loop.
-3. Inside the taskforce, **`await laila.remember(gid)`** walked the chain, cached the blob in `hdd` and alpha, and produced the entry; **`bytes_to_tensor`** decoded the PNG/JPEG bytes into a `torch.Tensor`. `asyncio.gather` did this for all samples of a batch concurrently.
-4. **`__next__`** only ever waited on an already-running future, then topped the window back up to four.
-5. **`laila.forget(batch_gids)`** removed the consumed batch from the alpha pool; with `forget_from_hdd=True` it also removed it from the HDF5 cache. R2 was never modified until the explicit clean-up.
+2. **`manifest.sub_manifest(batch_keys)`** sliced the dataset manifest into one small manifest per batch. That is a blueprint operation only; no I/O happens until the sub-manifest is realized.
+3. **`laila.command.submit`** put `_prepare_batch` on a LAILA taskforce and returned a future immediately. The loader keeps four of these futures queued, so the network work for batch *i+4* starts as soon as batch *i* is handed to the training loop.
+4. Inside the taskforce, **`await sub.async_realized`** remembered every entry of the sub-manifest through the chain, caching the blobs in `hdd` and alpha; **`bytes_to_tensor`** decoded each realized entry's PNG/JPEG bytes into a `torch.Tensor`.
+5. **`__next__`** only ever waited on an already-running future, then topped the window back up to four.
+6. **`laila.forget(list(sub))`** removed the consumed batch from the alpha pool; with `forget_from_hdd=True` it also removed it from the HDF5 cache. R2 was never modified until the explicit clean-up.
 
 ## Summary
 
 - Prefetching is a queue of futures: schedule `lookahead` batches up front, then schedule one more every time one is consumed.
+- A batch is a `sub_manifest`; `await sub.async_realized` fetches it through the proxy chain in one concurrent read, and `list(sub)` gives the gids to forget afterwards.
 - `laila.remember` through a proxy chain is the whole caching strategy; the loader has no R2-specific code.
-- Per-sample async transforms (`remember` → `bytes_to_tensor`) compose with `asyncio.gather` and run on LAILA's taskforce, off the training thread.
 - Always `forget` from the alpha pool after a batch; `forget` from the HDD tier only when disk is scarce, since keeping it makes the next epoch free of network I/O.
 - `forget` is pool-local, so cache eviction never touches the origin bucket.
 

@@ -1,6 +1,6 @@
 # Example 1: Dataset Creation — Random Images to Cloudflare R2
 
-Build an image dataset from scratch and push it to Cloudflare R2. Every image is encoded as PNG or JPEG bytes and stored as one LAILA entry, so what lives in the bucket is exactly the file you would get from `PIL.Image.save`. A single **Manifest** named `my_dataset` records the `global_id` of every image, which is all a consumer needs to find the dataset later.
+Build an image dataset from scratch and push it to Cloudflare R2. Every image is encoded as PNG or JPEG bytes and stored as one LAILA entry, so what lives in the bucket is exactly the file you would get from `PIL.Image.save`. A single **Manifest** named `my_dataset` records the `global_id` of every image under its own key (`image_0000`, `image_0001`, ...), which is all a consumer needs to find and slice the dataset later.
 
 [Example 2](02_data_loader.md) reads this dataset back through a `memory << hdd << cloudflare` cache chain with a prefetching data loader.
 
@@ -105,12 +105,17 @@ The byte counts vary with the random seed, but the magic numbers show that each 
 
 A `Manifest` wraps a nested dict of entries and extracts a **blueprint**: the same structure with `global_id` strings in place of the entries. Give it the nickname `my_dataset` so anyone can rebuild its identity later without knowing the UUID.
 
+Each image gets its **own top-level key** (`image_0000` ... `image_0063`) rather than all of them sitting in one list. Top-level keys are what `manifest.sub_manifest([...])` slices on, and that is how the data loader in Example 2 fetches one batch at a time.
+
 ```python
-manifest = Manifest(data={"images": entries}, nickname="my_dataset")
+manifest = Manifest(
+    data={f"image_{i:04d}": entry for i, entry in enumerate(entries)},
+    nickname="my_dataset",
+)
 
 print(f"Manifest global_id: {manifest.global_id}")
-print(f"Images in manifest:  {sum(1 for _ in manifest)}")
-print(f"First global_id:     {manifest.blueprint['images'][0]}")
+print(f"Images in manifest:  {len(manifest)}")
+print(f"image_0000 ->        {manifest['image_0000']}")
 ```
 
 Expected output:
@@ -118,7 +123,7 @@ Expected output:
 ```
 Manifest global_id: LAILA:MANIFEST:GLOBAL_ID:6f1d...
 Images in manifest:  64
-First global_id:     LAILA:ENTRY:GLOBAL_ID:3b9c...
+image_0000 ->        LAILA:ENTRY:GLOBAL_ID:3b9c...
 ```
 
 ## Push everything to R2
@@ -130,7 +135,7 @@ with laila.guarantee:
     manifest.memorize(pool_nickname="r2")
 
 print(f"Manifest stored in R2? {r2.exists(manifest.global_id)}")
-print(f"First image in R2?     {r2.exists(manifest.blueprint['images'][0])}")
+print(f"First image in R2?     {r2.exists(manifest['image_0000'])}")
 ```
 
 Expected output:
@@ -152,20 +157,20 @@ ref = laila.remember(cold.global_id, dst_pool="r2")
 manifest = Manifest(data=ref.wait().data, nickname="my_dataset")
 ref.release()
 
-first_gid = manifest.blueprint["images"][0]
+first_gid = manifest["image_0000"]
 image_ref = laila.remember(first_gid, dst_pool="r2")
 image_bytes = image_ref.wait().data
 image_ref.release()
 
 image = Image.open(io.BytesIO(image_bytes))
-print(f"Recovered {sum(1 for _ in manifest)} global_ids from the manifest")
+print(f"Recovered {len(manifest)} images from the manifest")
 print(f"First image: {image.format} {image.size} {image.mode}")
 ```
 
 Expected output:
 
 ```
-Recovered 64 global_ids from the manifest
+Recovered 64 images from the manifest
 First image: PNG (32, 32) RGB
 ```
 
@@ -175,14 +180,14 @@ Leave the dataset in the bucket. Example 2 consumes it and takes care of cleanin
 
 1. **`CloudflarePool`** wrapped an R2 bucket behind the same `memorize` / `remember` / `forget` API as every other LAILA pool.
 2. Each random image was encoded with Pillow and wrapped as a `laila.constant` whose payload is the raw PNG or JPEG **bytes**.
-3. **`Manifest(data={"images": entries}, nickname="my_dataset")`** extracted the blueprint of `global_id` strings and stashed the entries for upload.
+3. **`Manifest(data={"image_0000": ..., ...}, nickname="my_dataset")`** extracted the blueprint of `global_id` strings (one top-level key per image) and stashed the entries for upload.
 4. **`manifest.memorize(pool_nickname="r2")`** pushed all images plus the blueprint to R2 in a single call.
 5. The dataset was recovered from nothing but the nickname: `Manifest(nickname="my_dataset")` gives the manifest's `global_id`, `remember` fetches the blueprint, and each leaf `global_id` fetches an image.
 
 ## Summary
 
 - Entries hold **bytes**; encode images with Pillow and store `buffer.getvalue()`.
-- A `Manifest` is the dataset index: a list of `global_id` strings under a stable nickname.
+- A `Manifest` is the dataset index: one `global_id` per top-level key under a stable nickname, sliceable with `sub_manifest`.
 - `manifest.memorize()` uploads entries and blueprint together; `laila.guarantee` waits for all of them.
 - Consumers only need the nickname `my_dataset` and access to the same bucket.
 
