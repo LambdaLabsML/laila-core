@@ -94,6 +94,15 @@ for nick in ["cp_array", "cp_tensor", "cp_dict"]:
     print(nick, "->", type(r.data).__name__)
 ```
 
+## What else lands in your store
+
+You will notice more keys in the backing store than entries you memorized: the pool's **index shards** (`LAILA:POOL_INDEX:...`, one per entry) are persisted through the very same `_write` / `_delete` hooks, so a custom backend gets `remember("name")` -> latest evolution and `@creation_timestamp=` lookups for free (see [Tutorial 1a](01a_variables_and_evolution.md)). `pool.keys()` hides them; pass `include_index=True` to see them, set `index_enabled=False` on the pool to skip them, or point `index_pool=` at another pool to keep them off this backend.
+
+```python
+print(len(pool.keys()), len(pool._store))
+# 3 6   -- three entries plus one index shard each
+```
+
 ## Async paths
 
 Default `_read_async` / `_write_async` / `_delete_async` just call the sync hook on the calling thread. That's correct but blocks the loop for the duration of the call. The override above uses `asyncio.sleep(0)` as a placeholder — replace it with a real `await` against an async client (`aioboto3`, `asyncpg`, `motor`, etc.) for true non-blocking I/O.

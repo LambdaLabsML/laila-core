@@ -47,7 +47,7 @@ TEST("peers", "request_in_process") {
 TEST("peers", "unknown_peer_errors") {
   auto home = get_active_policy();
   CHECK_THROWS(laila->communication->remote_remember(
-                   "LAILA:POLICY:GLOBAL_ID:00000000-0000-0000-0000-000000000000", "x"),
+                   "LAILA:POLICY:00000000-0000-0000-0000-000000000000", "x"),
                LailaError);
   // add_peer to a non-existent local policy with no network transport -> Unsupported.
   CHECK_THROWS(laila->communication->add_peer("not-a-real-uri", "s"), LailaError);

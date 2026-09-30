@@ -1,5 +1,7 @@
 #include "laila/policy.hpp"
 
+#include <algorithm>
+
 #include "laila/framing.hpp"
 #include "laila/hal/hal.hpp"
 #include "laila/status.hpp"
@@ -59,10 +61,138 @@ EntryPtr CentralMemory::memorize(const EntryPtr& e, const std::string& pool_nick
   RouteOpts ro;
   if (!pool_nickname.empty()) ro.pool_nickname = pool_nickname;
   PoolPtr target = pool_router_.route(ro);
+  // A variable whose payload was re-assigned since its last memorize becomes
+  // a new evolution (in place); an untouched one is re-written under the same key.
+  e->bump_evolution_if_locally_modified();
   const TransformationSequence& t = target->transformations();
   Json blob = e->serialize(t.empty() ? nullptr : &t);
   target->put(e->global_id(), blob);
+  e->mark_memorized();
   return e;
+}
+
+namespace {
+// Evolution encoded in a storage key; -1 for a constant (no '@').
+int64_t key_evolution(const std::string& key) {
+  size_t at = key.find('@');
+  if (at == std::string::npos) return -1;
+  for (const auto& kv : parse_global_id_attributes(key.substr(at + 1))) {
+    if (kv.first != EVOLUTION_ATTRIBUTE) continue;
+    for (char c : kv.second)
+      if (c < '0' || c > '9') return -1;
+    return kv.second.empty() ? -1 : std::stoll(kv.second);
+  }
+  return -1;
+}
+
+bool is_int_literal(const std::string& s) {
+  if (s.empty()) return false;
+  size_t i = s[0] == '-' ? 1 : 0;
+  if (i >= s.size()) return false;
+  for (; i < s.size(); ++i)
+    if (s[i] < '0' || s[i] > '9') return false;
+  return true;
+}
+}  // namespace
+
+std::pair<std::string, std::optional<Json>> CentralMemory::_resolve_entry_key(
+    const PoolPtr& pool, const std::string& eid) {
+  auto split = split_global_id_attributes(eid);
+  const std::string& base = split.first;
+  std::optional<int64_t> evolution;
+  std::optional<std::string> creation_timestamp;
+  for (const auto& kv : split.second) {
+    if (kv.first == EVOLUTION_ATTRIBUTE) {
+      if (!is_int_literal(kv.second)) raise(Status::Error, "Invalid evolution in GID: " + eid);
+      evolution = std::stoll(kv.second);
+    } else if (kv.first == CREATION_TIMESTAMP_ATTRIBUTE) {
+      creation_timestamp = kv.second;
+    } else {
+      raise(Status::Error, "Unsupported search attribute '" + kv.first + "' in " + eid +
+                               "; supported: evolution, creation_timestamp");
+    }
+  }
+
+  // Fast paths: a non-negative explicit evolution is an exact key; a bare id
+  // that exists as-is (a constant) needs no lookup.
+  if (!creation_timestamp.has_value()) {
+    if (evolution.has_value() && *evolution >= 0) return {eid, std::nullopt};
+    if (!evolution.has_value() && pool->exists(base)) return {base, std::nullopt};
+  }
+
+  // 1. Index-first, tier by tier, validating every hit. A hit whose key is
+  //    gone is removed from the shard (repairing it) and the tier asked again.
+  for (_LAILA_IDENTIFIABLE_POOL* tier = pool.get(); tier != nullptr; tier = tier->proxy_to()) {
+    for (int attempt = 0; attempt < 64; ++attempt) {
+      auto key = tier->_resolve_indexed(base, split.second);
+      if (!key.has_value()) break;
+      if (tier->exists(*key)) return {*key, std::nullopt};
+      tier->index().remove(*key);
+    }
+  }
+
+  // 2. Scan fallback: candidate (tier, key) pairs across the proxy chain.
+  std::vector<std::pair<_LAILA_IDENTIFIABLE_POOL*, std::string>> candidates;
+  const std::string prefix = base + "@";
+  for (_LAILA_IDENTIFIABLE_POOL* tier = pool.get(); tier != nullptr; tier = tier->proxy_to()) {
+    auto indexed = tier->_search_keys(base, split.second);
+    std::vector<std::string> keys = indexed.has_value() ? *indexed : tier->_candidate_keys(base);
+    for (const auto& key : keys) {
+      if (key != base && key.compare(0, prefix.size(), prefix) != 0) continue;
+      if (evolution.has_value() && *evolution >= 0 && key_evolution(key) != *evolution) continue;
+      candidates.emplace_back(tier, key);
+    }
+  }
+
+  if (evolution.has_value() && *evolution < 0 && !candidates.empty()) {
+    // k-th from the end over the sorted, de-duplicated evolutions (constants rank lowest).
+    std::vector<int64_t> ranked;
+    for (const auto& c : candidates) {
+      int64_t r = key_evolution(c.second);
+      if (std::find(ranked.begin(), ranked.end(), r) == ranked.end()) ranked.push_back(r);
+    }
+    std::sort(ranked.begin(), ranked.end());
+    int64_t idx = static_cast<int64_t>(ranked.size()) + *evolution;
+    if (idx < 0) {
+      candidates.clear();
+    } else {
+      int64_t wanted = ranked[static_cast<size_t>(idx)];
+      std::vector<std::pair<_LAILA_IDENTIFIABLE_POOL*, std::string>> kept;
+      for (const auto& c : candidates)
+        if (key_evolution(c.second) == wanted) kept.push_back(c);
+      candidates = std::move(kept);
+    }
+  }
+
+  if (!creation_timestamp.has_value()) {
+    if (candidates.empty())
+      raise(Status::NotFound, "Entry " + eid + " not found in pool " + pool->global_id());
+    if (!evolution.has_value()) {
+      // Prefer an exact (constant) key; otherwise the highest evolution.
+      for (const auto& c : candidates)
+        if (c.second == base) return {c.second, std::nullopt};
+    }
+    const auto* best = &candidates.front();
+    for (const auto& c : candidates)
+      if (key_evolution(c.second) > key_evolution(best->second)) best = &c;
+    return {best->second, std::nullopt};
+  }
+
+  // Time-based search: inspect each candidate record's creation_timestamp on the tier
+  // that holds it (no write-back into the front tier).
+  std::optional<std::pair<std::string, Json>> best;
+  for (const auto& c : candidates) {
+    auto raw = c.first->read_local(c.second);
+    if (!raw.has_value()) continue;
+    auto hb = record_creation_timestamp(*raw);
+    if (!hb.has_value() || *hb != *creation_timestamp) continue;
+    if (!best.has_value() || key_evolution(c.second) > key_evolution(best->first))
+      best = std::make_pair(c.second, *raw);
+  }
+  if (!best.has_value())
+    raise(Status::NotFound, "No evolution of " + base + " with creation_timestamp='" + *creation_timestamp +
+                                "' in pool " + pool->global_id());
+  return {best->first, best->second};
 }
 
 EntryPtr CentralMemory::remember(const std::string& global_id, const std::string& pool_nickname,
@@ -71,7 +201,9 @@ EntryPtr CentralMemory::remember(const std::string& global_id, const std::string
   RouteOpts ro;
   if (!pool_nickname.empty()) ro.pool_nickname = pool_nickname;
   PoolPtr source = pool_router_.route(ro);
-  auto blob = source->get(global_id);
+  auto resolved = _resolve_entry_key(source, global_id);
+  std::optional<Json> blob = resolved.second;
+  if (!blob.has_value()) blob = source->get(resolved.first);
   if (!blob.has_value()) raise(Status::NotFound, "Entry not found: " + global_id);
   EntryPtr e = Entry::build_from_dict(*blob);
   // Cache-back: when reading from a non-default pool and persist is requested,
@@ -87,7 +219,16 @@ EntryPtr CentralMemory::forget(const std::string& global_id, const std::string& 
   RouteOpts ro;
   if (!pool_nickname.empty()) ro.pool_nickname = pool_nickname;
   PoolPtr target = pool_router_.route(ro);
-  target->erase(global_id);
+  // A negative evolution ("@evolution=-1" = latest) is resolved to the
+  // concrete key; an evolution-less reference stays exact-key.
+  std::string key = global_id;
+  for (const auto& kv : split_global_id_attributes(global_id).second) {
+    if (kv.first == EVOLUTION_ATTRIBUTE && !kv.second.empty() && kv.second[0] == '-') {
+      key = _resolve_entry_key(target, global_id).first;
+      break;
+    }
+  }
+  target->erase(key);
   return Entry::constant(LailaValue::none());
 }
 

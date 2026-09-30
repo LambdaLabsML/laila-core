@@ -11,16 +11,20 @@ An **Entry** is LAILA's universal container. It wraps any Python object — a di
 There are two kinds of entries:
 
 - **`laila.constant(data=...)`** — immutable. Once created, its data and identity are fixed.
-- **`laila.variable(data=...)`** — mutable. You can call `entry.evolve(new_data)` to bump its version while keeping the same identity lineage.
+- **`laila.variable(data=...)`** — versioned. Its `global_id` carries `@evolution=<n>`; re-assigning `entry.data` and memorizing again advances the evolution in place, and `entry.evolve(new_data)` produces the next version as a new object. Either way the identity lineage (the uuid) stays the same.
 
 ```python
 import laila
 
 c = laila.constant(data={"model": "v1", "accuracy": 0.93})
-print(c.global_id)  # deterministic, unique identifier
+print(c.global_id)  # LAILA:ENTRY:<uuid>  -- deterministic, unique identifier
 
-v = laila.variable(data=[1, 2, 3])
-v = v.evolve([1, 2, 3, 4])  # new entry, same uuid, evolution += 1
+v = laila.variable(data=[1, 2, 3])          # LAILA:ENTRY:<uuid>@evolution=0
+laila.memorize(v).wait()
+v.data = [1, 2, 3, 4]
+laila.memorize(v).wait()                    # same object, now @evolution=1
+laila.remember("ENTRY:" + v.uuid).wait()    # no evolution given -> the latest one
+w = v.evolve([1, 2, 3, 4, 5])               # explicit new entry, evolution += 1
 ```
 
 Every entry, regardless of what it holds, passes through the same `memorize` / `remember` / `forget` interface.

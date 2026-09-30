@@ -57,6 +57,17 @@ TEST("xlang", "as_dict_wire_format") {
     EntryPtr e = Entry::build_from_dict(v.at("as_dict"));
     CHECK_EQ(e->uuid(), v.at("uuid").as_string());
     CHECK_EQ(e->global_id(), v.at("global_id").as_string());
+    // Identity attributes + creation_timestamp parity with laila.
+    if (v.contains("evolution")) {
+      CHECK(e->evolution().has_value());
+      CHECK_EQ(*e->evolution(), v.at("evolution").as_int());
+      CHECK_EQ(e->creation_timestamp(), v.at("creation_timestamp").as_string());
+      ParsedGid p = process_global_id(v.at("global_id").as_string());
+      CHECK_EQ(*p.evolution, v.at("evolution").as_int());
+    } else {
+      CHECK(!e->evolution().has_value());
+    }
+    CHECK(!e->locally_modified());  // a deserialized entry is the memorized baseline
 
     const Json& payload = v.at("as_dict").at("payload");
     LailaValue got = e->data();

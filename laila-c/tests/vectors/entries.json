@@ -2,132 +2,141 @@
   {
     "name": "string",
     "as_dict": {
-      "_uuid": "345aa5c5-340d-4f76-86f5-ef8635552ab3",
+      "_uuid": "d6ba1002-b23d-43fb-8fee-9c2922a333ee",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
+      "_creation_timestamp": "2026-09-29T17:39:18.888+00:00",
       "payload": "hello laila",
       "constitution": null
     },
-    "global_id": "LAILA:ENTRY:GLOBAL_ID:345aa5c5-340d-4f76-86f5-ef8635552ab3",
-    "uuid": "345aa5c5-340d-4f76-86f5-ef8635552ab3"
+    "global_id": "LAILA:ENTRY:d6ba1002-b23d-43fb-8fee-9c2922a333ee",
+    "uuid": "d6ba1002-b23d-43fb-8fee-9c2922a333ee"
   },
   {
     "name": "empty_string",
     "as_dict": {
-      "_uuid": "501c10d8-0676-4ff8-9850-f62d81d39d99",
+      "_uuid": "4a7c0e71-4649-4dc3-9448-9b7811d3a1b6",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
+      "_creation_timestamp": "2026-09-29T17:39:18.888+00:00",
       "payload": "",
       "constitution": null
     },
-    "global_id": "LAILA:ENTRY:GLOBAL_ID:501c10d8-0676-4ff8-9850-f62d81d39d99",
-    "uuid": "501c10d8-0676-4ff8-9850-f62d81d39d99"
+    "global_id": "LAILA:ENTRY:4a7c0e71-4649-4dc3-9448-9b7811d3a1b6",
+    "uuid": "4a7c0e71-4649-4dc3-9448-9b7811d3a1b6"
   },
   {
     "name": "int",
     "as_dict": {
-      "_uuid": "98e19b58-9a03-4cf2-bd10-110678145752",
+      "_uuid": "708789d5-7c87-4d15-84ae-2bc549c69704",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
+      "_creation_timestamp": "2026-09-29T17:39:18.888+00:00",
       "payload": 123,
       "constitution": null
     },
-    "global_id": "LAILA:ENTRY:GLOBAL_ID:98e19b58-9a03-4cf2-bd10-110678145752",
-    "uuid": "98e19b58-9a03-4cf2-bd10-110678145752"
+    "global_id": "LAILA:ENTRY:708789d5-7c87-4d15-84ae-2bc549c69704",
+    "uuid": "708789d5-7c87-4d15-84ae-2bc549c69704"
   },
   {
     "name": "neg_int",
     "as_dict": {
-      "_uuid": "073b2981-bd37-462d-9521-adf54e71f14c",
+      "_uuid": "0e1dcb42-b163-492b-9233-d1ddc4a58819",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
+      "_creation_timestamp": "2026-09-29T17:39:18.888+00:00",
       "payload": -98765,
       "constitution": null
     },
-    "global_id": "LAILA:ENTRY:GLOBAL_ID:073b2981-bd37-462d-9521-adf54e71f14c",
-    "uuid": "073b2981-bd37-462d-9521-adf54e71f14c"
+    "global_id": "LAILA:ENTRY:0e1dcb42-b163-492b-9233-d1ddc4a58819",
+    "uuid": "0e1dcb42-b163-492b-9233-d1ddc4a58819"
   },
   {
     "name": "zero",
     "as_dict": {
-      "_uuid": "e96176b1-c17f-480d-81b2-58f9d179df11",
+      "_uuid": "2c6cab9c-07b0-442d-8831-4e1ade39ed55",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
+      "_creation_timestamp": "2026-09-29T17:39:18.889+00:00",
       "payload": 0,
       "constitution": null
     },
-    "global_id": "LAILA:ENTRY:GLOBAL_ID:e96176b1-c17f-480d-81b2-58f9d179df11",
-    "uuid": "e96176b1-c17f-480d-81b2-58f9d179df11"
+    "global_id": "LAILA:ENTRY:2c6cab9c-07b0-442d-8831-4e1ade39ed55",
+    "uuid": "2c6cab9c-07b0-442d-8831-4e1ade39ed55"
   },
   {
     "name": "float",
     "as_dict": {
-      "_uuid": "1a5b65f7-976d-45b5-ac99-6e0d068e9efa",
+      "_uuid": "5e471ea1-7427-493e-ac12-14257d41c313",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
+      "_creation_timestamp": "2026-09-29T17:39:18.889+00:00",
       "payload": 3.5,
       "constitution": null
     },
-    "global_id": "LAILA:ENTRY:GLOBAL_ID:1a5b65f7-976d-45b5-ac99-6e0d068e9efa",
-    "uuid": "1a5b65f7-976d-45b5-ac99-6e0d068e9efa"
+    "global_id": "LAILA:ENTRY:5e471ea1-7427-493e-ac12-14257d41c313",
+    "uuid": "5e471ea1-7427-493e-ac12-14257d41c313"
   },
   {
     "name": "bool_true",
     "as_dict": {
-      "_uuid": "39770b5b-403f-4604-85f8-d1773af51712",
+      "_uuid": "5409ef2e-ef95-4ee5-bd9d-30b4b59b8487",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
+      "_creation_timestamp": "2026-09-29T17:39:18.889+00:00",
       "payload": true,
       "constitution": null
     },
-    "global_id": "LAILA:ENTRY:GLOBAL_ID:39770b5b-403f-4604-85f8-d1773af51712",
-    "uuid": "39770b5b-403f-4604-85f8-d1773af51712"
+    "global_id": "LAILA:ENTRY:5409ef2e-ef95-4ee5-bd9d-30b4b59b8487",
+    "uuid": "5409ef2e-ef95-4ee5-bd9d-30b4b59b8487"
   },
   {
     "name": "bool_false",
     "as_dict": {
-      "_uuid": "b966ccc3-8796-428e-bb02-3a879de66ea9",
+      "_uuid": "44cadf1e-8cef-4e15-8bed-e2409b3d642e",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
+      "_creation_timestamp": "2026-09-29T17:39:18.889+00:00",
       "payload": false,
       "constitution": null
     },
-    "global_id": "LAILA:ENTRY:GLOBAL_ID:b966ccc3-8796-428e-bb02-3a879de66ea9",
-    "uuid": "b966ccc3-8796-428e-bb02-3a879de66ea9"
+    "global_id": "LAILA:ENTRY:44cadf1e-8cef-4e15-8bed-e2409b3d642e",
+    "uuid": "44cadf1e-8cef-4e15-8bed-e2409b3d642e"
   },
   {
     "name": "dict",
     "as_dict": {
-      "_uuid": "33c9e00b-ed26-4c4b-b4e4-e74fb99415aa",
+      "_uuid": "059f180a-5c8e-4c58-9a64-3dbb410fc962",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
+      "_creation_timestamp": "2026-09-29T17:39:18.889+00:00",
       "payload": {
         "k": [
           1,
@@ -138,18 +147,19 @@
       },
       "constitution": null
     },
-    "global_id": "LAILA:ENTRY:GLOBAL_ID:33c9e00b-ed26-4c4b-b4e4-e74fb99415aa",
-    "uuid": "33c9e00b-ed26-4c4b-b4e4-e74fb99415aa"
+    "global_id": "LAILA:ENTRY:059f180a-5c8e-4c58-9a64-3dbb410fc962",
+    "uuid": "059f180a-5c8e-4c58-9a64-3dbb410fc962"
   },
   {
     "name": "list",
     "as_dict": {
-      "_uuid": "a9802bfe-9922-4a5b-823d-872f39e5cdcf",
+      "_uuid": "2608a8b1-23b3-493b-80c9-2e559e3ec48a",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
+      "_creation_timestamp": "2026-09-29T17:39:18.889+00:00",
       "payload": [
         1,
         2,
@@ -158,18 +168,19 @@
       ],
       "constitution": null
     },
-    "global_id": "LAILA:ENTRY:GLOBAL_ID:a9802bfe-9922-4a5b-823d-872f39e5cdcf",
-    "uuid": "a9802bfe-9922-4a5b-823d-872f39e5cdcf"
+    "global_id": "LAILA:ENTRY:2608a8b1-23b3-493b-80c9-2e559e3ec48a",
+    "uuid": "2608a8b1-23b3-493b-80c9-2e559e3ec48a"
   },
   {
     "name": "nested",
     "as_dict": {
-      "_uuid": "e6f43b36-69ff-44b8-99fb-cd0534853349",
+      "_uuid": "525a0ec1-200f-4119-aee0-010a9f280641",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
+      "_creation_timestamp": "2026-09-29T17:39:18.889+00:00",
       "payload": {
         "a": {
           "b": {
@@ -187,7 +198,48 @@
       },
       "constitution": null
     },
-    "global_id": "LAILA:ENTRY:GLOBAL_ID:e6f43b36-69ff-44b8-99fb-cd0534853349",
-    "uuid": "e6f43b36-69ff-44b8-99fb-cd0534853349"
+    "global_id": "LAILA:ENTRY:525a0ec1-200f-4119-aee0-010a9f280641",
+    "uuid": "525a0ec1-200f-4119-aee0-010a9f280641"
+  },
+  {
+    "name": "variable_evo0",
+    "as_dict": {
+      "_uuid": "37a43123-36be-4c14-8952-932bd866c598",
+      "_evolution": 0,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "_creation_timestamp": "2026-09-29T17:39:18.889+00:00",
+      "payload": [
+        1,
+        2
+      ],
+      "constitution": null
+    },
+    "global_id": "LAILA:ENTRY:37a43123-36be-4c14-8952-932bd866c598@evolution=0",
+    "uuid": "37a43123-36be-4c14-8952-932bd866c598",
+    "evolution": 0,
+    "creation_timestamp": "2026-09-29T17:39:18.889+00:00"
+  },
+  {
+    "name": "variable_evo7",
+    "as_dict": {
+      "_uuid": "c2bd5fc5-4590-46e3-9ca7-098df921bbc7",
+      "_evolution": 7,
+      "_scopes": [
+        "ENTRY"
+      ],
+      "_state": "READY",
+      "_creation_timestamp": "2026-09-29T17:39:18.890+00:00",
+      "payload": {
+        "k": "v"
+      },
+      "constitution": null
+    },
+    "global_id": "LAILA:ENTRY:c2bd5fc5-4590-46e3-9ca7-098df921bbc7@evolution=7",
+    "uuid": "c2bd5fc5-4590-46e3-9ca7-098df921bbc7",
+    "evolution": 7,
+    "creation_timestamp": "2026-09-29T17:39:18.890+00:00"
   }
 ]

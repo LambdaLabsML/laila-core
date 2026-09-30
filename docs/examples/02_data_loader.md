@@ -81,7 +81,7 @@ On the second epoch step 2 becomes a disk hit and R2 is never contacted. Writes 
 
 ## Load the manifest
 
-`remember` the manifest from R2 by its nickname shorthand (`"MANIFEST:my_dataset"` expands to the full `LAILA:MANIFEST:GLOBAL_ID:<uuid5>` id); the result is the `Manifest` itself. Its top-level keys (`image_0000` … `image_0063`) are the dataset index:
+`remember` the manifest from R2 by its nickname shorthand (`"MANIFEST:my_dataset"` expands to the full `LAILA:MANIFEST:<uuid5>` id); the result is the `Manifest` itself. Its top-level keys (`image_0000` … `image_0063`) are the dataset index:
 
 ```python
 ref = laila.remember("MANIFEST:my_dataset", dst_pool="r2", persist=False)
@@ -114,7 +114,7 @@ Expected output:
 
 ```
 sub-manifest keys: ['image_0000', 'image_0001', 'image_0002', 'image_0003', 'image_0004', 'image_0005', 'image_0006', 'image_0007']
-first global_id:   LAILA:ENTRY:GLOBAL_ID:3b9c...
+first global_id:   LAILA:ENTRY:3b9c...
 alpha has it?      False
 ```
 

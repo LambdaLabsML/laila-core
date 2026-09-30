@@ -58,13 +58,16 @@ for gid in gids:
 
 ## Verify
 
-Direct pool introspection: `warm._keys()` should be empty, and `cold._keys()` should contain all five gids:
+Pool introspection: `warm.keys()` should be empty, and `cold.keys()` should contain all five gids. Use the public `keys()` — it lists entries only; the raw `_keys()` hook also returns the pool's own index shards (`LAILA:POOL_INDEX:...`, see [Tutorial 1a](01a_variables_and_evolution.md)), which `keys(include_index=True)` exposes if you ever need them:
 
 ```python
-warm_keys = list(warm._keys())
-cold_keys = list(cold._keys())
+warm_keys = list(warm.keys())
+cold_keys = list(cold.keys())
 print(len(warm_keys), len(cold_keys))
 # 0 5
+
+print(len(list(cold.keys(include_index=True))))
+# 10  -- five entries plus one index shard each
 ```
 
 ## Sharp edges

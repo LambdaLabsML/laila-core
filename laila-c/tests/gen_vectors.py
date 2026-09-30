@@ -69,6 +69,20 @@ for name, value in samples:
             "uuid": e.uuid,
         }
     )
+# Variables carry the `@evolution=<n>` identity attribute; the creation_timestamp rides
+# along in the dict and must be restored verbatim by laila-C's from_dict.
+for name, value, evo in [("variable_evo0", [1, 2], 0), ("variable_evo7", {"k": "v"}, 7)]:
+    e = laila.variable(data=value, evolution=evo)
+    entries.append(
+        {
+            "name": name,
+            "as_dict": e.as_dict(),
+            "global_id": e.global_id,
+            "uuid": e.uuid,
+            "evolution": evo,
+            "creation_timestamp": e.creation_timestamp,
+        }
+    )
 write("entries.json", entries)
 
 

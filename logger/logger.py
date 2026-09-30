@@ -300,8 +300,13 @@ class Logger(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
             recorder=policy.global_id,
             borrower=policy.global_id,
         )
-        pool[entry.global_id] = record_wrapper.serialize(
-            transformations=pool.transformations,
+        # Log records are append-only and never looked up by evolution or
+        # creation timestamp, so bypass the pool's index-maintaining
+        # ``write`` wrapper: indexing every log line would cost an extra
+        # shard write per record on the sink pool.
+        pool._write(
+            entry.global_id,
+            record_wrapper.serialize(transformations=pool.transformations),
         )
 
     # ------------------------------------------------------------------

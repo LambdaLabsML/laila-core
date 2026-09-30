@@ -30,7 +30,7 @@ TEST("platform", "storage_crud") {
   CHECK(s != nullptr);
   s->clear();
   for (int i = 0; i < 50; ++i) {
-    std::string key = "LAILA:ENTRY:GLOBAL_ID:key-" + std::to_string(i);
+    std::string key = "LAILA:ENTRY:key-" + std::to_string(i);
     std::vector<uint8_t> data = {(uint8_t)i, (uint8_t)(i * 3), 0x10, 0x20};
     CHECK(s->write(key, data));
     std::vector<uint8_t> out;
@@ -38,8 +38,8 @@ TEST("platform", "storage_crud") {
     CHECK(out == data);
     CHECK(s->exists(key));
   }
-  CHECK(s->remove("LAILA:ENTRY:GLOBAL_ID:key-0"));
-  CHECK(!s->exists("LAILA:ENTRY:GLOBAL_ID:key-0"));
+  CHECK(s->remove("LAILA:ENTRY:key-0"));
+  CHECK(!s->exists("LAILA:ENTRY:key-0"));
   s->clear();
 }
 

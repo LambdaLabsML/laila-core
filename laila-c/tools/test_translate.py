@@ -269,7 +269,7 @@ _GOOD = [
     ),
     (
         "remember-pool_nickname",
-        'RememberOpts o; o.pool_nickname=std::string("store"); auto f=laila->remember("LAILA:ENTRY:GLOBAL_ID:x",o); (void)f;',
+        'RememberOpts o; o.pool_nickname=std::string("store"); auto f=laila->remember("LAILA:ENTRY:x",o); (void)f;',
     ),
     (
         "remember-policy_id",
@@ -565,7 +565,7 @@ _PY_CORPUS = [
         "py/peer-pull",
         "import laila\np=laila.DefaultPolicy(); laila.activate_policy(p)\n"
         'rid=laila.communication.add_tcpip_peer("10.0.0.5",8770,"s")\n'
-        'v=laila.remember(entry_ids="LAILA:ENTRY:GLOBAL_ID:x", pool_nickname="store", policy_id=rid, persist=False)\n'
+        'v=laila.remember(entry_ids="LAILA:ENTRY:x", pool_nickname="store", policy_id=rid, persist=False)\n'
         "print(v.wait())\n",
     ),
     (

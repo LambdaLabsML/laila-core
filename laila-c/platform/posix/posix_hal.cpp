@@ -37,6 +37,10 @@ public:
     return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
   }
   void sleep_ms(uint32_t ms) override { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
+  uint64_t epoch_ms() override {
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+  }
 };
 
 class PosixMutex : public Mutex {

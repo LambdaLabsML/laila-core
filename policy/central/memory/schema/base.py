@@ -33,13 +33,22 @@ import asyncio
 import functools
 import threading
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import ConfigDict, Field, PrivateAttr
 
 from .....basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS
-from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+from .....basics.definitions.identifiable_object import (
+    _LAILA_IDENTIFIABLE_OBJECT,
+    EVOLUTION_ATTRIBUTE,
+    parse_global_id_attributes,
+    split_global_id_attributes,
+)
 from .....data.schema.base import _LAILA_IDENTIFIABLE_POOL
+from .....data.schema.pool_index import (
+    CREATION_TIMESTAMP_ATTRIBUTE,
+    _record_creation_timestamp,
+)
 from .....entry import Entry
 from .....macros.strings import _CENTRAL_MEMORY_SCOPE, _DEFAULT_POOL_NICKNAME
 from .....utils.decorators.typecheck import ensure_list
@@ -454,11 +463,20 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         transformations = pool.transformations
 
         async def _memorize_one(e=None, p=pool, t=transformations, pgid=policy_gid):
+            # A variable entry whose payload was re-assigned since its last
+            # memorize becomes a new evolution (in place); an untouched one
+            # is re-written under the same key.
+            bump = getattr(e, "bump_evolution_if_locally_modified", None)
+            if bump is not None:
+                bump()
             record = Record(entry=e, creator=pgid, borrower=pgid)
             blob = record.serialize(transformations=t)
             if hasattr(blob, "data"):
                 blob = blob.data
-            await p._write_async(e.global_id, blob)
+            await p.write_async(e.global_id, blob)
+            mark = getattr(e, "mark_memorized", None)
+            if mark is not None:
+                mark()
             return e.global_id
 
         # ``partial`` of a coroutine function is recognised as one by
@@ -669,6 +687,176 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
 
         return next(iter(child_futures.values()))
 
+    # ------------------------------------------------------------------
+    # Attribute-based key resolution (``remember("ENTRY:x@...")``)
+    # ------------------------------------------------------------------
+
+    #: Attributes ``remember`` knows how to search on. Anything else in the
+    #: ``@`` suffix of an entry reference is rejected up front.
+    _SEARCH_ATTRIBUTES: ClassVar[frozenset[str]] = frozenset(
+        {EVOLUTION_ATTRIBUTE, CREATION_TIMESTAMP_ATTRIBUTE}
+    )
+
+    @staticmethod
+    def _key_evolution(key: str) -> int:
+        """Evolution encoded in a storage key; ``-1`` for a constant (no ``@``)."""
+        _, _, tail = key.partition("@")
+        if not tail:
+            return -1
+        raw = parse_global_id_attributes(tail).get(EVOLUTION_ATTRIBUTE)
+        return int(raw) if raw is not None and raw.isdigit() else -1
+
+    # Kept as a static alias for callers that used to find it here.
+    _record_creation_timestamp = staticmethod(_record_creation_timestamp)
+
+    @staticmethod
+    def _pool_chain(pool: _LAILA_IDENTIFIABLE_POOL) -> list[_LAILA_IDENTIFIABLE_POOL]:
+        """*pool* followed by its ``_proxy_to`` upstream tiers, front to back."""
+        chain: list[_LAILA_IDENTIFIABLE_POOL] = []
+        seen: set[int] = set()
+        cur = pool
+        while cur is not None and id(cur) not in seen:
+            chain.append(cur)
+            seen.add(id(cur))
+            cur = getattr(cur, "_proxy_to", None)
+        return chain
+
+    async def _resolve_entry_key_async(
+        self,
+        pool: _LAILA_IDENTIFIABLE_POOL,
+        eid: str,
+    ) -> tuple[str, Any | None]:
+        """Turn an entry *reference* into the storage key to read.
+
+        The reference is a full global id, optionally carrying search
+        attributes after ``@``:
+
+        - ``LAILA:ENTRY:<uuid>@evolution=N`` (``N >= 0``) -- exact key,
+          no lookup.
+        - ``LAILA:ENTRY:<uuid>`` -- the exact key when it exists locally
+          (a constant); otherwise the stored evolution with the highest
+          counter across *pool* and its proxy chain.
+        - ``LAILA:ENTRY:<uuid>@evolution=-k`` -- the k-th evolution from
+          the end (``-1`` = latest); a constant key counts as the lowest.
+        - ``LAILA:ENTRY:<uuid>@creation_timestamp=<iso>`` (optionally
+          with ``evolution``) -- the stored evolution whose entry
+          creation_timestamp equals the given stamp exactly.
+
+        Resolution order per tier of the proxy chain:
+
+        1. the tier's :meth:`_resolve_indexed` (its :class:`PoolIndex`);
+           a hit is **validated** with ``_exists_async`` and, when the
+           key turns out to be gone, the shard is invalidated and the
+           search continues;
+        2. only when no tier's index answers: candidate keys from
+           :meth:`_search_keys` / :meth:`_candidate_keys`, and for
+           timestamp queries the candidate records are read on the tier
+           that holds them (no write-back); the matching raw record is
+           returned so the caller does not read it twice.
+
+        Returns
+        -------
+        tuple[str, Any | None]
+            ``(storage_key, raw_record_or_None)``.
+
+        Raises
+        ------
+        ValueError
+            On an unsupported search attribute.
+        KeyError
+            When no stored evolution satisfies the query.
+        """
+        # Shorthands ("ENTRY:nick@evolution=3") are normally expanded by
+        # ``laila.remember``; expand here too so direct callers of central
+        # memory get the same behaviour.
+        eid = Entry.resolve_global_id(str(eid))
+        base, attrs = split_global_id_attributes(eid)
+        unknown = set(attrs) - self._SEARCH_ATTRIBUTES
+        if unknown:
+            raise ValueError(
+                f"Unsupported search attribute(s) {sorted(unknown)} in {eid!r}; "
+                f"supported: {sorted(self._SEARCH_ATTRIBUTES)}"
+            )
+        raw_evolution = attrs.get(EVOLUTION_ATTRIBUTE)
+        evolution: int | None = int(raw_evolution) if raw_evolution is not None else None
+        creation_timestamp = attrs.get(CREATION_TIMESTAMP_ATTRIBUTE)
+        chain = self._pool_chain(pool)
+
+        # Fast paths: a non-negative explicit evolution is an exact key; a
+        # bare id that exists as-is (a constant) needs no lookup.
+        if creation_timestamp is None:
+            if evolution is not None and evolution >= 0:
+                return eid, None
+            if evolution is None and await pool._exists_async(base):
+                return base, None
+
+        # 1. Index-first, tier by tier, validating every hit. A hit whose key
+        #    is gone (external delete, lost race) is removed from the shard --
+        #    which repairs the persisted index -- and the tier is asked again.
+        for tier in chain:
+            for _attempt in range(64):
+                key = await asyncio.to_thread(tier._resolve_indexed, base, attrs)
+                if key is None:
+                    break
+                if await tier._exists_async(key):
+                    return key, None
+                await asyncio.to_thread(tier.index.remove, key)
+
+        # 2. Scan fallback: candidate (tier, key) pairs across the chain.
+        candidates: list[tuple[_LAILA_IDENTIFIABLE_POOL, str]] = []
+        for tier in chain:
+            keys = await asyncio.to_thread(tier._search_keys, base, attrs)
+            if keys is None:
+                keys = await asyncio.to_thread(tier._candidate_keys, base)
+            for key in keys:
+                if key != base and not key.startswith(f"{base}@"):
+                    continue
+                if (
+                    evolution is not None
+                    and evolution >= 0
+                    and self._key_evolution(key) != evolution
+                ):
+                    continue
+                candidates.append((tier, key))
+
+        if evolution is not None and evolution < 0 and candidates:
+            # k-th from the end over the sorted, de-duplicated evolutions
+            # (constants rank lowest).
+            ranked = sorted({self._key_evolution(k) for _t, k in candidates})
+            idx = len(ranked) + evolution
+            if idx < 0:
+                candidates = []
+            else:
+                wanted = ranked[idx]
+                candidates = [(t, k) for t, k in candidates if self._key_evolution(k) == wanted]
+
+        if creation_timestamp is None:
+            if not candidates:
+                raise KeyError(f"Entry {eid} not found in pool {pool.global_id}")
+            if evolution is None:
+                # Prefer an exact (constant) key; otherwise the highest evolution.
+                for _tier, key in candidates:
+                    if key == base:
+                        return key, None
+            _tier, key = max(candidates, key=lambda tk: self._key_evolution(tk[1]))
+            return key, None
+
+        # Time-based search: inspect each candidate record's creation_timestamp.
+        matches: list[tuple[int, str, Any]] = []
+        for tier, key in candidates:
+            raw = await tier._read_async(key)
+            if raw is None:
+                continue
+            if _record_creation_timestamp(raw) == creation_timestamp:
+                matches.append((self._key_evolution(key), key, raw))
+        if not matches:
+            raise KeyError(
+                f"No evolution of {base} with creation_timestamp={creation_timestamp!r} "
+                f"in pool {pool.global_id}"
+            )
+        _evo, key, raw = max(matches, key=lambda m: m[0])
+        return key, raw
+
     def _fetch(
         self,
         entry_ids: list[str],
@@ -712,11 +900,14 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         check_resolve_cycle(*entry_ids)
 
         async def _remember_one(eid=None, p=pool):
-            # Extend the resolve chain for anything this fetch triggers
-            # (nested manifests, constitutions) so cycles are detected.
-            token = _RESOLVE_CHAIN.set(_RESOLVE_CHAIN.get() + (eid,))
+            key, raw = await self._resolve_entry_key_async(p, eid)
+            # Extend the resolve chain with the *concrete* key so a floating
+            # reference (``@evolution=-1``) cannot hide a cycle through a
+            # nested manifest / constitution.
+            token = _RESOLVE_CHAIN.set(_RESOLVE_CHAIN.get() + (key,))
             try:
-                raw = await p._read_through_async(eid)
+                if raw is None:
+                    raw = await p._read_through_async(key)
                 if raw is None:
                     raise KeyError(f"Entry {eid} not found in pool {p.global_id}")
                 record = await Record._build_async(raw)
@@ -819,9 +1010,11 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
 
         async def _one(eid: str):
             async with sem:
-                token = _RESOLVE_CHAIN.set(_RESOLVE_CHAIN.get() + (eid,))
+                key, raw = await self._resolve_entry_key_async(routed, eid)
+                token = _RESOLVE_CHAIN.set(_RESOLVE_CHAIN.get() + (key,))
                 try:
-                    raw = await routed._read_through_async(eid)
+                    if raw is None:
+                        raw = await routed._read_through_async(key)
                     if raw is None:
                         raise KeyError(f"Entry {eid} not found in pool {routed.global_id}")
                     record = await Record._build_async(raw)
@@ -1107,8 +1300,15 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         internal_id = cmd.internal_taskforce
 
         async def _delete_one(eid=None, p=pool):
-            await p._delete_async(eid)
-            return eid
+            key = str(eid)
+            # A negative evolution ("@evolution=-1" = latest) must be resolved
+            # to the concrete key; an evolution-less reference stays exact.
+            _base, attrs = split_global_id_attributes(key)
+            raw_evolution = attrs.get(EVOLUTION_ATTRIBUTE)
+            if raw_evolution is not None and raw_evolution.startswith("-"):
+                key, _ = await self._resolve_entry_key_async(p, key)
+            await p.delete_async(key)
+            return key
 
         factories = [functools.partial(_delete_one, eid=entry_id) for entry_id in entry_ids]
         return cmd.submit(tasks=factories, taskforce_id=internal_id)

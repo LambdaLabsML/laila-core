@@ -8,13 +8,13 @@ Each tutorial builds on the one before it. If you are new to LAILA, start at the
 
 ### 1. Entries and Identity — `01_entries_and_identity.ipynb`
 
-Learn the most fundamental building block in LAILA: the **Entry**. This tutorial covers how to wrap arbitrary data (dicts, numpy arrays, torch tensors) using `laila.constant` and `laila.variable`, and explains the identity system — `global_id`, `uuid`, `scopes`, `evolution`, and `state`. You will also see how **nicknames** give entries deterministic, human-readable identities so the same name always maps to the same storage key.
+Learn the most fundamental building block in LAILA: the **Entry**. This tutorial covers how to wrap arbitrary data (dicts, numpy arrays, torch tensors) using `laila.constant` and `laila.variable`, and explains the identity system — `global_id` (`LAILA:<scope>:<uuid>[@evolution=<n>]`), `uuid`, `scopes`, `evolution`, `creation_timestamp`, and `state`. You will also see how **nicknames** give entries deterministic, human-readable identities so the same name always maps to the same storage key, and how a scope-less reference such as `laila.remember("my_entry")` resolves to that same key.
 
 **No credentials or external services required.**
 
 ### 1a. Variables and Evolution — `01a_variables_and_evolution.ipynb`
 
-Dig into the `evolution` counter that lets a single nickname address an ordered sequence of versions of the same logical entry. Memorize successive evolutions, recall a specific one with `remember(nickname=..., evolution=N)`, and see why `Entry.evolve(new_data=...)` returns a new entry instead of mutating in place. Contrasts variables with immutable constants.
+Dig into the `evolution` counter that lets a single nickname address an ordered sequence of versions of the same logical entry. See how `laila.memorize` advances a variable's evolution in place once its payload was re-assigned (and is idempotent otherwise), recall the latest version with `remember("name")`, a specific one with `@evolution=N`, "the one before" with `@evolution=-2`, or a version by `@creation_timestamp=...`; use `Entry.evolve(data=...)` for an explicit new object; and peek at the per-entry pool index that answers these lookups without scanning. Contrasts variables with immutable constants.
 
 **No credentials or external services required.**
 

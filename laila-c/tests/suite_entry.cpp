@@ -55,7 +55,7 @@ TEST("entry", "constant_with_uuid_and_nickname") {
 
   ConstantOpts bad;
   bad.uuid = "x";
-  bad.global_id = "LAILA:ENTRY:GLOBAL_ID:33333333-3333-3333-3333-333333333333";
+  bad.global_id = "LAILA:ENTRY:33333333-3333-3333-3333-333333333333";
   CHECK_THROWS(Entry::constant(LailaValue::from_int(1), bad), LailaError);
 }
 

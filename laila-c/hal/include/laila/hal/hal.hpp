@@ -82,6 +82,11 @@ public:
   virtual ~Clock() = default;
   virtual uint64_t now_ms() = 0;
   virtual void sleep_ms(uint32_t ms) = 0;
+  // Wall-clock milliseconds since the Unix epoch, used for the ISO-8601
+  // `creation_timestamp` stamped on every laila object. Targets without an
+  // RTC fall back to the monotonic clock (timestamps are then boot-relative
+  // but still strictly ordered, which is all the time-based lookups need).
+  virtual uint64_t epoch_ms() { return now_ms(); }
 };
 
 // Process-wide coarse lock. Single-core backends may return a no-op.

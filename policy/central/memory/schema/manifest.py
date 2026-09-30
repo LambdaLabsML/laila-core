@@ -1047,6 +1047,33 @@ class Manifest(Entry):
                 return True
         return False
 
+    def floating_leaves(self) -> list[str]:
+        """Leaves that resolve at *read* time rather than naming one stored record.
+
+        A leaf is *floating* when its reference carries a negative
+        ``evolution`` (``@evolution=-1`` = "whatever is latest") or a
+        ``creation_timestamp`` search argument. Such leaves make the
+        manifest's contents depend on the pool state at the moment of
+        ``remember``; pinned manifests (reproducible datasets) should
+        have none. Malformed leaves are ignored here.
+        """
+        from .....basics.definitions.identifiable_object import (
+            EVOLUTION_ATTRIBUTE,
+            split_global_id_attributes,
+        )
+        from .....data.schema.pool_index import CREATION_TIMESTAMP_ATTRIBUTE
+
+        floating: list[str] = []
+        for gid in self:
+            try:
+                _, attrs = split_global_id_attributes(gid)
+            except ValueError:
+                continue
+            evolution = attrs.get(EVOLUTION_ATTRIBUTE, "")
+            if evolution.startswith("-") or CREATION_TIMESTAMP_ATTRIBUTE in attrs:
+                floating.append(gid)
+        return floating
+
     # ------------------------------------------------------------------
     # String representation
     # ------------------------------------------------------------------

@@ -59,6 +59,15 @@ public:
   std::shared_ptr<class Manifest> manifest() const { return manifest_; }
   void set_manifest(std::shared_ptr<class Manifest> m) { manifest_ = m; }
 
+  // Process-local "payload re-assigned since the last memorize" marker
+  // (entry.py `_locally_modified`). Set by set_data, cleared by mark_memorized /
+  // construction / build; never serialized.
+  bool locally_modified() const { return locally_modified_; }
+  void mark_memorized() { locally_modified_ = false; }
+  // memorize hook (entry.py bump_evolution_if_locally_modified): a locally-modified *variable* becomes
+  // the next evolution in place (and is re-stamped); constants never bump.
+  bool bump_evolution_if_locally_modified();
+
   // ---- Operations ----
   EntryPtr evolve(const LailaValue& data = LailaValue::none());
   void build_inplace();  // run attached constitution synchronously
@@ -77,10 +86,13 @@ public:
   std::string str() const { return global_id(); }
 
 private:
+  Json _identity_dict() const;
+
   EntryState state_ = EntryState::STAGED;
   std::optional<LailaValue> payload_;
   std::shared_ptr<Constitution> constitution_;
   std::shared_ptr<class Manifest> manifest_;  // bound for complex builds
+  bool locally_modified_ = false;
 };
 
 }  // namespace laila_c

@@ -46,6 +46,7 @@ This lets users compose layered caches like
 so that hot reads never leave the in-memory tier.
 """
 
+import asyncio
 from collections.abc import Iterable, Iterator
 from typing import Any
 
@@ -55,6 +56,7 @@ from ...basics.definitions.cli_capable import CLIExempt
 from ...entry.compdata.transformation import TransformationSequence
 from ...macros.strings import _POOL_SCOPE
 from .data_container import _LAILA_IDENTIFIABLE_DATA_CONTAINER
+from .pool_index import PoolIndex, is_index_key
 
 
 class _LAILA_IDENTIFIABLE_POOL(_LAILA_IDENTIFIABLE_DATA_CONTAINER):
@@ -86,13 +88,28 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_IDENTIFIABLE_DATA_CONTAINER):
         every blob before write and reversed on read. Lets a pool
         opaquely add compression, encoding, or encryption on top of
         the storage backend.
+    index_enabled : bool
+        Maintain the per-base evolution / creation-timestamp index (see
+        :mod:`data.schema.pool_index`) on every write and delete. Turn
+        off for pools whose keys are never looked up by attribute (log
+        sinks, ring buffers) to save the extra shard write per store.
+    index_pool : _LAILA_IDENTIFIABLE_POOL | None
+        Where the index shards are stored. ``None`` (default) means this
+        pool itself; point it at an in-memory pool when index writes on
+        the data backend are too expensive.
+
+    Index bookkeeping keys (``LAILA:POOL_INDEX:...``) are hidden from
+    :meth:`keys` unless ``include_index=True`` is passed.
     """
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_POOL_SCOPE]))
     _proxy_to: Any | None = PrivateAttr(default=None)
+    _index: Any | None = PrivateAttr(default=None)
     resource: dict[str, Any] = CLIExempt(default_factory=dict)
     batch_accelerated: bool = Field(default=False)
     transformations: TransformationSequence | None = CLIExempt(default=None)
+    index_enabled: bool = Field(default=True)
+    index_pool: Any | None = CLIExempt(default=None)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -100,6 +117,75 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_IDENTIFIABLE_DATA_CONTAINER):
     def pool_id(self) -> str:
         """Unique identifier for this pool. Alias for :attr:`global_id`."""
         return self.global_id
+
+    # -------- Index --------
+    @property
+    def index(self) -> PoolIndex:
+        """This pool's :class:`PoolIndex` (created on first access)."""
+        if self._index is None:
+            self._index = PoolIndex(self)
+        return self._index
+
+    def _index_record(self, key: str, value: Any) -> None:
+        if self.index_enabled and not is_index_key(key):
+            self.index.record(key, value)
+
+    def _index_remove(self, key: str) -> None:
+        if self.index_enabled and not is_index_key(key):
+            self.index.remove(key)
+
+    def _resolve_indexed(self, base_gid: str, attributes: dict[str, str]) -> str | None:
+        """Answer an attribute lookup from the index alone, or ``None``.
+
+        Parameters
+        ----------
+        base_gid : str
+            ``LAILA:ENTRY:<uuid>`` (no ``@`` suffix).
+        attributes : dict[str, str]
+            Search arguments of the reference: ``evolution`` (may be
+            negative, ``-1`` = latest) and / or ``creation_timestamp``.
+
+        Returns
+        -------
+        str or None
+            A storage key the index believes exists (central memory
+            validates it), or ``None`` when the index cannot answer and
+            the caller should fall back to scanning.
+        """
+        if not self.index_enabled:
+            return None
+        raw_evolution = attributes.get("evolution")
+        evolution = int(raw_evolution) if raw_evolution is not None else None
+        timestamp = attributes.get("creation_timestamp")
+        if timestamp is not None:
+            return self.index.by_creation_timestamp(base_gid, timestamp, evolution)
+        return self.index.nth(base_gid, -1 if evolution is None else evolution)
+
+    # -------- Index-maintaining write / delete wrappers --------
+    # Every writer (central memory, proxy write-back, ``pool[k] = v``)
+    # goes through these so the index sees all mutations. Backends keep
+    # overriding only the ``_write`` / ``_delete`` (``_async``) hooks.
+    def write(self, key: str, value: Any) -> None:
+        """Store *value* under *key* locally and index it."""
+        self._write(key, value)
+        self._index_record(key, value)
+
+    def delete(self, key: str) -> None:
+        """Delete *key* locally and un-index it."""
+        self._delete(key)
+        self._index_remove(key)
+
+    async def write_async(self, key: str, value: Any) -> None:
+        """Async :meth:`write` (index maintenance runs on a worker thread)."""
+        await self._write_async(key, value)
+        if self.index_enabled and not is_index_key(key):
+            await asyncio.to_thread(self.index.record, key, value)
+
+    async def delete_async(self, key: str) -> None:
+        """Async :meth:`delete` (index maintenance runs on a worker thread)."""
+        await self._delete_async(key)
+        if self.index_enabled and not is_index_key(key):
+            await asyncio.to_thread(self.index.remove, key)
 
     # -------- Proxy properties --------
     @property
@@ -223,6 +309,35 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_IDENTIFIABLE_DATA_CONTAINER):
 
             return _gen()
 
+    def _search_keys(self, base_gid: str, attributes: dict[str, str]) -> list[str] | None:
+        """Candidate keys for an attribute lookup (``remember("ENTRY:x@...")``).
+
+        Central memory calls this *before* falling back to a full
+        :meth:`_keys` scan when it has to find "the evolutions of
+        *base_gid*" (``LAILA:ENTRY:<uuid>``, no ``@`` suffix) that
+        satisfy *attributes* (``{"evolution": "3"}``,
+        ``{"creation_timestamp": "..."}`` ...).
+
+        The default answers from this pool's :attr:`index` when it has
+        a shard for *base_gid* and returns ``None`` otherwise ("no
+        index, scan"). Returning a list -- even an empty one -- is
+        authoritative and skips the scan; central memory still
+        validates the key it picks against the store.
+        """
+        if not self.index_enabled:
+            return None
+        return self.index.candidates(base_gid)
+
+    def _candidate_keys(self, base_gid: str) -> list[str]:
+        """Local-only list of keys that are evolutions of *base_gid*.
+
+        Matches the exact key (a constant) and every ``base_gid@...``
+        key (variables). Default implementation filters :meth:`_keys`
+        in Python; listing-based backends can push the prefix down.
+        """
+        prefix = f"{base_gid}@"
+        return [k for k in self._keys() if k == base_gid or k.startswith(prefix)]
+
     def _empty(self) -> None:
         """Wipe this pool's own storage. Override in subclasses.
 
@@ -278,7 +393,7 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_IDENTIFIABLE_DATA_CONTAINER):
         if self._proxy_to is not None:
             value = await self._proxy_to._read_through_async(key)
             if value is not None:
-                await self._write_async(key, value)
+                await self.write_async(key, value)
                 return value
 
         return None
@@ -312,21 +427,27 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_IDENTIFIABLE_DATA_CONTAINER):
         if self._proxy_to is not None:
             value = self._proxy_to[key]
             if value is not None:
-                self._write(key, value)
+                self.write(key, value)
                 return value
 
         return None
 
     def __setitem__(self, key: str, entry: Any) -> None:
         """Store *entry* under *key*. Local-only; never propagates to a proxy origin."""
-        self._write(key, entry)
+        self.write(key, entry)
 
     def __delitem__(self, key: str) -> None:
         """Delete the entry for *key*. Local-only; never propagates to a proxy origin."""
-        self._delete(key)
+        self.delete(key)
 
     def empty(self) -> None:
-        """Remove every entry from this pool. Local-only; never propagates to a proxy origin."""
+        """Remove every entry from this pool. Local-only; never propagates to a proxy origin.
+
+        Also drops this pool's index shards, including those held by a
+        separate :attr:`index_pool`.
+        """
+        if self.index_enabled:
+            self.index.clear()
         self._empty()
 
     def exists(self, key: str) -> bool:
@@ -337,7 +458,7 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_IDENTIFIABLE_DATA_CONTAINER):
         """``key in pool`` -- thin alias for :meth:`exists`."""
         return self.exists(key)
 
-    def keys(self, as_generator: bool = False) -> Iterable[str]:
+    def keys(self, as_generator: bool = False, include_index: bool = False) -> Iterable[str]:
         """Return the keys stored in this pool. Local-only enumeration.
 
         Parameters
@@ -348,6 +469,11 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_IDENTIFIABLE_DATA_CONTAINER):
             atomic lock for its full lifetime -- prefer this when keys
             are expensive to materialize but the consumer wants to
             stream.
+        include_index : bool, default False
+            Also yield the pool's own index bookkeeping keys
+            (``LAILA:POOL_INDEX:...``). Hidden by default so consumers
+            that enumerate a pool (``duplicate_pool``, manifests, user
+            code) only see entries.
 
         Returns
         -------
@@ -355,7 +481,12 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_IDENTIFIABLE_DATA_CONTAINER):
             Pool keys (snapshot list or generator depending on
             *as_generator*).
         """
-        return self._keys(as_generator=as_generator)
+        raw = self._keys(as_generator=as_generator)
+        if include_index:
+            return raw
+        if as_generator:
+            return (k for k in raw if not is_index_key(k))
+        return [k for k in raw if not is_index_key(k)]
 
     def sync(self) -> None:
         """Flush any in-memory write cache to the backing store.

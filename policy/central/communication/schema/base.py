@@ -590,17 +590,17 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         if not isinstance(result, dict) or not result.get("__laila_future__"):
             return result
 
-        from .....basics.definitions.identifiable_object import GLOBAL_ID_REGEX_PATTERN
+        from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
         from .....macros.strings import _FUTURE_SCOPE, _GROUP_FUTURE_SCOPE
         from ...command.schema.future.future.remote_future import RemoteFuture
 
         remote_gid = result["global_id"]
-        match = GLOBAL_ID_REGEX_PATTERN.match(remote_gid)
-        if match is None:
-            raise ValueError(f"Invalid remote future gid: {remote_gid!r}")
-        remote_uuid = match.group("uuid")
-        evolution_raw = match.group("evolution")
-        evolution = int(evolution_raw) if evolution_raw is not None else None
+        try:
+            parsed = _LAILA_IDENTIFIABLE_OBJECT.process_global_id(remote_gid)
+        except ValueError as exc:
+            raise ValueError(f"Invalid remote future gid: {remote_gid!r}") from exc
+        remote_uuid = parsed["uuid"]
+        evolution = parsed["evolution"]
         is_group = bool(result.get("__is_group__", False))
 
         rf = RemoteFuture(

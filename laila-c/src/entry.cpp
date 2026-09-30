@@ -26,6 +26,7 @@ EntryPtr Entry::constant(const LailaValue& data, const ConstantOpts& opts) {
   e->set_evolution(std::nullopt);
   e->set_data(data);
   e->set_state(EntryState::READY);
+  e->mark_memorized();  // the initial payload is the baseline, not a change
   return e;
 }
 
@@ -61,6 +62,7 @@ EntryPtr Entry::variable(const LailaValue& data, const VariableOpts& opts) {
     e->set_data(data);
     e->set_state(opts.state.value_or(EntryState::READY));
   }
+  e->mark_memorized();
   return e;
 }
 
@@ -73,6 +75,7 @@ EntryPtr Entry::contingent(const LailaValue& data, std::optional<std::string> uu
   e->set_evolution(evolution);
   if (!data.is_none()) e->set_data(data);
   e->set_state(state);
+  e->mark_memorized();
   return e;
 }
 
@@ -87,6 +90,14 @@ const LailaValue& Entry::data() const {
 void Entry::set_data(const LailaValue& v) {
   if (v.is_none()) payload_.reset();
   else payload_ = v;
+  locally_modified_ = true;
+}
+
+bool Entry::bump_evolution_if_locally_modified() {
+  if (!evolution_.has_value() || !locally_modified_) return false;
+  *evolution_ += 1;
+  creation_timestamp_ = now_creation_timestamp();
+  return true;
 }
 
 EntryPtr Entry::evolve(const LailaValue& data) {
@@ -104,9 +115,12 @@ void Entry::build_inplace() {
   constitution_.reset();
   manifest_.reset();
   state_ = EntryState::READY;
+  locally_modified_ = false;  // materializing stored bytes is not a user change
 }
 
-Json Entry::as_dict() const {
+// Identity / state header shared by as_dict, to_wire_dict and serialize
+// (Python: _uuid, _evolution, _scopes, _state, _creation_timestamp).
+Json Entry::_identity_dict() const {
   Json o = Json::object();
   o["_uuid"] = uuid_;
   if (evolution_.has_value()) o["_evolution"] = Json((int64_t)*evolution_);
@@ -115,6 +129,12 @@ Json Entry::as_dict() const {
   for (const auto& s : scopes_) scopes.push_back(Json(s));
   o["_scopes"] = scopes;
   o["_state"] = std::string(entry_state_name(state_));
+  o["_creation_timestamp"] = creation_timestamp_;
+  return o;
+}
+
+Json Entry::as_dict() const {
+  Json o = _identity_dict();
   o["payload"] = payload_.has_value() ? payload_->to_json_payload() : Json(nullptr);
   o["constitution"] = constitution_ ? constitution_->as_dict() : Json(nullptr);
   return o;
@@ -123,14 +143,7 @@ Json Entry::as_dict() const {
 Json Entry::to_wire_dict() const {
   // Same shape as as_dict() but with a laila-native (untagged) payload so an
   // unmodified Python `laila` peer can read it directly.
-  Json o = Json::object();
-  o["_uuid"] = uuid_;
-  if (evolution_.has_value()) o["_evolution"] = Json((int64_t)*evolution_);
-  else o["_evolution"] = Json(nullptr);
-  Json scopes = Json::array();
-  for (const auto& s : scopes_) scopes.push_back(Json(s));
-  o["_scopes"] = scopes;
-  o["_state"] = std::string(entry_state_name(state_));
+  Json o = _identity_dict();
   o["payload"] = payload_.has_value() ? payload_->to_wire_payload() : Json(nullptr);
   o["constitution"] = constitution_ ? constitution_->as_dict() : Json(nullptr);
   return o;
@@ -139,16 +152,12 @@ Json Entry::to_wire_dict() const {
 Json Entry::serialize(const TransformationSequence* transformations) const {
   if (state_ != EntryState::READY)
     raise(Status::Error, std::string("Cannot serialize entry in state ") + entry_state_name(state_));
+  // The in-memory path stores the dict itself: since Json is a value type the
+  // stored record is already a snapshot, so a later in-place evolution bump
+  // (bump_evolution_if_locally_modified) cannot alias it -- no extra copy needed here.
   if (transformations == nullptr || transformations->empty()) return as_dict();
 
-  Json o = Json::object();
-  o["_uuid"] = uuid_;
-  if (evolution_.has_value()) o["_evolution"] = Json((int64_t)*evolution_);
-  else o["_evolution"] = Json(nullptr);
-  Json scopes = Json::array();
-  for (const auto& s : scopes_) scopes.push_back(Json(s));
-  o["_scopes"] = scopes;
-  o["_state"] = std::string(entry_state_name(state_));
+  Json o = _identity_dict();
 
   std::vector<std::string> codes;
   if (payload_.has_value()) {
@@ -184,6 +193,12 @@ EntryPtr Entry::from_dict(const Json& node) {
   if (!payload.is_null()) e->set_data(LailaValue::from_json_payload(payload));
   e->set_state(entry_state_from_name(node.contains("_state") ? node.at("_state").as_string() : "STAGED"));
   e->set_constitution(Constitution::from_dict(node.at("constitution")));
+  // Restore the persisted creation stamp; dicts that predate the field (or
+  // come from other producers) are stamped "now", like Python's from_dict.
+  if (node.contains("_creation_timestamp") && node.at("_creation_timestamp").is_string() &&
+      !node.at("_creation_timestamp").as_string().empty())
+    e->set_creation_timestamp(node.at("_creation_timestamp").as_string());
+  e->mark_memorized();  // a pool round-trip restores the memorized baseline
   return e;
 }
 

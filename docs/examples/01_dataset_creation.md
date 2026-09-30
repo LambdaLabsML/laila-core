@@ -106,7 +106,7 @@ Expected output:
 
 ```
 Uploaded 64 PNG images (203,008 bytes) to R2
-image_0000 -> LAILA:ENTRY:GLOBAL_ID:3b9c...
+image_0000 -> LAILA:ENTRY:3b9c...
 image_0000 in R2? True
 first bytes: b'\x89PNG'
 ```
@@ -130,9 +130,9 @@ print(f"image_0000 ->        {manifest['image_0000']}")
 Expected output:
 
 ```
-Manifest global_id: LAILA:MANIFEST:GLOBAL_ID:6f1d...
+Manifest global_id: LAILA:MANIFEST:6f1d...
 Images in manifest:  64
-image_0000 ->        LAILA:ENTRY:GLOBAL_ID:3b9c...
+image_0000 ->        LAILA:ENTRY:3b9c...
 ```
 
 ## Store the manifest in R2
@@ -154,7 +154,7 @@ Manifest stored in R2? True
 
 ## Verify from a cold start
 
-Pretend this is a fresh process that knows nothing but the name `my_dataset`. `laila.remember` accepts the shorthand `"MANIFEST:my_dataset"`: it expands to the full id `LAILA:MANIFEST:GLOBAL_ID:<uuid5(my_dataset)>` (the `LAILA` prefix and `GLOBAL_ID` postfix are the defaults of the `prefix_scopes` / `postfix_scopes` arguments), and the read path rebuilds a `Manifest` rather than a plain `Entry` because the stored id carries the `MANIFEST` scope. Then pull one image and decode it:
+Pretend this is a fresh process that knows nothing but the name `my_dataset`. `laila.remember` accepts the shorthand `"MANIFEST:my_dataset"`: it expands to the full id `LAILA:MANIFEST:<uuid5(my_dataset)>` (the `LAILA` prefix is the default of the `prefix_scopes` argument), and the read path rebuilds a `Manifest` rather than a plain `Entry` because the stored id carries the `MANIFEST` scope. Then pull one image and decode it:
 
 ```python
 del blueprint, manifest

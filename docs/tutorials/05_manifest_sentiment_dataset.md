@@ -80,7 +80,7 @@ The blueprint preview for a single datapoint looks like:
 
 ```python
 manifest.blueprint["datapoint_0"]
-# {'text_en_base': 'LAILA:ENTRY:GLOBAL_ID:...', 'label_en_base': 'LAILA:ENTRY:GLOBAL_ID:...'}
+# {'text_en_base': 'LAILA:ENTRY:...', 'label_en_base': 'LAILA:ENTRY:...'}
 ```
 
 ## Step 4: Memorize everything to S3

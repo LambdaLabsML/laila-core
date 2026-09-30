@@ -79,9 +79,19 @@ public:
   // caches the fetched entry back into the default pool when the source pool is
   // not the default (mirrors laila's persist semantics; a write on flash targets).
   EntryPtr memorize(const EntryPtr& e, const std::string& pool_nickname = "");
+  // `global_id` may carry search attributes (central/memory/schema/base.py
+  // _resolve_entry_key_async): no `evolution` -> highest stored evolution;
+  // `evolution=N` -> exact; `creation_timestamp=<iso>` -> the stored
+  // evolution whose entry creation_timestamp equals the stamp exactly.
   EntryPtr remember(const std::string& global_id, const std::string& pool_nickname = "",
                     bool persist = true);
   EntryPtr forget(const std::string& global_id, const std::string& pool_nickname = "");
+
+  // Storage key (and, when the search already read it, the raw record) for an
+  // entry reference; see remember(). Raises NotFound when nothing matches and
+  // Error on an unsupported search attribute.
+  std::pair<std::string, std::optional<Json>> _resolve_entry_key(const PoolPtr& pool,
+                                                                 const std::string& eid);
 
 private:
   Policy* policy_;

@@ -3,13 +3,13 @@
 The strings defined here are the canonical *scope* names that appear
 in every laila :attr:`global_id`. A global id is encoded as::
 
-    LAILA:scope1:...:scopeN:GLOBAL_ID:<uuid>[-<evolution>]
+    LAILA:scope1:...:scopeN:<uuid>[@evolution=<n>]
 
-Both the leading :data:`_TOPMOST_SCOPE` (``LAILA``) and the trailing
-:data:`_GLOBAL_ID_SCOPE` (``GLOBAL_ID``) are constants here, and the
-in-between segments come from each subclass's ``_scopes`` private
+The leading :data:`_TOPMOST_SCOPE` (``LAILA``) is a constant here and
+the following segments come from each subclass's ``_scopes`` private
 attribute (e.g. :data:`_POOL_SCOPE` for pools,
-:data:`_FUTURE_SCOPE` for futures, ...).
+:data:`_FUTURE_SCOPE` for futures, ...). Everything after ``@`` is a
+``key=value`` attribute list; only ``evolution`` is part of identity.
 
 These names are also the keys consulted by
 :data:`_SCOPE_TO_ARGS_PATH` (in :mod:`basics.definitions.cli_capable`)
@@ -28,7 +28,6 @@ Special non-scope constants:
 _ENTRY_SCOPE = "ENTRY"
 _TASK_FORCE_SCOPE = "TASK_FORCE"
 _POLICY_SCOPE = "POLICY"
-_GLOBAL_ID_SCOPE = "GLOBAL_ID"
 _OBJECT_SCOPE = "OBJECT"
 _LAILA_SCOPE = "LAILA"
 _FUTURE_SCOPE = "FUTURE"
@@ -45,6 +44,7 @@ _MANIFEST_SCOPE = "MANIFEST"
 _LOGGER_SCOPE = "LOGGER"
 _DATA_CONTAINER_SCOPE = "DATA_CONTAINER"
 _MULTI_BUFFER_SCOPE = "MULTI_BUFFER"
+_POOL_INDEX_SCOPE = "POOL_INDEX"
 _DEFAULT_POOL_NICKNAME = "_memory"
 
 _TOPMOST_SCOPE = "LAILA"

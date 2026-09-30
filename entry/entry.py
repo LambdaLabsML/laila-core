@@ -56,7 +56,8 @@ from ..atomic.definitions.locally_atomic_identifiable_object import (
     _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT,
 )
 from ..basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
-from ..macros.strings import _ENTRY_SCOPE
+from ..basics.definitions.laila_object import _now_creation_timestamp
+from ..macros.strings import _ENTRY_SCOPE, _POOL_INDEX_SCOPE
 from ..utils.decorators.synchronized import synchronized
 from .compdata import ComputationalData as ComputationalData
 from .compdata.transformation import TransformationSequence
@@ -117,6 +118,12 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
     _state: EntryState = PrivateAttr(default=EntryState.STAGED)
     _constitution: Constitution | None = PrivateAttr(default=None)
     _payload: ComputationalData | None = PrivateAttr(default=None)
+    # Process-local "payload changed since the last memorize" marker. Set
+    # by the ``data`` setter, cleared by ``mark_memorized`` (called from
+    # central memory after a successful write) and reset to ``False`` at
+    # the end of construction / deserialization / build so that only
+    # *user* mutations count. Never serialized.
+    _locally_modified: bool = PrivateAttr(default=False)
 
     def __init__(self, **data: dict):
         """Initialise an Entry from keyword arguments.
@@ -161,7 +168,7 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
             ``evolution``
                 Integer evolution counter, or ``None`` for constants.
             ``global_id``
-                Composite ``"<scopes>:<uuid>[-evolution]"`` string.
+                Composite ``"LAILA:<scopes>:<uuid>[@evolution=<n>]"`` string.
             ``nickname``
                 Human-readable name; deterministically converted to a
                 UUID-5 against the active namespace.
@@ -179,6 +186,8 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         self._initialize_payload(data)
         self._initialize_constitution(data)
         self._initialize_state(data)
+        # The initial payload is the baseline, not a change.
+        self._locally_modified = False
 
     def _initialize_identity(self, data: dict) -> None:
         """Parse identity fields from *data* and initialise the parent identity.
@@ -364,10 +373,57 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         The setter is decorated with :func:`synchronized`, so concurrent
         writes from different threads serialize on the entry's atomic
         lock.
+
+        Assigning marks the entry *locally modified*: the next ``laila.memorize``
+        of a variable entry will bump its evolution (see
+        :meth:`bump_evolution_if_locally_modified`). In-place mutation of the
+        payload object (``entry.data[0] = 1``, ``tensor += 1``) is not
+        observed; re-assign ``entry.data = value`` to flag the change.
         """
         if new_data is not None and not isinstance(new_data, ComputationalData):
             new_data = ComputationalData(new_data)
         self._payload = new_data
+        self._locally_modified = True
+
+    @property
+    def locally_modified(self) -> bool:
+        """``True`` when the payload was re-assigned since the last memorize.
+
+        Process-local bookkeeping only -- never serialized, never
+        restored from a pool. See :meth:`bump_evolution_if_locally_modified`.
+        """
+        return self._locally_modified
+
+    def mark_memorized(self) -> None:
+        """Clear the locally-modified flag. Called by central memory after a successful write."""
+        self._locally_modified = False
+
+    def bump_evolution_if_locally_modified(self) -> bool:
+        """Advance ``evolution`` in place if the payload changed since the last memorize.
+
+        This is the hook ``laila.memorize`` uses to decide whether a
+        variable entry is being re-written as the *same* evolution
+        (payload untouched -> idempotent overwrite of the same key) or
+        as a *new* one (payload re-assigned -> ``evolution += 1`` and a
+        fresh ``creation_timestamp`` so that time-based lookups can
+        tell the versions apart). Constants (``evolution is None``) are
+        never bumped.
+
+        Unlike :meth:`evolve`, this mutates ``self``: its ``global_id``
+        (and therefore its hash) changes, so any dict / set membership
+        computed before the memorize is stale afterwards.
+
+        Returns
+        -------
+        bool
+            ``True`` if the evolution was incremented.
+        """
+        with self.atomic(scope="local"):
+            if self._evolution is None or not self._locally_modified:
+                return False
+            self._evolution += 1
+            self._creation_timestamp = _now_creation_timestamp()
+            return True
 
     @property
     @synchronized
@@ -555,6 +611,7 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
             self._post_build(result)
             self.constitution = None
             self.state = EntryState.READY
+            self._locally_modified = False
             return self
 
         self._build_inplace()
@@ -595,6 +652,8 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         self._post_build(result)
         self.constitution = None
         self.state = EntryState.READY
+        # Materializing stored bytes is not a user change.
+        self._locally_modified = False
 
     def _post_build(self, result):
         """Place the build result into the entry's payload slot.
@@ -630,7 +689,10 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         at ``0`` (or the user-supplied value). Each subsequent call to
         :meth:`evolve` bumps the counter and replaces the payload,
         leaving the UUID stable -- two snapshots of "the same logical
-        thing" therefore differ only in their evolution suffix.
+        thing" therefore differ only in their ``@evolution=`` attribute.
+        ``laila.memorize`` also advances the counter automatically when
+        the payload was re-assigned since the last memorize (see
+        :meth:`bump_evolution_if_locally_modified`).
 
         Argument groups
         ---------------
@@ -644,7 +706,7 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
 
         Pass *at most one* of these identity shapes:
 
-        - ``global_id=`` -- composite ``"<scopes>:<uuid>[-evolution]"``.
+        - ``global_id=`` -- composite ``"LAILA:<scopes>:<uuid>[@evolution=<n>]"``.
         - ``uuid=`` (with optional ``evolution=``).
         - ``nickname=`` -- deterministic UUID-5 derivation against the
           active namespace; useful for cross-process addressability.
@@ -755,9 +817,11 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         - the new payload supplied via *data*, and
         - ``evolution = self.evolution + 1``.
 
-        The new entry is ``state == READY``. The original entry is
-        left untouched, so callers must rebind to capture the next
-        version:
+        The new entry is ``state == READY`` and, being a freshly
+        constructed object, carries its own ``creation_timestamp``
+        (the original's creation stamp is not inherited). The original
+        entry is left untouched, so callers must rebind to capture the
+        next version:
 
         .. code-block:: python
 
@@ -822,7 +886,7 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         """Create an *immutable* Entry whose ``evolution`` is :data:`None`.
 
         Constants do not support :meth:`evolve` and therefore do not
-        carry an evolution suffix in their global_id. The combination
+        carry an ``@evolution=`` attribute in their global_id. The combination
         ``(uuid, scopes)`` uniquely identifies a constant.
 
         This factory is the right choice for immutable artefacts that
@@ -927,6 +991,8 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         - ``_evolution`` : int or None
         - ``_scopes`` : list[str]
         - ``_state`` : str (the :class:`EntryState` member name)
+        - ``_creation_timestamp`` : str or None (ISO-8601 UTC creation
+          time inherited from :class:`_LAILA_OBJECT`)
         - ``payload`` : Any (the unwrapped payload value, or None)
         - ``constitution`` : dict or None (output of
           :meth:`Constitution.as_dict`)
@@ -946,6 +1012,7 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
             "_evolution": self._evolution,
             "_scopes": list(self._scopes),
             "_state": self._state.name,
+            "_creation_timestamp": self._creation_timestamp,
             "payload": payload_value,
             "constitution": constitution_dict,
         }
@@ -972,9 +1039,13 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
            against the stored ``payload`` to recover the original value
            bit-for-bit.
 
-        When *transformations* is ``None``, the live :class:`Entry`
-        instance is returned unchanged -- the in-memory pool path uses
-        this to skip serialization entirely.
+        When *transformations* is ``None``, the in-memory pool path
+        skips serialization entirely: a *constant* is returned as the
+        live :class:`Entry` instance itself, while a *variable* is
+        returned as a shallow :meth:`_snapshot` so that later in-place
+        evolution bumps (see :meth:`bump_evolution_if_locally_modified`) do not
+        retroactively alter what was stored under the previous
+        evolution's key.
 
         Parameters
         ----------
@@ -989,8 +1060,8 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         Entry or dict
             The live ``Entry`` when *transformations* is ``None``;
             otherwise a serialized dict with keys ``_uuid``,
-            ``_evolution``, ``_scopes``, ``_state``, ``payload``, and
-            ``constitution``.
+            ``_evolution``, ``_scopes``, ``_state``,
+            ``_creation_timestamp``, ``payload``, and ``constitution``.
 
         Raises
         ------
@@ -1006,7 +1077,7 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
             )
 
         if transformations is None:
-            return self
+            return self if self._evolution is None else self._snapshot()
 
         if self._payload is not None:
             serialized_payload, payload_backward_code = self._payload.serialize()
@@ -1025,9 +1096,25 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
             "_evolution": self._evolution,
             "_scopes": list(self._scopes),
             "_state": self._state.name,
+            "_creation_timestamp": self._creation_timestamp,
             "payload": transformed_payload,
             "constitution": constitution.as_dict(),
         }
+
+    def _snapshot(self) -> Entry:
+        """Shallow copy sharing the payload object but with independent identity.
+
+        Used by :meth:`serialize` for variables stored without
+        transformations. Identity fields (``_uuid``, ``_scopes``,
+        ``_evolution``), state, constitution and creation_timestamp are copied by
+        value / reference; the payload wrapper is shared (re-assigning
+        ``data`` on the original does not affect the copy). The copy
+        gets its own atomic lock and starts clean (not locally modified).
+        """
+        clone = self.model_copy()
+        object.__setattr__(clone, "_local_lock", None)
+        clone._locally_modified = False
+        return clone
 
     @classmethod
     def from_dict(cls, in_dict: dict) -> Entry:
@@ -1051,7 +1138,10 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         Entry
             A fresh Entry with identity restored, payload set to the
             raw stored value (typically still encoded), constitution
-            re-attached, and state taken from the dict.
+            re-attached, and state taken from the dict. The original
+            ``creation_timestamp`` is restored when present; dicts
+            that predate the field (or come from non-Python producers)
+            are stamped with the current time instead.
         """
         entry = cls.__new__(cls)
         Entry._initialize_identity(
@@ -1062,9 +1152,14 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
                 "scopes": in_dict.get("_scopes"),
             },
         )
+        # ``cls.__new__`` bypasses ``_LAILA_OBJECT.__init__``, so the
+        # creation_timestamp must be restored (or freshly stamped) explicitly.
+        entry._creation_timestamp = in_dict.get("_creation_timestamp") or _now_creation_timestamp()
         entry.data = in_dict.get("payload")
         entry.state = EntryState[in_dict.get("_state", "STAGED")]
         entry.constitution = Constitution.from_dict(in_dict.get("constitution"))
+        # A pool round-trip restores the memorized baseline: not locally modified.
+        entry._locally_modified = False
         return entry
 
     @classmethod
@@ -1182,6 +1277,14 @@ from .constitution.build_maps import register_builder
 
 register_builder(
     _ENTRY_SCOPE,
+    Entry._build_from_dict_sync,
+    Entry._build_from_dict_async,
+)
+# Pool index shards (data/schema/pool_index.py) are plain entries whose
+# payload is a dict; registering them keeps a raw read of a shard from
+# tripping ``build_by_scope``.
+register_builder(
+    _POOL_INDEX_SCOPE,
     Entry._build_from_dict_sync,
     Entry._build_from_dict_async,
 )

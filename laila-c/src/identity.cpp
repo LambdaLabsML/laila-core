@@ -154,6 +154,71 @@ std::string generate_uuid_from_nickname(const std::string& nickname) {
   return uuid5(get_active_namespace_uuid(), nickname);
 }
 
+// ---------------- global_id attributes ----------------
+static bool is_attr_key_start(char c) {
+  return c == '_' || std::isalpha(static_cast<unsigned char>(c));
+}
+static bool is_attr_key_char(char c) {
+  return c == '_' || std::isalnum(static_cast<unsigned char>(c));
+}
+
+GidAttributes parse_global_id_attributes(const std::string& attributes) {
+  GidAttributes out;
+  if (attributes.empty()) return out;
+  size_t start = 0;
+  while (true) {
+    size_t comma = attributes.find(',', start);
+    std::string pair = attributes.substr(start, comma == std::string::npos ? std::string::npos
+                                                                            : comma - start);
+    size_t eq = pair.find('=');
+    if (eq == std::string::npos || eq == 0)
+      raise(Status::Error, "Invalid global id attribute: '" + pair + "'");
+    std::string key = pair.substr(0, eq);
+    std::string value = pair.substr(eq + 1);
+    if (!is_attr_key_start(key[0]))
+      raise(Status::Error, "Invalid global id attribute: '" + pair + "'");
+    for (char c : key)
+      if (!is_attr_key_char(c)) raise(Status::Error, "Invalid global id attribute: '" + pair + "'");
+    for (char c : value)
+      if (c == '@') raise(Status::Error, "Invalid global id attribute: '" + pair + "'");
+    for (const auto& kv : out)
+      if (kv.first == key) raise(Status::Error, "Duplicate global id attribute: '" + key + "'");
+    out.emplace_back(key, value);
+    if (comma == std::string::npos) break;
+    start = comma + 1;
+  }
+  return out;
+}
+
+std::string format_global_id_attributes(const GidAttributes& attributes) {
+  std::string out;
+  for (const auto& kv : attributes) {
+    if (!out.empty()) out += ",";
+    out += kv.first;
+    out += "=";
+    out += kv.second;
+  }
+  return out;
+}
+
+std::pair<std::string, GidAttributes> split_global_id_attributes(const std::string& ref) {
+  size_t at = ref.find('@');
+  if (at == std::string::npos) return {ref, {}};
+  std::string tail = ref.substr(at + 1);
+  if (tail.empty()) raise(Status::Error, "Invalid GID format: " + ref);
+  return {ref.substr(0, at), parse_global_id_attributes(tail)};
+}
+
+std::string strip_global_id_attributes(const std::string& global_id) {
+  size_t at = global_id.find('@');
+  return at == std::string::npos ? global_id : global_id.substr(0, at);
+}
+
+GidAttributes get_attributes_from_global_id(const std::string& global_id) {
+  if (!is_laila_resource(global_id)) raise(Status::Error, "Invalid GID format: " + global_id);
+  return split_global_id_attributes(global_id).second;
+}
+
 // ---------------- global_id ----------------
 std::string to_global_id(const std::string& uuid, const std::vector<std::string>& scopes_in,
                          std::optional<int64_t> evolution) {
@@ -162,15 +227,18 @@ std::string to_global_id(const std::string& uuid, const std::vector<std::string>
   std::string out = scope::TOPMOST;
   for (const auto& s : scopes) { out += ":"; out += s; }
   out += ":";
-  out += scope::GLOBAL_ID;
-  out += ":";
   out += uuid;
-  if (evolution.has_value()) { out += "-"; out += std::to_string(*evolution); }
+  if (evolution.has_value()) {
+    out += "@";
+    out += EVOLUTION_ATTRIBUTE;
+    out += "=";
+    out += std::to_string(*evolution);
+  }
   return out;
 }
 
 static bool is_uuid_segment(const std::string& seg) {
-  if (seg.size() < 36) return false;
+  if (seg.size() != 36) return false;
   int hex = 0, dash = 0;
   for (size_t k = 0; k < 36; ++k) {
     char c = seg[k];
@@ -181,50 +249,117 @@ static bool is_uuid_segment(const std::string& seg) {
   return hex == 32 && dash == 4;
 }
 
-bool is_laila_resource(const std::string& global_id) {
-  // Split into scope segments + final uuid[-evo]. Must start with LAILA: and
-  // contain GLOBAL_ID: just before the uuid.
+static std::vector<std::string> split_colon(const std::string& s) {
   std::vector<std::string> parts;
   std::string cur;
-  for (char c : global_id) {
+  for (char c : s) {
     if (c == ':') { parts.push_back(cur); cur.clear(); }
     else cur.push_back(c);
   }
   parts.push_back(cur);
+  return parts;
+}
+
+static bool all_digits(const std::string& s) {
+  if (s.empty()) return false;
+  for (char c : s)
+    if (!std::isdigit(static_cast<unsigned char>(c))) return false;
+  return true;
+}
+
+// Non-raising structural check of a "k=v,k=v" attribute list (no duplicates,
+// well-formed keys, no '@' in values). parse_global_id_attributes() raises on
+// the same conditions; this lets is_laila_resource stay a pure predicate.
+static bool valid_attributes(const std::string& tail) {
+  if (tail.empty()) return false;
+  std::vector<std::string> keys;
+  size_t start = 0;
+  while (true) {
+    size_t comma = tail.find(',', start);
+    std::string pair =
+        tail.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+    size_t eq = pair.find('=');
+    if (eq == std::string::npos || eq == 0 || !is_attr_key_start(pair[0])) return false;
+    for (size_t k = 0; k < eq; ++k)
+      if (!is_attr_key_char(pair[k])) return false;
+    for (size_t k = eq + 1; k < pair.size(); ++k)
+      if (pair[k] == '@') return false;
+    std::string key = pair.substr(0, eq);
+    for (const auto& seen : keys)
+      if (seen == key) return false;
+    keys.push_back(key);
+    if (comma == std::string::npos) break;
+    start = comma + 1;
+  }
+  return true;
+}
+
+bool is_laila_resource(const std::string& global_id) {
+  // <scopes>:<uuid>[@k=v,...]; the scope chain must be LAILA:<at least one>.
+  size_t at = global_id.find('@');
+  std::string head = at == std::string::npos ? global_id : global_id.substr(0, at);
+  if (at != std::string::npos && !valid_attributes(global_id.substr(at + 1))) return false;
+  std::vector<std::string> parts = split_colon(head);
   if (parts.size() < 3) return false;
   if (parts.front() != scope::TOPMOST) return false;
-  const std::string& last = parts.back();
-  if (last.size() < 36) return false;
-  std::string uuid_part = last.substr(0, 36);
-  // After the 36-char uuid there must be either nothing or "-<evolution>".
-  if (last.size() != 36 && last[36] != '-') return false;
-  return is_uuid_segment(uuid_part);
+  for (size_t k = 1; k + 1 < parts.size(); ++k) {
+    if (parts[k].empty()) return false;
+    for (char c : parts[k])
+      if (!is_attr_key_char(c)) return false;
+  }
+  return is_uuid_segment(parts.back());
 }
 
 ParsedGid process_global_id(const std::string& global_id) {
   if (!is_laila_resource(global_id)) raise(Status::Error, "Invalid GID format: " + global_id);
-  std::vector<std::string> parts;
-  std::string cur;
-  for (char c : global_id) {
-    if (c == ':') { parts.push_back(cur); cur.clear(); }
-    else cur.push_back(c);
-  }
-  parts.push_back(cur);
-  // Last part is uuid[-evolution]; everything before are scope segments
-  // (incl. leading LAILA and trailing GLOBAL_ID). laila keeps parts[1:-1].
+  auto split = split_global_id_attributes(global_id);
+  std::vector<std::string> parts = split_colon(split.first);
   ParsedGid out;
-  const std::string& last = parts.back();
-  if (last.size() > 36 && last[36] == '-') {
-    out.uuid = last.substr(0, 36);
-    out.evolution = std::stoll(last.substr(37));
-  } else {
-    out.uuid = last;
-    out.evolution = std::nullopt;
+  out.uuid = parts.back();
+  out.evolution = std::nullopt;
+  for (const auto& kv : split.second) {
+    if (kv.first == EVOLUTION_ATTRIBUTE) {
+      if (!all_digits(kv.second)) raise(Status::Error, "Invalid evolution in GID: " + global_id);
+      out.evolution = std::stoll(kv.second);
+    }
+    // Other attributes are search arguments, not identity.
   }
-  // scopes = parts excluding the leading TOPMOST and the trailing uuid segment;
-  // mirrors laila's split(":")[1:-1] (which retains GLOBAL_ID).
+  // scopes = the middle segments only: drop the leading TOPMOST and the uuid
+  // so that to_global_id(out.uuid, out.scopes, out.evolution) round-trips.
+  // Mirrors laila's split(":")[1:-1].
   for (size_t k = 1; k + 1 < parts.size(); ++k) out.scopes.push_back(parts[k]);
   return out;
+}
+
+// ---------------- creation timestamp ----------------
+// Civil date from days since 1970-01-01 (H. Hinnant's algorithm); avoids a
+// libc gmtime dependency so MCU targets format identically to the host.
+static void civil_from_days(int64_t z, int& y, unsigned& m, unsigned& d) {
+  z += 719468;
+  const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+  const unsigned doe = static_cast<unsigned>(z - era * 146097);
+  const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  const int64_t yy = static_cast<int64_t>(yoe) + era * 400;
+  const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  const unsigned mp = (5 * doy + 2) / 153;
+  d = doy - (153 * mp + 2) / 5 + 1;
+  m = mp < 10 ? mp + 3 : mp - 9;
+  y = static_cast<int>(yy + (m <= 2));
+}
+
+std::string now_creation_timestamp() {
+  const uint64_t ms = hal::get().clock().epoch_ms();
+  const int64_t secs = static_cast<int64_t>(ms / 1000);
+  const unsigned milli = static_cast<unsigned>(ms % 1000);
+  const int64_t days = secs / 86400;
+  const int64_t sod = secs - days * 86400;
+  int y; unsigned mo, d;
+  civil_from_days(days, y, mo, d);
+  char buf[40];
+  std::snprintf(buf, sizeof(buf), "%04d-%02u-%02uT%02lld:%02lld:%02lld.%03u+00:00", y, mo, d,
+                static_cast<long long>(sod / 3600), static_cast<long long>((sod % 3600) / 60),
+                static_cast<long long>(sod % 60), milli);
+  return std::string(buf);
 }
 
 void _LAILA_IDENTIFIABLE_OBJECT::set_global_id(const std::string& value) {

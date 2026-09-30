@@ -66,7 +66,7 @@ TEST("future", "runtime_introspection") {
   CHECK_EQ(runtime::status(f), runtime::status(gid));
   CHECK_EQ(runtime::wait(f)->data().as_string(), std::string("rt"));
   CHECK(runtime::resolve(gid) != nullptr);
-  CHECK_THROWS(runtime::resolve(std::string("LAILA:FUTURE:GLOBAL_ID:00000000-0000-0000-0000-000000000000")), LailaError);
+  CHECK_THROWS(runtime::resolve(std::string("LAILA:FUTURE:00000000-0000-0000-0000-000000000000")), LailaError);
 }
 
 TEST("future", "wait_idempotent") {

@@ -35,6 +35,7 @@ from typing import Any, ClassVar, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
+from ...basics.definitions.laila_object import _now_creation_timestamp
 from ..definitions.locally_atomic_object import _LAILA_LOCALLY_ATOMIC_OBJECT
 
 K = TypeVar("K")
@@ -94,6 +95,8 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
         object.__setattr__(self, "__pydantic_fields_set__", instance.__pydantic_fields_set__)
         object.__setattr__(self, "__pydantic_extra__", instance.__pydantic_extra__)
         object.__setattr__(self, "__pydantic_private__", instance.__pydantic_private__)
+        # ``model_construct`` skips ``_LAILA_OBJECT.__init__``; stamp here.
+        self._creation_timestamp = _now_creation_timestamp()
         with self._lock:
             self._order = list(self.data.keys())
 

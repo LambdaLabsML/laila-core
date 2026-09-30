@@ -1,12 +1,15 @@
 // _LAILA_IDENTIFIABLE_OBJECT mirror: (uuid, scopes, evolution) -> global_id.
-// Encoding matches laila exactly: LAILA:scope1:...:scopeN:GLOBAL_ID:<uuid>[-<evo>]
+// Encoding matches laila exactly: LAILA:scope1:...:scopeN:<uuid>[@evolution=<n>]
 // (see basics/definitions/identifiable_object.py and macros/strings.py).
+// Everything after '@' is a comma-separated key=value attribute list; only
+// `evolution` is part of identity, other keys are search arguments.
 #ifndef LAILA_IDENTITY_HPP
 #define LAILA_IDENTITY_HPP
 
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace laila_c {
@@ -22,15 +25,34 @@ inline constexpr const char* POOL = "POOL";
 inline constexpr const char* POLICY = "POLICY";
 inline constexpr const char* MANIFEST = "MANIFEST";
 inline constexpr const char* COMM_PROTOCOL = "COMM_PROTOCOL";
+inline constexpr const char* POOL_INDEX = "POOL_INDEX";
 inline constexpr const char* TOPMOST = "LAILA";
-inline constexpr const char* GLOBAL_ID = "GLOBAL_ID";
 }  // namespace scope
+
+// Name of the single attribute that is part of an object's identity.
+inline constexpr const char* EVOLUTION_ATTRIBUTE = "evolution";
 
 struct ParsedGid {
   std::string uuid;
   std::vector<std::string> scopes;
   std::optional<int64_t> evolution;
 };
+
+// Ordered key=value attribute list (the text after '@').
+using GidAttributes = std::vector<std::pair<std::string, std::string>>;
+
+// parse_global_id_attributes("evolution=3,creation_timestamp=...") ->
+// [("evolution","3"),("creation_timestamp","...")]. Raises on malformed pairs
+// or duplicate keys. Empty input -> empty list.
+GidAttributes parse_global_id_attributes(const std::string& attributes);
+// Inverse (without the leading '@').
+std::string format_global_id_attributes(const GidAttributes& attributes);
+// split_global_id_attributes("<head>@<attrs>") -> (head, parsed attrs).
+std::pair<std::string, GidAttributes> split_global_id_attributes(const std::string& ref);
+// Everything before the first '@' (LAILA:scopes:<uuid>).
+std::string strip_global_id_attributes(const std::string& global_id);
+// All attributes of a full global id (evolution included, as a string).
+GidAttributes get_attributes_from_global_id(const std::string& global_id);
 
 // Namespace management for nickname -> deterministic UUID5.
 void set_active_namespace(const std::string& namespace_key);
@@ -48,12 +70,18 @@ std::string to_global_id(const std::string& uuid,
 ParsedGid process_global_id(const std::string& global_id);
 bool is_laila_resource(const std::string& global_id);
 
+// ISO-8601 UTC "now" with millisecond precision, e.g.
+// "2026-09-15T17:50:00.123+00:00" -- the exact shape of laila's
+// basics/definitions/laila_object.py _now_creation_timestamp(). Uses hal Clock::epoch_ms.
+std::string now_creation_timestamp();
+
 // Base identity carried by Entry, Future, Pool, Policy, ... laila's name for this
 // base is _LAILA_IDENTIFIABLE_OBJECT (basics/definitions/identifiable_object.py);
-// the Mirror Law keeps that exact name as the primary class.
+// the Mirror Law keeps that exact name as the primary class. It also carries the
+// creation `creation_timestamp` that laila keeps on the shared _LAILA_OBJECT root.
 class _LAILA_IDENTIFIABLE_OBJECT {
 public:
-  _LAILA_IDENTIFIABLE_OBJECT() : scopes_{scope::OBJECT} {}
+  _LAILA_IDENTIFIABLE_OBJECT() : scopes_{scope::OBJECT}, creation_timestamp_(now_creation_timestamp()) {}
   virtual ~_LAILA_IDENTIFIABLE_OBJECT() = default;
 
   const std::string& uuid() const { return uuid_; }
@@ -63,6 +91,10 @@ public:
   std::optional<int64_t> evolution() const { return evolution_; }
   void set_evolution(std::optional<int64_t> e) { evolution_ = e; }
   bool has_evolution() const { return evolution_.has_value(); }
+  // Creation time (ISO-8601 UTC, ms). Restored by deserializers; re-stamped
+  // when memorize advances a variable's evolution in place.
+  const std::string& creation_timestamp() const { return creation_timestamp_; }
+  void set_creation_timestamp(const std::string& ts) { creation_timestamp_ = ts; }
 
   std::string global_id() const { return to_global_id(uuid_, scopes_, evolution_); }
   void set_global_id(const std::string& gid);
@@ -71,6 +103,7 @@ protected:
   std::string uuid_ = uuid4();
   std::vector<std::string> scopes_;
   std::optional<int64_t> evolution_;
+  std::string creation_timestamp_;
 };
 
 // Compatibility spelling for internal code; the faithful (Python) name above is

@@ -15,7 +15,13 @@ written by environment-load workflows or by user code rebinding
 
 import threading
 
+from ...basics.definitions.laila_object import _now_creation_timestamp
 from ..definitions.locally_atomic_object import _LAILA_LOCALLY_ATOMIC_OBJECT
+
+# Internal attributes stored directly on the instance rather than in the
+# user-visible ``_data`` mapping. Module-level (not a class attribute) so
+# Pydantic does not mistake the leading underscore for a private attr.
+_INTERNAL_ATTRS = frozenset({"_data", "_lock", "_creation_timestamp"})
 
 
 class AtomicDotMap(_LAILA_LOCALLY_ATOMIC_OBJECT):
@@ -26,9 +32,15 @@ class AtomicDotMap(_LAILA_LOCALLY_ATOMIC_OBJECT):
     """
 
     def __init__(self):
-        """Initialize with an empty data dict and a reentrant lock."""
+        """Initialize with an empty data dict and a reentrant lock.
+
+        Deliberately does not chain to the Pydantic initialiser (the
+        map has no declared fields), so the :class:`_LAILA_OBJECT`
+        creation_timestamp is stamped here explicitly.
+        """
         self._data = {}
         self._lock = threading.RLock()
+        self._creation_timestamp = _now_creation_timestamp()
 
     def __getattr__(self, key):
         """Return the value for *key*, or ``None`` if absent."""
@@ -37,8 +49,8 @@ class AtomicDotMap(_LAILA_LOCALLY_ATOMIC_OBJECT):
 
     def __setattr__(self, key, value):
         """Set *key* to *value*, bypassing the lock for internal attrs."""
-        if key in {"_data", "_lock"}:
-            super().__setattr__(key, value)
+        if key in _INTERNAL_ATTRS:
+            object.__setattr__(self, key, value)
         else:
             with self._lock:
                 self._data[key] = value

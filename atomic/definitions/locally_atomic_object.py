@@ -22,12 +22,18 @@ from __future__ import annotations
 
 import threading
 from contextlib import contextmanager
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
+
+from ...basics.definitions.laila_object import _LAILA_OBJECT
 
 
-class _LAILA_LOCALLY_ATOMIC_OBJECT(BaseModel):
+class _LAILA_LOCALLY_ATOMIC_OBJECT(_LAILA_OBJECT):
     """Pydantic base model giving subclasses thread-safe per-instance locking.
+
+    Derives from :class:`_LAILA_OBJECT`, so every atomic object also
+    carries a creation ``creation_timestamp``.
 
     Subclasses inherit a lazily-allocated :class:`threading.RLock` and
     three helpers:
@@ -53,6 +59,21 @@ class _LAILA_LOCALLY_ATOMIC_OBJECT(BaseModel):
         access via :meth:`_ensure_local_lock`.
         """
         super().__init__(**data)
+
+    def model_post_init(self, __context: Any) -> None:
+        """Cooperative post-init hook.
+
+        Pydantic injects a ``model_post_init`` into any class that
+        inherits private attributes (this one inherits
+        ``_creation_timestamp`` from :class:`_LAILA_OBJECT`), and the
+        injected version does *not* chain via ``super()``. In the
+        diamond ``_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT(LAO, IDO)``
+        that would silently skip
+        :meth:`_LAILA_IDENTIFIABLE_OBJECT.model_post_init` (which
+        applies the staged uuid / scopes / evolution). Defining the hook
+        explicitly keeps the MRO chain intact.
+        """
+        super().model_post_init(__context)
 
     def _ensure_local_lock(self) -> threading.RLock:
         """Return the instance's :class:`threading.RLock`, creating it lazily.
