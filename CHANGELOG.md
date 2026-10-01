@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.11]
+
+### Changed
+
+- Global ID grammar is now `LAILA:<scope>:...:<uuid>[@k=v,...]`. The
+  `GLOBAL_ID:` frame segment is gone; `evolution` is the only attribute that
+  is part of identity (emitted by `.global_id`), everything else after `@`
+  (e.g. `creation_timestamp`) is a search argument for `remember`.
+- Scope-less references (`"run-3"`, `"my_entry"`) default to the `ENTRY`
+  scope everywhere.
+- `remember` on a reference without an evolution resolves to the highest
+  stored evolution. `memorize` on a variable only bumps the evolution when
+  the payload changed since the last memorize; otherwise the write is
+  idempotent.
+- Renamed `heartbeat_timestamp` -> `creation_timestamp` and
+  `dirty` -> `locally_modified` (Python, laila-C, wire format, docs).
+- `vault/agent/` moved to `agentic/internal/`; new empty `agentic/embedded/`
+  reserved for embedded-systems documentation. Packaging/lint excludes
+  updated accordingly.
+
+### Added
+
+- Per-pool index (`POOL_INDEX` scope, `data/schema/pool_index.py`) with
+  per-base shards, write-through persistence, and self-healing validation.
+  Enables `@evolution=-1` / `-k` and `@creation_timestamp=<iso>` lookups
+  without scanning every key. Index keys are hidden from `keys()` unless
+  `include_index=True`; pools expose `index_enabled` and `index_pool`.
+- laila-C parity for all of the above (identity, entry, `PoolIndex`,
+  resolver), plus regenerated interop vectors.
+- Tutorial `01a_variables_and_evolution`; tutorials 01, 15, 23 updated.
+
+### Fixed
+
+- `laila-c/tools/test_translate.py` `gate-bad/DefaultPolicy` asserted that a
+  legal C++17 by-value construction must fail to compile; the gate now checks
+  the actual naive translation (`activate_policy` on a by-value policy).
+
+The entries below accumulated under *Unreleased* since 1.0.6 and shipped in
+the 1.0.7 - 1.0.11 patch series.
+
 ### Added
 
 - Consolidated release pipeline: tags pushed to the private `LambdaLabsML/laila`
@@ -94,5 +134,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial public history baseline. Earlier versions tracked privately.
 
-[Unreleased]: https://github.com/LambdaLabsML/laila-core/compare/v1.0.6...HEAD
+[Unreleased]: https://github.com/LambdaLabsML/laila-core/compare/v1.0.11...HEAD
+[1.0.11]: https://github.com/LambdaLabsML/laila-core/compare/v1.0.6...v1.0.11
 [1.0.6]: https://github.com/LambdaLabsML/laila-core/releases/tag/v1.0.6
