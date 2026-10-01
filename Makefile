@@ -83,7 +83,7 @@ release-dryrun: build
 	tar -tzf "$${SDISTS[0]}" | tee dist/.sdist-listing-raw.txt
 	@sed 's|^laila/||' dist/.wheel-listing-raw.txt > dist/.wheel-listing.txt
 	@sed 's|^[^/]*/||' dist/.sdist-listing-raw.txt > dist/.sdist-listing.txt
-	@FORBIDDEN='^(vault/|_dev/|tests/|hooks/|examples/|docs/|site/|\.github/|\.venv/|CLAUDE\.md|conftest\.py|Makefile)'; \
+	@FORBIDDEN='^(agentic/|_dev/|tests/|hooks/|examples/|docs/|site/|\.github/|\.venv/|CLAUDE\.md|conftest\.py|Makefile)'; \
 	if ! grep -q '^__init__\.py' dist/.wheel-listing.txt; then \
 		echo "FATAL: wheel missing laila/__init__.py (sanity check)."; exit 1; \
 	fi; \

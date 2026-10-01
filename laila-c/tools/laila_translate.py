@@ -147,7 +147,7 @@ Hard rules:
   add a clear comment. Never silently drop behavior.
 - Output ONLY the translated source, no prose.
 
-Golden rules (laila's vault/agent/policy.md + memory.md) -- NEVER violate:
+Golden rules (laila's agentic/internal/policy.md + memory.md) -- NEVER violate:
 - To touch a policy and its elements you ACTIVATE it. The ONLY sanctioned way to
   reach ANOTHER policy is central.communication (peers). Never emit a direct
   cross-policy memory/pool access.

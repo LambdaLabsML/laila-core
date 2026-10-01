@@ -223,5 +223,5 @@ auto data = laila->remember(e->global_id())->data();  // type-free, like laila
 
 The three verbs (`memorize` / `remember` / `forget`), `build`, `Future`s,
 `Entry`, `Pool` proxy chaining (`cache << origin`), constitutions, and the
-policy/central structure all match laila. See `../vault/agent/*.md` for the
+policy/central structure all match laila. See `../agentic/internal/*.md` for the
 golden rules this port preserves.

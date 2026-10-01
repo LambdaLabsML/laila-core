@@ -34,7 +34,7 @@ from .....macros.strings import _MANIFEST_SCOPE
 # The Manifest SQL index is a *non-memorizing algorithmic helper* — a
 # lightweight, temporary, query-side convenience that a manifest owns
 # directly while it is being operated on.  It deliberately bypasses
-# ``central.memory`` (see ``vault/agent/memory.md`` for the sanctioned
+# ``central.memory`` (see ``agentic/internal/memory.md`` for the sanctioned
 # exemption): it is never memorized, never registered with a pool
 # router, and never travels with the manifest on the wire.  It is a
 # plain ``sqlite3`` database file under ``<laila_root>/indices`` that can

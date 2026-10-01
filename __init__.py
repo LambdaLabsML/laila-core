@@ -971,7 +971,7 @@ def _route_to_policy(policy_id, op: str, args: tuple, kwargs: dict, comm=None):
       returned by the RPC registers into the local policy's
       ``future_bank`` (a proxy has no bank to register into); using the
       peer's proxy is itself the sanctioned remote-access path, so the
-      golden rule in ``vault/agent/policy.md`` is satisfied without a
+      golden rule in ``agentic/internal/policy.md`` is satisfied without a
       global morph.
     - another *local* policy in this process (registered in
       :data:`_local_policies`), in which case the active policy is

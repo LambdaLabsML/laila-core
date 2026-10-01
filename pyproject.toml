@@ -230,7 +230,7 @@ extend-exclude = [
   "dist",
   "_dev",
   "**/_dev",
-  "vault",
+  "agentic",
   "tutorials",
   "examples",
 ]
@@ -300,7 +300,7 @@ ignore_missing_imports = true
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 exclude = [
-  '^(\.venv|site|build|dist|_dev|vault|tutorials|examples)/',
+  '^(\.venv|site|build|dist|_dev|agentic|tutorials|examples)/',
 ]
 
 [[tool.mypy.overrides]]

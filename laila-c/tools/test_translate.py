@@ -333,7 +333,11 @@ for _n, _body in _GOOD:
 
 # =========================================================== COMPILE-GATE: BAD
 _BAD = [
-    ("DefaultPolicy", "auto p=DefaultPolicy(); (void)p;"),
+    # Naive `p = laila.DefaultPolicy(); laila.activate_policy(p)` translation:
+    # policies are shared_ptr-managed (PolicyPtr); a by-value policy cannot be
+    # activated. (By-value construction alone is legal C++17, so the gate must
+    # check the activation step.)
+    ("DefaultPolicy", "auto p=DefaultPolicy(); activate_policy(p);"),
     (
         "value-to_string",
         'auto e=laila->constant(LailaValue::from_string("x")); auto s=LailaValue::none().to_string(); (void)s;',
