@@ -82,6 +82,13 @@ class _LAILA_IDENTIFIABLE_COMM_PROTOCOL(
     #: ``persistent`` and ``supports_ping``.
     supports_ping: ClassVar[bool] = True
 
+    #: Whether this transport can carry opaque byte-stream *lanes*
+    #: alongside RPC (``laila.peers[gid][name]`` / :func:`laila.relay`).
+    #: Stream-capable carriers set this ``True``; a transport that only
+    #: speaks framed JSON-RPC leaves it ``False`` and
+    #: ``peers[gid][name]`` raises ``ConnectionError`` for it.
+    supports_channels: ClassVar[bool] = False
+
     # ------------------------------------------------------------------
     # Abstract interface
     # ------------------------------------------------------------------

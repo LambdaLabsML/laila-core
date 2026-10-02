@@ -20,6 +20,18 @@ off-thread dispatch) is inherited from :class:`_CarrierRPCProtocol`.
 Concrete transports supply three coroutines/helpers:
 :meth:`_create_datagram_endpoint`, :meth:`_resolve_peer_addr` and
 (optionally) :meth:`_close_endpoint`.
+
+Stream lanes over datagrams
+---------------------------
+A stream message is **one datagram** carrying the standard lane header
+(``[0x01][lane][seq][flags][data]``, ``START|END`` always set), sent
+with ``sendto`` and nothing else: no ack, no retransmit, no dedup, no
+fragmentation -- that machinery stays RPC-only. Lanes are therefore
+*lossy and unordered by design*; the receiver's chunk-sequence check
+only makes a lost datagram visible, it cannot recover it. A message
+larger than ``mtu - 7`` raises ``ValueError`` on ``send()``. Inbound
+packets are discriminated on their first byte before the fragment
+parser (the ``LDG`` magic starts with ``0x4C``, so there is no clash).
 """
 
 from __future__ import annotations
@@ -34,6 +46,8 @@ from typing import Any
 from pydantic import Field, PrivateAttr
 
 from ... import protocol as rpc_protocol
+from ...channel import Channel
+from . import codec as _codec
 from .base import _CarrierRPCProtocol
 
 log = logging.getLogger(__name__)
@@ -76,6 +90,8 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
     max_retries : int, default ``5``
         How many times an unacked fragment is resent before giving up.
     """
+
+    supports_channels = True
 
     mtu: int = Field(default=1200)
     ack_timeout: float = Field(default=0.5)
@@ -168,6 +184,9 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
             return
 
         async def _shutdown() -> None:
+            for peer_id in list(self._connections):
+                self._unregister_peer(peer_id)
+            self._shutdown_lanes()
             if self._retransmit_task is not None:
                 self._retransmit_task.cancel()
             await self._close_endpoint()
@@ -193,6 +212,7 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
             self._loop_thread.join(timeout=5.0)
             self._loop_thread = None
 
+        self._shutdown_lanes()
         self._reasm.clear()
         self._unacked.clear()
         self._handshake_pending.clear()
@@ -233,8 +253,27 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
         except asyncio.CancelledError:
             pass
 
+    def _peer_for_addr(self, addr: Any) -> str | None:
+        """Reverse-map a transport address to the peer registered on it."""
+        for peer_id, a in self._connections.items():
+            if a == addr:
+                return peer_id
+        return None
+
     def _feed_packet(self, addr: Any, data: bytes) -> None:
-        """Inbound-packet entry point (called by the endpoint protocol)."""
+        """Inbound-packet entry point (called by the endpoint protocol).
+
+        Stream-lane datagrams (first byte ``< 0x20``) are routed before
+        the fragment parser; they are only accepted from registered
+        peers.
+        """
+        if _codec.is_reserved_frame(data):
+            peer_id = self._peer_for_addr(addr)
+            if peer_id is None:
+                self._unknown_lane_drops += 1
+                return
+            self._on_stream_frame(peer_id, data)
+            return
         if len(data) < _PREFIX_LEN or data[:3] != _MAGIC:
             return
         _magic, ptype, frag_index, frag_count = _HEADER.unpack(data[: _HEADER.size])
@@ -312,7 +351,10 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
             self._send_message(addr, self._encode(resp))
             return
         policy_id = self._communication.policy_id if self._communication else None
-        resp = rpc_protocol.make_result(msg.get("id"), {"peer_id": policy_id})
+        resp = rpc_protocol.make_result(
+            msg.get("id"), {"peer_id": policy_id, "caps": self._local_caps()}
+        )
+        self._set_peer_caps(peer_id, params.get("caps"))
         self._register_peer(peer_id, addr)
         self._send_message(addr, self._encode(resp))
 
@@ -322,7 +364,7 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
         def _reply(resp: dict) -> None:
             self._event_loop.call_soon_threadsafe(self._send_message, addr, self._encode(resp))
 
-        self._handle_request_frame(msg, _reply)
+        self._handle_request_frame(msg, _reply, peer_id=self._peer_for_addr(addr))
 
     # ------------------------------------------------------------------
     # Peering / RPC
@@ -335,7 +377,10 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
         addr = addr_fut.result(timeout=10.0)
 
         policy_id = self._communication.policy_id if self._communication else None
-        req = rpc_protocol.make_request("peer.connect", {"from_id": policy_id, "secret": secret})
+        req = rpc_protocol.make_request(
+            "peer.connect",
+            {"from_id": policy_id, "secret": secret, "caps": self._local_caps()},
+        )
         rid = req["id"]
         slot: dict[str, Any] = {"event": threading.Event()}
         self._handshake_pending[rid] = slot
@@ -350,9 +395,11 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
             raise ConnectionError(
                 f"Peer rejected connection: {reply['error'].get('message', reply['error'])}"
             )
-        peer_id = reply.get("result", {}).get("peer_id")
+        result = reply.get("result", {}) or {}
+        peer_id = result.get("peer_id")
         if peer_id is None:
             raise ConnectionError("Peer response missing peer_id.")
+        self._set_peer_caps(peer_id, result.get("caps"))
         self._register_peer(peer_id, addr)
         return peer_id
 
@@ -365,3 +412,48 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
         req = self._make_rpc_request(path, args, kwargs, request_id)
         self._event_loop.call_soon_threadsafe(self._send_message, addr, self._encode(req))
         return self._await_pending(request_id, slot)
+
+    def _send_oneway(self, peer_id: str, path: list, kwargs: dict) -> None:
+        """Send a control request (reliably) without waiting for its reply."""
+        addr = self._connections.get(peer_id)
+        if addr is None:
+            raise ConnectionError(f"No connection to peer {peer_id}")
+        req = self._make_rpc_request(path, (), kwargs, str(_uuid.uuid4()))
+        self._event_loop.call_soon_threadsafe(self._send_message, addr, self._encode(req))
+
+    # ------------------------------------------------------------------
+    # Stream lanes (single datagram per message, best effort)
+    # ------------------------------------------------------------------
+
+    def _max_message_bytes(self) -> int:
+        """A stream message must fit one datagram: ``mtu - header``."""
+        return max(
+            0, min(int(self.max_stream_frame_bytes), int(self.mtu) - _codec.STREAM_HEADER_LEN)
+        )
+
+    def _stream_enqueue(self, channel: Channel, payload: bytes) -> None:
+        """Send *payload* as one unacknowledged datagram (user thread)."""
+        addr = self._connections.get(channel.peer_id)
+        if addr is None:
+            raise ConnectionError(f"No connection to peer {channel.peer_id}")
+        limit = self._max_message_bytes()
+        if len(payload) > limit:
+            raise ValueError(
+                f"Stream message of {len(payload)} bytes does not fit one datagram "
+                f"(mtu={self.mtu} - {_codec.STREAM_HEADER_LEN} header = {limit}). "
+                "Datagram lanes do not fragment."
+            )
+        seq = channel._next_chunk_seqs(1)
+        packet = _codec.pack_stream_frame(
+            channel.tx_lane_id, seq, _codec.FLAG_START | _codec.FLAG_END, payload
+        )
+        try:
+            self._event_loop.call_soon_threadsafe(self._safe_sendto, addr, packet)
+        except RuntimeError as exc:
+            raise ConnectionError("Datagram transport is shut down.") from exc
+
+    def _safe_sendto(self, addr: Any, packet: bytes) -> None:
+        try:
+            self._sendto(addr, packet)
+        except Exception:
+            log.debug("stream datagram send failed", exc_info=True)

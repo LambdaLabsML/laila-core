@@ -13,6 +13,11 @@ full inter-policy path in one process.
 
 Peers are matched through a process-wide registry keyed by the owning
 policy's ``global_id``.
+
+Stream lanes work too: there is no wire, so a ``send()`` hands the
+``bytes`` object straight to the peer carrier's inbound lane (zero
+copy), and the lane control frames go through the same direct
+``_build_response`` call as RPC.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from __future__ import annotations
 import uuid as _uuid
 from typing import Any, ClassVar
 
+from ...channel import Channel
 from .._carriers.base import _CarrierRPCProtocol
 from .._carriers.uri import uri_authority
 
@@ -38,6 +44,7 @@ class _LAILA_IDENTIFIABLE_LOOPBACK_COMM_PROTOCOL(_CarrierRPCProtocol):
     """
 
     protocol_name: ClassVar[str] = "loopback"
+    supports_channels = True
     _TOKEN_ALIASES: ClassVar[frozenset[str]] = frozenset({"loopback", "local", "inproc"})
 
     @classmethod
@@ -91,8 +98,11 @@ class _LAILA_IDENTIFIABLE_LOOPBACK_COMM_PROTOCOL(_CarrierRPCProtocol):
 
         my_pid = self._policy_id()
         # Register both directions so either side can call the other.
+        # Both ends are this very class, so lane capability is known.
+        self._set_peer_caps(str(target_pid), target._local_caps())
         self._register_peer(str(target_pid), target)
         if my_pid is not None:
+            target._set_peer_caps(str(my_pid), self._local_caps())
             target._register_peer(str(my_pid), self)
         return str(target_pid)
 
@@ -109,11 +119,30 @@ class _LAILA_IDENTIFIABLE_LOOPBACK_COMM_PROTOCOL(_CarrierRPCProtocol):
             raise ConnectionError(f"No connection to peer {peer_id}")
         req = self._make_rpc_request(path, args, kwargs, str(_uuid.uuid4()))
         # Run on the TARGET so its _execute_rpc walks the target policy.
-        resp = target._build_response(req)
+        # Our own policy id identifies us as the authenticated caller.
+        resp = target._build_response(req, peer_id=self._policy_id())
         if "error" in resp:
             err = resp["error"]
             raise RuntimeError(f"Remote RPC error: {err.get('message', err)}")
         return resp.get("result")
+
+    def _send_oneway(self, peer_id: str, path: list, kwargs: dict) -> None:
+        """Control frame without a reply: same direct dispatch, result ignored."""
+        target = self._connections.get(peer_id)
+        if target is None:
+            return
+        req = self._make_rpc_request(path, (), kwargs, str(_uuid.uuid4()))
+        target._build_response(req, peer_id=self._policy_id())
+
+    def _stream_enqueue(self, channel: Channel, payload: bytes) -> None:
+        """Deliver *payload* straight into the peer's matching inbound lane."""
+        target = self._connections.get(channel.peer_id)
+        if target is None:
+            raise ConnectionError(f"No connection to peer {channel.peer_id}")
+        my_pid = self._policy_id()
+        if my_pid is None:
+            raise ConnectionError("Loopback carrier has no owning policy id.")
+        target._on_stream_payload(str(my_pid), channel.tx_lane_id, payload)
 
     def connect_loopback(self, policy_global_id: str, secret: str) -> str:
         """Convenience wrapper building the ``loopback://`` URI."""

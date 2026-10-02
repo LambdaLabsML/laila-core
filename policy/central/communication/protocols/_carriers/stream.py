@@ -16,6 +16,25 @@ A concrete transport only supplies two coroutines:
 Everything else -- the dedicated background event loop, length-prefixed
 framing, the ``peer.connect`` handshake, the receive loop, off-thread
 inbound dispatch, and the blocking pending-RPC table -- is handled here.
+
+Stream lanes and writer fairness
+--------------------------------
+Each peer connection is wrapped in a :class:`_Link`: the writer plus two
+outbound queues (RPC/control, which has priority, and stream) drained by
+a single writer task. **Every** write -- handshake frames, replies,
+``_send_once``, stream chunks -- goes through the link; nothing else
+calls ``writer.write``. Stream messages are sliced into
+``stream_chunk_bytes`` chunks and the RPC queue is drained between
+chunks, so a liveness ping is never stuck behind a 200 KB frame. Each
+write is followed by ``await writer.drain()`` and the transport's
+write-buffer high-water mark is set to two chunks, so link backpressure
+(e.g. the UART ``FlowControlMixin``) is honoured instead of buffering
+unboundedly inside asyncio.
+
+Inbound frames are discriminated on their first byte
+(:func:`codec.is_reserved_frame`): stream frames go straight to
+:meth:`_CarrierRPCProtocol._on_stream_frame` and never touch the RPC
+codec, admission or the executor.
 """
 
 from __future__ import annotations
@@ -23,15 +42,147 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from collections import deque
 from typing import Any
 
 from pydantic import PrivateAttr
 
 from ... import protocol as rpc_protocol
+from ...channel import Channel
 from . import codec as _codec
 from .base import _CarrierRPCProtocol
 
 log = logging.getLogger(__name__)
+
+
+class _Link:
+    """One peer connection: writer + prioritised outbound queues + writer task.
+
+    Parameters
+    ----------
+    proto : _CarrierRPCProtocol
+        Owning carrier (for ``_stream_chunks`` / ``channel_queue_size``).
+    writer : asyncio.StreamWriter-like
+        Object exposing ``write`` / ``drain`` / ``close`` (and optionally
+        ``transport``).
+
+    Notes
+    -----
+    All methods except :meth:`close_threadsafe` must be called on the
+    carrier's event loop thread. ``put_rpc`` / ``put_stream`` are
+    marshalled there by callers via ``call_soon_threadsafe``.
+    """
+
+    __slots__ = (
+        "closed",
+        "loop",
+        "proto",
+        "rpc_q",
+        "stream_q",
+        "stream_q_max",
+        "task",
+        "wake",
+        "writer",
+    )
+
+    def __init__(self, proto: _CarrierRPCProtocol, writer: Any, loop: asyncio.AbstractEventLoop):
+        self.proto = proto
+        self.writer = writer
+        self.loop = loop
+        self.rpc_q: deque[bytes] = deque()
+        self.stream_q: deque[tuple[Channel, bytes]] = deque()
+        self.stream_q_max = max(1, int(proto.channel_queue_size))
+        self.wake = asyncio.Event()
+        self.closed = False
+        self.task: asyncio.Task | None = None
+        transport = getattr(writer, "transport", None)
+        if transport is not None:
+            try:
+                high = 2 * max(1, int(proto.stream_chunk_bytes))
+                transport.set_write_buffer_limits(high=high, low=high // 2)
+            except Exception:
+                pass
+
+    def start(self) -> None:
+        """Start the writer task (loop thread)."""
+        if self.task is None:
+            self.task = self.loop.create_task(self._run())
+
+    def put_rpc(self, data: bytes) -> None:
+        """Queue one framed RPC/control payload (priority lane)."""
+        if self.closed:
+            return
+        self.rpc_q.append(data)
+        self.wake.set()
+
+    def put_stream(self, channel: Channel, payload: bytes) -> None:
+        """Queue one stream message; evicts the oldest when the queue is full."""
+        if self.closed:
+            return
+        if len(self.stream_q) >= self.stream_q_max:
+            old_ch, _ = self.stream_q.popleft()
+            old_ch.tx_dropped += 1
+        self.stream_q.append((channel, payload))
+        self.wake.set()
+
+    async def _write(self, data: bytes) -> None:
+        self.writer.write(data)
+        drain = getattr(self.writer, "drain", None)
+        if drain is not None:
+            await drain()
+
+    async def _drain_rpc(self) -> None:
+        while self.rpc_q and not self.closed:
+            await self._write(self.rpc_q.popleft())
+
+    async def _run(self) -> None:
+        try:
+            while not self.closed:
+                if not self.rpc_q and not self.stream_q:
+                    self.wake.clear()
+                    await self.wake.wait()
+                    continue
+                await self._drain_rpc()
+                if self.stream_q and not self.closed:
+                    channel, payload = self.stream_q.popleft()
+                    if channel.closed or channel.tx_lane_id is None:
+                        continue
+                    for chunk in self.proto._stream_chunks(channel, payload):
+                        await self._write(_codec.frame(chunk))
+                        await self._drain_rpc()
+                        if self.closed:
+                            break
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            log.debug("link writer ended", exc_info=True)
+        finally:
+            self.closed = True
+
+    async def flush(self, timeout: float = 2.0) -> None:
+        """Wait (bounded) until the RPC queue has been written out."""
+        deadline = self.loop.time() + timeout
+        while self.rpc_q and not self.closed and self.loop.time() < deadline:
+            await asyncio.sleep(0.005)
+
+    def close(self) -> None:
+        """Stop the writer task and close the writer (loop thread, idempotent)."""
+        self.closed = True
+        self.wake.set()
+        task = self.task
+        if task is not None and not task.done():
+            task.cancel()
+        try:
+            self.writer.close()
+        except Exception:
+            pass
+
+    def close_threadsafe(self) -> None:
+        """Schedule :meth:`close` on the loop from any thread."""
+        try:
+            self.loop.call_soon_threadsafe(self.close)
+        except RuntimeError:
+            self.closed = True
 
 
 class _StreamRPCProtocol(_CarrierRPCProtocol):
@@ -42,8 +193,11 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
     All public lifecycle methods are idempotent. The carrier owns a
     dedicated asyncio event loop on a daemon thread; transport I/O is
     scheduled there via :func:`asyncio.run_coroutine_threadsafe` so the
-    rest of laila stays synchronous.
+    rest of laila stays synchronous. The per-peer handle stored in
+    ``_connections`` is a :class:`_Link`.
     """
+
+    supports_channels = True
 
     _event_loop: asyncio.AbstractEventLoop | None = PrivateAttr(default=None)
     _loop_thread: threading.Thread | None = PrivateAttr(default=None)
@@ -75,7 +229,7 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
 
         Subclasses tune the socket here (e.g. TCP transports disable
         Nagle via ``TCP_NODELAY`` for minimum small-frame latency).
-        Default: no-op.
+        Receives the raw ``StreamWriter``. Default: no-op.
         """
         return None
 
@@ -130,19 +284,18 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
         ready.set()
 
     def stop(self) -> None:
-        """Tear down the server, every peer stream, and the loop (idempotent)."""
+        """Tear down the server, every peer stream and lane, and the loop (idempotent)."""
         if not self._started:
             return
 
         async def _shutdown() -> None:
-            # Close peer streams first so the server's wait_closed() can
-            # complete promptly, then tear the server down.
-            for writer in list(self._connections.values()):
-                try:
-                    writer.close()
-                except Exception:
-                    pass
+            # Unregister peers first: closes their lanes (waking relays)
+            # and their links, so the server's wait_closed() completes
+            # promptly; then tear the server down.
+            for peer_id in list(self._connections):
+                self._unregister_peer(peer_id)
             self._connections.clear()
+            self._shutdown_lanes()
             await self._close_server(self._server)
             self._server = None
             pending = [
@@ -167,9 +320,37 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
             self._loop_thread.join(timeout=5.0)
             self._loop_thread = None
 
+        self._shutdown_lanes()
         self._pending_rpcs.clear()
         self._shutdown_executor()
         self._started = False
+
+    # ------------------------------------------------------------------
+    # Links
+    # ------------------------------------------------------------------
+
+    def _make_link(self, writer: Any) -> _Link:
+        """Wrap *writer* in a started :class:`_Link` (loop thread)."""
+        link = _Link(self, writer, self._event_loop)
+        link.start()
+        return link
+
+    def _on_loop_thread(self) -> bool:
+        try:
+            return asyncio.get_running_loop() is self._event_loop
+        except RuntimeError:
+            return False
+
+    def _unregister_peer(self, peer_id: str) -> None:
+        """Close lanes (base), then the link, then notify the hub. Idempotent."""
+        link = self._connections.get(peer_id)
+        super()._unregister_peer(peer_id)
+        if link is None:
+            return
+        if self._on_loop_thread():
+            link.close()
+        else:
+            link.close_threadsafe()
 
     # ------------------------------------------------------------------
     # Peering
@@ -187,44 +368,47 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
         """Client side of the ``peer.connect`` handshake."""
         reader, writer = await self._open_connection(uri)
         self._on_stream_ready(writer)
+        link = self._make_link(writer)
         policy_id = self._communication.policy_id if self._communication else None
-        req = rpc_protocol.make_request("peer.connect", {"from_id": policy_id, "secret": secret})
-        writer.write(_codec.frame(self._encode(req)))
-        await writer.drain()
+        req = rpc_protocol.make_request(
+            "peer.connect",
+            {"from_id": policy_id, "secret": secret, "caps": self._local_caps()},
+        )
+        link.put_rpc(_codec.frame(self._encode(req)))
 
         try:
             raw = await asyncio.wait_for(_codec.read_frame(reader), timeout=self.handshake_timeout)
         except TimeoutError as exc:
-            writer.close()
+            link.close()
             raise ConnectionError("Peer handshake timed out.") from exc
         if raw is None:
-            writer.close()
+            link.close()
             raise ConnectionError("Peer closed during handshake.")
+        if _codec.is_reserved_frame(raw):
+            link.close()
+            raise ConnectionError("Peer sent a stream frame before completing the handshake.")
 
         msg = self._decode(raw)
         if "error" in msg:
-            writer.close()
+            link.close()
             raise ConnectionError(
                 f"Peer rejected connection: {msg['error'].get('message', msg['error'])}"
             )
-        peer_id = msg.get("result", {}).get("peer_id")
+        result = msg.get("result", {}) or {}
+        peer_id = result.get("peer_id")
         if peer_id is None:
-            writer.close()
+            link.close()
             raise ConnectionError("Peer response missing peer_id.")
 
-        self._register_peer(peer_id, writer)
-        asyncio.ensure_future(self._receive_loop(reader, writer, peer_id))
+        self._set_peer_caps(peer_id, result.get("caps"))
+        self._register_peer(peer_id, link)
+        asyncio.ensure_future(self._receive_loop(reader, link, peer_id))
         return peer_id
 
     def disconnect(self, peer_id: str) -> None:
-        """Close a single peer's stream and drop it (idempotent)."""
-        writer = self._connections.get(peer_id)
-        if writer is not None and self._event_loop is not None:
-            try:
-                self._event_loop.call_soon_threadsafe(writer.close)
-            except Exception:
-                pass
-        self._unregister_peer(peer_id)
+        """Close a single peer's stream, its lanes, and drop it (idempotent)."""
+        if peer_id in self._connections:
+            self._unregister_peer(peer_id)
 
     async def _handle_inbound_stream(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -235,11 +419,13 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
         except TimeoutError:
             writer.close()
             return
-        if raw is None:
+        if raw is None or _codec.is_reserved_frame(raw):
+            # EOF, or a stream frame before the handshake: not a peer.
             writer.close()
             return
 
         self._on_stream_ready(writer)
+        link = self._make_link(writer)
         msg = self._decode(raw)
         if not rpc_protocol.is_request(msg) or msg.get("method") != "peer.connect":
             resp = rpc_protocol.make_error(
@@ -247,9 +433,9 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
                 rpc_protocol.ERR_INVALID_REQUEST,
                 "First message must be a peer.connect request.",
             )
-            writer.write(_codec.frame(self._encode(resp)))
-            await writer.drain()
-            writer.close()
+            link.put_rpc(_codec.frame(self._encode(resp)))
+            await link.flush()
+            link.close()
             return
 
         params = msg.get("params", {})
@@ -258,31 +444,35 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
             resp = rpc_protocol.make_error(
                 msg.get("id"), rpc_protocol.ERR_AUTH_FAILED, "Invalid peer secret key."
             )
-            writer.write(_codec.frame(self._encode(resp)))
-            await writer.drain()
-            writer.close()
+            link.put_rpc(_codec.frame(self._encode(resp)))
+            await link.flush()
+            link.close()
             return
 
         policy_id = self._communication.policy_id if self._communication else None
-        resp = rpc_protocol.make_result(msg.get("id"), {"peer_id": policy_id})
-        writer.write(_codec.frame(self._encode(resp)))
-        await writer.drain()
+        resp = rpc_protocol.make_result(
+            msg.get("id"), {"peer_id": policy_id, "caps": self._local_caps()}
+        )
+        link.put_rpc(_codec.frame(self._encode(resp)))
 
-        self._register_peer(peer_id, writer)
-        await self._receive_loop(reader, writer, peer_id)
+        self._set_peer_caps(peer_id, params.get("caps"))
+        self._register_peer(peer_id, link)
+        await self._receive_loop(reader, link, peer_id)
 
-    async def _receive_loop(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, peer_id: str
-    ) -> None:
-        """Decode frames and route requests/responses until the stream ends."""
+    async def _receive_loop(self, reader: asyncio.StreamReader, link: _Link, peer_id: str) -> None:
+        """Decode frames and route requests/responses/stream chunks until EOF."""
+        reply = self._make_reply(link)
         try:
             while True:
                 raw = await _codec.read_frame(reader)
                 if raw is None:
                     break
+                if _codec.is_reserved_frame(raw):
+                    self._on_stream_frame(peer_id, raw)
+                    continue
                 msg = self._decode(raw)
                 if rpc_protocol.is_request(msg):
-                    self._handle_request_frame(msg, self._make_reply(writer))
+                    self._handle_request_frame(msg, reply, peer_id=peer_id)
                 elif rpc_protocol.is_response(msg):
                     self._complete_pending(msg)
         except (asyncio.CancelledError, ConnectionError):
@@ -292,44 +482,63 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
         finally:
             self._unregister_peer(peer_id)
 
-    def _make_reply(self, writer: asyncio.StreamWriter):
-        """Build a thread-safe ``reply(resp)`` that frames + writes on the loop.
+    def _make_reply(self, link: _Link):
+        """Build a thread-safe ``reply(resp)`` that frames + queues on the link.
 
         Used by :meth:`_handle_request_frame`; safe to call both inline on
-        the I/O loop (ping fast-path) and from an inbound worker thread.
+        the I/O loop (ping / control fast-path) and from an inbound
+        worker thread.
         """
 
         def _reply(resp: dict) -> None:
             data = _codec.frame(self._encode(resp))
-
-            async def _w() -> None:
-                try:
-                    writer.write(data)
-                    await writer.drain()
-                except Exception:
-                    pass
-
-            asyncio.run_coroutine_threadsafe(_w(), self._event_loop)
+            try:
+                self._event_loop.call_soon_threadsafe(link.put_rpc, data)
+            except RuntimeError:
+                pass
 
         return _reply
 
     # ------------------------------------------------------------------
-    # Outbound RPC
+    # Outbound RPC / stream
     # ------------------------------------------------------------------
+
+    def _queue_rpc(self, peer_id: str, msg: dict) -> None:
+        """Frame *msg* and queue it on the peer's link from any thread."""
+        link = self._connections.get(peer_id)
+        if link is None or link.closed:
+            raise ConnectionError(f"No connection to peer {peer_id}")
+        data = _codec.frame(self._encode(msg))
+        try:
+            self._event_loop.call_soon_threadsafe(link.put_rpc, data)
+        except RuntimeError as exc:
+            raise ConnectionError(f"Transport to peer {peer_id} is shut down.") from exc
 
     def _send_once(self, peer_id: str, path: list[str], args: tuple, kwargs: dict) -> Any:
         """Send one ``rpc.call`` to *peer_id* and block for the response."""
-        writer = self._connections.get(peer_id)
-        if writer is None:
+        if peer_id not in self._connections:
             raise ConnectionError(f"No connection to peer {peer_id}")
-
         request_id, slot = self._register_pending()
         req = self._make_rpc_request(path, args, kwargs, request_id)
-        data = _codec.frame(self._encode(req))
-
-        async def _send() -> None:
-            writer.write(data)
-            await writer.drain()
-
-        asyncio.run_coroutine_threadsafe(_send(), self._event_loop)
+        try:
+            self._queue_rpc(peer_id, req)
+        except ConnectionError:
+            self._pending_rpcs.pop(request_id, None)
+            raise
         return self._await_pending(request_id, slot)
+
+    def _send_oneway(self, peer_id: str, path: list, kwargs: dict) -> None:
+        """Queue a control request without waiting for the reply."""
+        import uuid as _uuid
+
+        self._queue_rpc(peer_id, self._make_rpc_request(path, (), kwargs, str(_uuid.uuid4())))
+
+    def _stream_enqueue(self, channel: Channel, payload: bytes) -> None:
+        """Marshal one stream message onto the peer's link (user thread)."""
+        link = self._connections.get(channel.peer_id)
+        if link is None or link.closed:
+            raise ConnectionError(f"No connection to peer {channel.peer_id}")
+        try:
+            self._event_loop.call_soon_threadsafe(link.put_stream, channel, payload)
+        except RuntimeError as exc:
+            raise ConnectionError(f"Transport to peer {channel.peer_id} is shut down.") from exc

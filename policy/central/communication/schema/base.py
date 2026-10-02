@@ -12,10 +12,11 @@ owns three things:
   encoding. The communication object only ever asks "do you handle
   this URI?" or "do you have this peer connected?" -- everything else
   is delegated.
-- A *peer registry* (``peers``): a map from remote-policy ``global_id``
-  to a :class:`RemotePolicyProxy`. Proxies look like local policies
-  to the rest of the codebase but route every method call through
-  :meth:`_send_rpc`.
+- A *peer registry* (``peers``): a :class:`PeerRegistry` (a ``dict``)
+  from remote-policy ``global_id`` to a :class:`PeerProxy`. Proxies
+  look like local policies to the rest of the codebase but route every
+  method call through :meth:`_send_rpc`; indexing one with a channel
+  name (``peers[gid]["video"]``) yields a stream :class:`Channel`.
 - An *inbound dispatcher* (:meth:`_execute_rpc`): when a protocol
   finishes deserializing an incoming RPC frame it hands the dotted
   attribute path + args/kwargs back to the communication object,
@@ -33,17 +34,26 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import ConfigDict, Field, PrivateAttr
+from pydantic import BeforeValidator, ConfigDict, Field, PrivateAttr
 
 from .....basics.definitions.cli_capable import _LAILA_CLI_CAPABLE_CLASS, CLIExempt
 from .....basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
 from .....macros.strings import _CENTRAL_COMMUNICATION_SCOPE
 from ..protocols.base import _LAILA_IDENTIFIABLE_COMM_PROTOCOL
-from ..proxy import RemotePolicyProxy
+from ..registry import PeerProxy, PeerRegistry
 
 log = logging.getLogger(__name__)
+
+
+def _coerce_peer_registry(value: Any) -> Any:
+    """Accept a plain mapping for ``peers`` and upgrade it to :class:`PeerRegistry`."""
+    if isinstance(value, PeerRegistry):
+        return value
+    if isinstance(value, dict):
+        return PeerRegistry(value)
+    return value
 
 
 class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_OBJECT):
@@ -70,9 +80,10 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
 
     Attributes
     ----------
-    peers : dict[str, RemotePolicyProxy]
-        Remote-policy ``global_id`` -> proxy. Populated by
-        :meth:`_register_peer` after a successful handshake.
+    peers : PeerRegistry
+        Remote-policy ``global_id`` -> :class:`PeerProxy`. Populated by
+        :meth:`_register_peer` after a successful handshake. Plain dict
+        semantics; ``peers[gid][name]`` resolves a stream channel.
     connections : dict[str, _LAILA_IDENTIFIABLE_COMM_PROTOCOL]
         Protocol ``global_id`` -> protocol instance. Each protocol
         manages its own connections, listeners and peer set; this
@@ -87,7 +98,9 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     policy_id: str | None = CLIExempt(default=None)
-    peers: dict[str, RemotePolicyProxy] = CLIExempt(default_factory=dict)
+    peers: Annotated[PeerRegistry, BeforeValidator(_coerce_peer_registry)] = CLIExempt(
+        default_factory=PeerRegistry
+    )
     connections: dict[str, _LAILA_IDENTIFIABLE_COMM_PROTOCOL] = CLIExempt(
         default_factory=dict,
     )
@@ -374,7 +387,9 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         """Create a proxy for a newly connected peer.
 
         Called by protocol instances after a successful handshake.
-        Also registers the proxy in ``laila.remote_policies``.
+        One :class:`PeerProxy` object is built and stored in *both*
+        ``self.peers`` and ``laila.remote_policies`` so
+        ``laila.peers[gid] is laila._remote_policies[gid]``.
 
         Parameters
         ----------
@@ -382,7 +397,7 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
             Remote policy ``global_id``.
         """
         if peer_id not in self.peers:
-            proxy = RemotePolicyProxy(peer_id, self)
+            proxy = PeerProxy(peer_id, self)
             self.peers[peer_id] = proxy
             from ..... import _remote_policies
 

@@ -18,6 +18,18 @@ stream transports (which see an undelimited byte river) can recover
 message boundaries: :func:`frame` prepends a 4-byte big-endian length,
 and :func:`read_frame` reads exactly one such frame from an
 :class:`asyncio.StreamReader`.
+
+Stream-lane frames
+------------------
+Besides RPC messages, carriers multiplex opaque *stream lanes* on the
+same connection. A stream frame is distinguished from an RPC payload by
+its **first byte**: RPC payloads start with ``{`` (JSON, ``0x7B``) or a
+msgpack map marker (``0x80``-``0x8F``, ``0xDE``, ``0xDF``), whereas every
+byte below ``0x20`` is reserved for binary control. The header layout
+and helpers are defined in :mod:`laila.policy.central.communication.wire`
+and re-exported here (``STREAM_MARKER``, ``STREAM_HEADER``, ``FLAG_START``,
+``FLAG_END``, :func:`is_reserved_frame`, :func:`pack_stream_frame`,
+:func:`unpack_stream_header`).
 """
 
 from __future__ import annotations
@@ -27,12 +39,27 @@ import struct
 from typing import Any
 
 from ... import protocol as _json_protocol
+from ...wire import (  # noqa: F401  (re-exported for carriers)
+    FLAG_END,
+    FLAG_START,
+    RESERVED_MARKER_MAX,
+    SEQ_MODULUS,
+    STREAM_HEADER,
+    STREAM_HEADER_LEN,
+    STREAM_MARKER,
+    is_reserved_frame,
+    is_stream_frame,
+    pack_stream_frame,
+    unpack_stream_header,
+)
 
 #: Supported codec tokens.
 CODECS = ("json", "msgpack")
 
 _LENGTH_PREFIX = struct.Struct(">I")
 #: Hard cap on a single frame (256 MiB) to bound memory on a hostile peer.
+#: This is the *outer* framing cap, not the stream-message cap -- see
+#: ``max_stream_frame_bytes`` on the carriers for the latter.
 MAX_FRAME_BYTES = 256 * 1024 * 1024
 
 

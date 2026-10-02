@@ -14,7 +14,9 @@ Major surface
 - ``laila.memory`` -> :class:`policy.central.memory.schema.base._LAILA_IDENTIFIABLE_CENTRAL_MEMORY`
 - ``laila.command`` -> :class:`policy.central.command.schema.base._LAILA_IDENTIFIABLE_CENTRAL_COMMAND`
 - ``laila.communication`` -> :class:`policy.central.communication.schema.base._LAILA_IDENTIFIABLE_COMMUNICATION`
-- ``laila.peers`` -> dict of :class:`RemotePolicyProxy` keyed by ``global_id``
+- ``laila.peers`` -> :class:`PeerRegistry` (a dict) of :class:`PeerProxy` keyed by
+  ``global_id``; ``laila.peers[gid][name]`` is a stream :class:`Channel`
+  consumed with :func:`relay`
 - ``laila.alpha_pool`` -> the active policy's default storage pool
 - ``laila.runtime`` -> :mod:`laila.runtime` (futures introspection)
 - ``laila.logger`` -> the process-wide :class:`laila.logger.Logger` singleton
@@ -1706,6 +1708,91 @@ def request(policy_id, comm_protocol=None):
             f"Unknown peer {str(policy_id)!r}: connect first with laila.add_peer()."
         )
     return proxy.via(comm_protocol) if comm_protocol is not None else proxy
+
+
+def relay(channel, name=None, *, timeout=None):
+    """Iterate the messages of a peer stream channel on the calling thread.
+
+    The streaming companion to :func:`request`. Given a
+    :class:`~laila.policy.central.communication.channel.Channel` (from
+    ``laila.peers[gid][name]``) -- or a peer ``global_id`` plus a channel
+    *name* -- it returns the channel's
+    :class:`~laila.policy.central.communication.channel.Relay`, a plain
+    blocking iterator yielding one
+    :class:`~laila.policy.central.communication.channel.StreamEntry` per
+    sender-side ``send()``:
+
+    .. code-block:: python
+
+        video = laila.peers[gid]["video"]
+        for entry in laila.relay(video):          # or laila.relay(gid, "video")
+            access_unit = entry.data               # bytes, exactly one send()
+            print(entry.stream.seq, entry.stream.arrived_at)
+
+    Streams are opaque bytes; laila does not interpret them. Each entry
+    is a local in-memory constant (fresh ``global_id``), not memorized or
+    pooled; pass it to :func:`memorize` if you want it stored.
+
+    Parameters
+    ----------
+    channel : Channel | str
+        A channel object, or the peer ``global_id`` when *name* is given.
+    name : str, optional
+        Channel name, required when *channel* is a peer id.
+    timeout : float, optional
+        Per-message wait; ``None`` blocks until a message arrives or the
+        channel closes, otherwise ``TimeoutError`` is raised when nothing
+        arrives within *timeout* seconds.
+
+    Returns
+    -------
+    Relay
+        The channel's single relay (the same object on every call; two
+        threads iterating it split the packets).
+
+    Raises
+    ------
+    ConnectionError
+        If the peer is unknown, its transport has no stream lanes (e.g.
+        the WebSocket ``tcpip`` protocol -- use ``tcp://``), or the lane
+        could not be opened.
+    RuntimeError
+        If the active policy is a remote proxy (morph mode): streams are
+        consumed where the carrier lives and are not forwarded.
+
+    Notes
+    -----
+    - Iteration ends with ``StopIteration`` when the channel closes (peer
+      loss, remote/local ``close()``, ``stop()``, :func:`terminate`).
+      After the peer reconnects, re-index ``laila.peers[gid][name]`` and
+      call :func:`relay` again; old channels stay closed.
+    - Not related to the 3-party memory *relay* helpers
+      (``memory._relay_memorize`` / ``_relay_remember``), which move
+      entries between pools.
+    """
+    from .policy.central.communication.channel import Channel as _Channel
+    from .policy.central.communication.proxy import RemotePolicyProxy as _Proxy
+
+    if isinstance(channel, _Channel):
+        if name is not None:
+            raise TypeError("Pass either a Channel or (peer_id, name), not both.")
+        return channel.relay(timeout)
+    if name is None:
+        raise TypeError("laila.relay(peer_id, name) requires a channel name.")
+    active = get_active_policy()
+    if isinstance(active, _Proxy):
+        raise RuntimeError(
+            "laila.relay needs a local active policy; the active policy is a remote "
+            "proxy (morph mode). Activate the local policy that holds the peer."
+        )
+    peer_gid = _resolve_policy_ref(channel)
+    peers = active.central.communication.peers
+    proxy = peers.get(str(peer_gid))
+    if proxy is None:
+        raise ConnectionError(
+            f"Unknown peer {str(peer_gid)!r}: connect first with laila.add_peer()."
+        )
+    return proxy[name].relay(timeout)
 
 
 def _resolve_future(future_ref):
