@@ -1,0 +1,6 @@
+node_modules/
+native/build/
+prebuilds/
+*.laila_sqlitedb
+.laila_test_home/
+npm-debug.log*

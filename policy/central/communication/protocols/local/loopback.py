@@ -71,17 +71,34 @@ class _LAILA_IDENTIFIABLE_LOOPBACK_COMM_PROTOCOL(_CarrierRPCProtocol):
         self._started = True
 
     def stop(self) -> None:
-        """Deregister and drop all peers (idempotent)."""
+        """Deregister, tell every peer we are gone, drop them (idempotent)."""
         if not self._started:
             return
         pid = self._policy_id()
         if pid is not None:
             _LOOPBACK_REGISTRY.pop(str(pid), None)
         for peer_id in list(self._connections):
-            self._unregister_peer(peer_id)
+            self.disconnect(peer_id)
+        self._shutdown_lanes()
         self._pending_rpcs.clear()
         self._shutdown_executor()
         self._started = False
+
+    def disconnect(self, peer_id: str) -> None:
+        """Drop *peer_id* on both ends. Idempotent.
+
+        There is no wire for a ``peer.disconnect`` frame, so the goodbye
+        is a direct call into the peer carrier; without it the other
+        side keeps us registered forever (its liveness pings still reach
+        this live object and succeed).
+        """
+        target = self._connections.get(peer_id)
+        if target is None:
+            return
+        self._unregister_peer(peer_id)
+        my_pid = self._policy_id()
+        if my_pid is not None:
+            target._on_peer_goodbye(str(my_pid))
 
     def connect(self, uri: str, secret: str) -> str:
         """Peer with another in-process policy named by *uri*."""

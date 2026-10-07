@@ -49,6 +49,7 @@ class _LAILA_IDENTIFIABLE_UART_COMM_PROTOCOL(_P2PStreamRPCProtocol):
     baudrate: int = Field(default=115200)
 
     _serial: Any = PrivateAttr(default=None)
+    _read_transport: Any = PrivateAttr(default=None)
 
     @classmethod
     def matches_token(cls, token: str) -> bool:
@@ -78,7 +79,11 @@ class _LAILA_IDENTIFIABLE_UART_COMM_PROTOCOL(_P2PStreamRPCProtocol):
         loop = asyncio.get_running_loop()
 
         reader = asyncio.StreamReader()
-        await loop.connect_read_pipe(
+        # Keep the read transport: it is registered on the *original*
+        # serial fd with the loop's selector and must be closed (fd
+        # unregistered) before pyserial closes that fd, otherwise the
+        # selector wakes ``_read_ready`` on a dead fd -> EBADF.
+        self._read_transport, _ = await loop.connect_read_pipe(
             lambda: asyncio.StreamReaderProtocol(reader),
             os.fdopen(fd, "rb", buffering=0, closefd=False),
         )
@@ -94,7 +99,17 @@ class _LAILA_IDENTIFIABLE_UART_COMM_PROTOCOL(_P2PStreamRPCProtocol):
         return None
 
     async def _close_stream(self) -> None:
+        # 1. Unregister the serial fd from the selector. ``closefd=False``
+        #    on the read pipe means this does not close the fd itself.
+        if self._read_transport is not None:
+            try:
+                self._read_transport.close()
+            except Exception:
+                pass
+            self._read_transport = None
+        # 2. Close link + writer (the writer owns a dup'd fd).
         await super()._close_stream()
+        # 3. Now nothing is registered on the serial fd: safe to close it.
         if self._serial is not None:
             try:
                 self._serial.close()

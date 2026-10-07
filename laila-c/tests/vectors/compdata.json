@@ -3,13 +3,13 @@
     "name": "str",
     "check": "value",
     "serialized": {
-      "_uuid": "b2b80aea-5e4a-49b3-a936-4509af9a1922",
+      "_uuid": "0cf1d557-3066-468e-ba11-951ef87f07db",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.890+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.293+00:00",
       "payload": "gAWVDwAAAAAAAACMC2hlbGxvIGxhaWxhlC4=",
       "constitution": {
         "_kind": "simple",
@@ -25,13 +25,13 @@
     "name": "empty_str",
     "check": "value",
     "serialized": {
-      "_uuid": "ab6b199f-e62d-4630-b90a-866ea4147ca6",
+      "_uuid": "5dedfa4a-12c2-4cbd-8a1e-96b4ddb62d4d",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.891+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.294+00:00",
       "payload": "gAWVBAAAAAAAAACMAJQu",
       "constitution": {
         "_kind": "simple",
@@ -47,13 +47,13 @@
     "name": "unicode",
     "check": "value",
     "serialized": {
-      "_uuid": "5e28c06d-a378-4cf5-979e-87d35a02202f",
+      "_uuid": "e2476981-b592-40c1-b5f9-3143ff4a6e70",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.892+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.295+00:00",
       "payload": "gAWVFAAAAAAAAACMEMO8bsOvY8O2ZMOpIPCfmICULg==",
       "constitution": {
         "_kind": "simple",
@@ -69,13 +69,13 @@
     "name": "int_small",
     "check": "value",
     "serialized": {
-      "_uuid": "579205d5-b0f4-4aaf-9e91-8d095e9a7c3f",
+      "_uuid": "0f4516b7-5f53-47fa-8d4b-6eea97f01dd3",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.892+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.295+00:00",
       "payload": "gAVLBy4=",
       "constitution": {
         "_kind": "simple",
@@ -91,13 +91,13 @@
     "name": "int_neg",
     "check": "value",
     "serialized": {
-      "_uuid": "d675f12d-c03d-4d16-b938-94e82e11ece7",
+      "_uuid": "c0efa956-0d83-4993-8c25-45de21ffb827",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.893+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.296+00:00",
       "payload": "gAWVBgAAAAAAAABKM37+/y4=",
       "constitution": {
         "_kind": "simple",
@@ -113,13 +113,13 @@
     "name": "int_max64",
     "check": "value",
     "serialized": {
-      "_uuid": "15964a63-8a7d-4972-a645-bcfb1c5c4432",
+      "_uuid": "7c35c31f-9fd3-4a70-965b-a465a7a0a71e",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.893+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.297+00:00",
       "payload": "gAWVCwAAAAAAAACKCP////////9/Lg==",
       "constitution": {
         "_kind": "simple",
@@ -135,13 +135,13 @@
     "name": "int_min64",
     "check": "value",
     "serialized": {
-      "_uuid": "a9191d33-2385-4c65-94f8-079cd38dab16",
+      "_uuid": "e8c3981f-894a-4f91-a2b0-11743fc6cba4",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.894+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.298+00:00",
       "payload": "gAWVCwAAAAAAAACKCAAAAAAAAACALg==",
       "constitution": {
         "_kind": "simple",
@@ -157,13 +157,13 @@
     "name": "float",
     "check": "value",
     "serialized": {
-      "_uuid": "c2dd17b9-17b2-4f78-ba96-f78b3361dac4",
+      "_uuid": "6b5d5a75-4138-4efb-a868-103c7e0c4cda",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.895+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.299+00:00",
       "payload": "gAWVCgAAAAAAAABHQAwAAAAAAAAu",
       "constitution": {
         "_kind": "simple",
@@ -179,13 +179,13 @@
     "name": "float_neg",
     "check": "value",
     "serialized": {
-      "_uuid": "e7b2a45a-7d78-45d3-96d9-f67f2c3bab08",
+      "_uuid": "c34de5f4-69a2-4ca9-b568-c768bb16ff65",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.895+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.299+00:00",
       "payload": "gAWVCgAAAAAAAABHvfEuC+gm1pUu",
       "constitution": {
         "_kind": "simple",
@@ -201,13 +201,13 @@
     "name": "bool_true",
     "check": "value",
     "serialized": {
-      "_uuid": "b49d82ae-d338-4c13-8e4f-f5820785dc17",
+      "_uuid": "eba20486-5395-4a1a-9dd3-5d9b6ab957b3",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.896+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.300+00:00",
       "payload": "gAWILg==",
       "constitution": {
         "_kind": "simple",
@@ -223,13 +223,13 @@
     "name": "bool_false",
     "check": "value",
     "serialized": {
-      "_uuid": "fe84ad44-4ab8-43f4-afa7-cda43b22499a",
+      "_uuid": "04bbe970-ced0-4704-99e2-049e60dae9ff",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.897+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.301+00:00",
       "payload": "gAWJLg==",
       "constitution": {
         "_kind": "simple",
@@ -245,13 +245,13 @@
     "name": "none",
     "check": "none",
     "serialized": {
-      "_uuid": "6ae94a49-5f3a-43c7-b86b-65d93b913b56",
+      "_uuid": "4e0125f6-cf66-431b-9672-6a5b481ec140",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.897+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.302+00:00",
       "payload": null,
       "constitution": {
         "_kind": "simple",
@@ -263,13 +263,13 @@
     "name": "bytes",
     "check": "bytes",
     "serialized": {
-      "_uuid": "2242a6e0-fc8e-4afb-87a8-7ebfc30d5045",
+      "_uuid": "31a6f376-a85c-47c8-9290-16073b0923bc",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.898+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.302+00:00",
       "payload": "gAWVCQAAAAAAAABDBQABAv7/lC4=",
       "constitution": {
         "_kind": "simple",
@@ -285,19 +285,19 @@
     "name": "list",
     "check": "value",
     "serialized": {
-      "_uuid": "9dfed282-f098-451e-a619-936a32369b5b",
+      "_uuid": "38f4b312-ffaa-41dd-b147-a1c031aa1098",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.898+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.303+00:00",
       "payload": "lAECAwQ=",
       "constitution": {
         "_kind": "simple",
         "codes": [
           "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
-          "\ndef backward(inp):\n    import msgpack\n    kwargs = {\"raw\": False, **{}}\n    return msgpack.unpackb(inp, **kwargs)\n"
+          "\ndef backward(inp):\n    import msgpack\n    kwargs = {\"raw\": False, \"strict_map_key\": False, **{}}\n    return msgpack.unpackb(inp, **kwargs)\n"
         ]
       }
     },
@@ -313,19 +313,19 @@
     "name": "dict_ordered",
     "check": "value",
     "serialized": {
-      "_uuid": "9a06e47d-65ea-4092-b493-e429fc874f37",
+      "_uuid": "3f31cc3c-0ccb-45ca-9a91-74cd7d3b4e69",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.899+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.304+00:00",
       "payload": "g6FiAaFhAqF6Aw==",
       "constitution": {
         "_kind": "simple",
         "codes": [
           "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
-          "\ndef backward(inp):\n    import msgpack\n    kwargs = {\"raw\": False, **{}}\n    return msgpack.unpackb(inp, **kwargs)\n"
+          "\ndef backward(inp):\n    import msgpack\n    kwargs = {\"raw\": False, \"strict_map_key\": False, **{}}\n    return msgpack.unpackb(inp, **kwargs)\n"
         ]
       }
     },
@@ -340,19 +340,19 @@
     "name": "nested",
     "check": "value",
     "serialized": {
-      "_uuid": "1deb792d-b507-4a25-9b63-4c0c2dec57f1",
+      "_uuid": "24bf2e33-2acb-4124-8c0c-f43bfcc7befb",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.900+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.305+00:00",
       "payload": "gaFhgaFikwECgaFjAw==",
       "constitution": {
         "_kind": "simple",
         "codes": [
           "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
-          "\ndef backward(inp):\n    import msgpack\n    kwargs = {\"raw\": False, **{}}\n    return msgpack.unpackb(inp, **kwargs)\n"
+          "\ndef backward(inp):\n    import msgpack\n    kwargs = {\"raw\": False, \"strict_map_key\": False, **{}}\n    return msgpack.unpackb(inp, **kwargs)\n"
         ]
       }
     },
@@ -373,19 +373,19 @@
     "name": "mixed",
     "check": "value",
     "serialized": {
-      "_uuid": "27e8f648-c0d8-4383-ae61-44791bc12fc6",
+      "_uuid": "266d3d36-ff8c-4a84-a924-e08c1ccc4002",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.901+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.305+00:00",
       "payload": "hqFpAaFmy0AEAAAAAAAAoXOheKFiw6FuwKFskgGjdHdv",
       "constitution": {
         "_kind": "simple",
         "codes": [
           "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
-          "\ndef backward(inp):\n    import msgpack\n    kwargs = {\"raw\": False, **{}}\n    return msgpack.unpackb(inp, **kwargs)\n"
+          "\ndef backward(inp):\n    import msgpack\n    kwargs = {\"raw\": False, \"strict_map_key\": False, **{}}\n    return msgpack.unpackb(inp, **kwargs)\n"
         ]
       }
     },
@@ -406,19 +406,19 @@
     "name": "dict_bytes",
     "check": "nested_bytes",
     "serialized": {
-      "_uuid": "72e7f9a7-a443-4e9d-be6c-b5f53df3089c",
+      "_uuid": "955cc5b0-4226-41b3-9ac6-56dd0c14c271",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.901+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.306+00:00",
       "payload": "gaFrxATerb7v",
       "constitution": {
         "_kind": "simple",
         "codes": [
           "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
-          "\ndef backward(inp):\n    import msgpack\n    kwargs = {\"raw\": False, **{}}\n    return msgpack.unpackb(inp, **kwargs)\n"
+          "\ndef backward(inp):\n    import msgpack\n    kwargs = {\"raw\": False, \"strict_map_key\": False, **{}}\n    return msgpack.unpackb(inp, **kwargs)\n"
         ]
       }
     },
@@ -429,13 +429,13 @@
     "name": "bignum",
     "check": "bignum_unsupported",
     "serialized": {
-      "_uuid": "a18d127c-4b56-4380-b096-c331691d7570",
+      "_uuid": "917fddb3-48fb-4570-956b-05d8752cf6ab",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.902+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.307+00:00",
       "payload": "gAWVEAAAAAAAAACKDQAAAEDq7XRG0Jwsnwwu",
       "constitution": {
         "_kind": "simple",
@@ -450,13 +450,13 @@
     "name": "npy_f64",
     "check": "numpy",
     "serialized": {
-      "_uuid": "6a0810f1-cecb-49b5-9179-8c9bee38b503",
+      "_uuid": "6168dadd-f648-49f1-ba86-83d453720fb9",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.903+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.308+00:00",
       "payload": "k05VTVBZAQB2AHsnZGVzY3InOiAnPGY4JywgJ2ZvcnRyYW5fb3JkZXInOiBGYWxzZSwgJ3NoYXBlJzogKDIsIDIpLCB9ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAoAAAAAAAD4PwAAAAAAAARAAAAAAAAADEAAAAAAAAASQA==",
       "constitution": {
         "_kind": "simple",
@@ -477,13 +477,13 @@
     "name": "npy_i32",
     "check": "numpy",
     "serialized": {
-      "_uuid": "3e026374-9498-4716-a825-82abcd7bf16c",
+      "_uuid": "a57ccddd-5e6b-43b4-87a0-dfca60e5b342",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.904+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.309+00:00",
       "payload": "k05VTVBZAQB2AHsnZGVzY3InOiAnPGk0JywgJ2ZvcnRyYW5fb3JkZXInOiBGYWxzZSwgJ3NoYXBlJzogKDUsKSwgfSAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAoBAAAAAgAAAAMAAAAEAAAABQAAAA==",
       "constitution": {
         "_kind": "simple",
@@ -503,13 +503,13 @@
     "name": "npy_u8",
     "check": "numpy",
     "serialized": {
-      "_uuid": "3343b433-c3b1-43c7-8247-4acb10035728",
+      "_uuid": "7053005d-7ec7-4187-b324-3caaa1a454f1",
       "_evolution": null,
       "_scopes": [
         "ENTRY"
       ],
       "_state": "READY",
-      "_creation_timestamp": "2026-09-29T17:39:18.904+00:00",
+      "_creation_timestamp": "2026-10-04T23:19:28.310+00:00",
       "payload": "k05VTVBZAQB2AHsnZGVzY3InOiAnfHUxJywgJ2ZvcnRyYW5fb3JkZXInOiBGYWxzZSwgJ3NoYXBlJzogKDIsIDMpLCB9ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAoAAQIDBAU=",
       "constitution": {
         "_kind": "simple",

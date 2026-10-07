@@ -69,10 +69,18 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
         except Exception:
             pass
 
-    def _resolve_children(self) -> list[Future]:
-        """Look up child Future objects from the future bank."""
+    def _resolve_children(self, *, strict: bool = True) -> list[Future]:
+        """Look up child Future objects from the future bank.
+
+        With ``strict=False`` children that have already been released
+        from the bank are skipped instead of raising ``KeyError`` --
+        used by the introspection paths (``status``, ``what``, ``repr``)
+        which must stay safe to call after :meth:`release`.
+        """
         bank = _get_future_bank()
-        return [bank[fid] for fid in self.future_ids]
+        if strict:
+            return [bank[fid] for fid in self.future_ids]
+        return [bank[fid] for fid in self.future_ids if fid in bank]
 
     def release(self, *, children: bool = True) -> None:
         """Release this group -- and by default every child -- from the future bank.
@@ -124,11 +132,18 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
         The percentages always sum to 100 except in the empty-group
         edge case (everything is reported as 100% ``not_started`` for a
         group with no children, so callers can rely on the same dict
-        shape regardless of population).
+        shape regardless of population). ``total`` is always the number
+        of child ids in the group; percentages are computed over the
+        children still present in the future bank, so a group whose
+        children were released reports the empty-group percentages
+        rather than raising. Non-terminal transient states
+        (``POLL_TIMEOUT`` -- a poll timed out, the task is still in
+        flight -- and ``UNKNOWN``) are counted as ``running``.
         """
-        if not self.future_ids:
+        children = self._resolve_children(strict=False) if self.future_ids else []
+        if not children:
             return {
-                "total": 0.0,
+                "total": float(len(self.future_ids)),
                 "percentages": {
                     "finished": 0.0,
                     "running": 0.0,
@@ -138,23 +153,26 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
                 },
             }
 
-        children = self._resolve_children()
-        total = float(len(children))
+        live = float(len(children))
         statuses = [f.status for f in children]
-        running = sum(1 for s in statuses if s == FutureStatus.RUNNING)
+        running = sum(
+            1
+            for s in statuses
+            if s in (FutureStatus.RUNNING, FutureStatus.POLL_TIMEOUT, FutureStatus.UNKNOWN)
+        )
         not_started = sum(1 for s in statuses if s == FutureStatus.NOT_STARTED)
         cancelled = sum(1 for s in statuses if s == FutureStatus.CANCELLED)
         finished = sum(1 for s in statuses if s == FutureStatus.FINISHED)
         error = sum(1 for s in statuses if s == FutureStatus.ERROR)
 
         return {
-            "total": total,
+            "total": float(len(self.future_ids)),
             "percentages": {
-                "finished": (finished / total) * 100.0,
-                "running": (running / total) * 100.0,
-                "not_started": (not_started / total) * 100.0,
-                "error": (error / total) * 100.0,
-                "cancelled": (cancelled / total) * 100.0,
+                "finished": (finished / live) * 100.0,
+                "running": (running / live) * 100.0,
+                "not_started": (not_started / live) * 100.0,
+                "error": (error / live) * 100.0,
+                "cancelled": (cancelled / live) * 100.0,
             },
         }
 
@@ -247,6 +265,19 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
 
         return park_async(_await_all()).__await__()
 
+    @property
+    def exception(self) -> BaseException | None:
+        """First child exception, or ``None`` when no child has failed.
+
+        Mirrors :attr:`Future.exception` so that group handles work with
+        ``laila.runtime.exception(...)`` and the other status helpers.
+        """
+        for f in self._resolve_children(strict=False):
+            exc = getattr(f, "exception", None)
+            if exc is not None:
+                return exc
+        return None
+
     # ---------- introspection ----------
     @property
     def what(self) -> dict[str, dict[str, Any]]:
@@ -257,7 +288,7 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
         not_cancelled_ids = []
         errors: dict[str, str] = {}
 
-        children = self._resolve_children()
+        children = self._resolve_children(strict=False)
         for f in children:
             fid = f.global_id
             if hasattr(f, "what"):
@@ -268,7 +299,7 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
                 det = {
                     fid: {
                         "status": getattr(f, "status", FutureStatus.UNKNOWN).value,
-                        "error": repr(f.outcome)
+                        "error": repr(f.exception)
                         if getattr(f, "status", None) == FutureStatus.ERROR
                         else None,
                     }
@@ -283,7 +314,7 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
                     not_cancelled_ids.append(fid)
 
                 if f.status == FutureStatus.ERROR:
-                    errors[fid] = repr(f.outcome)
+                    errors[fid] = repr(f.exception)
             except Exception as e:
                 errors[fid] = repr(e)
 

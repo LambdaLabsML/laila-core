@@ -29,7 +29,8 @@ from typing import Any
 from pydantic import Field, PrivateAttr
 
 from ... import protocol as rpc_protocol
-from .base import _CarrierRPCProtocol
+from .base import _PEER_CONNECT, _CarrierRPCProtocol
+from .loopthread import cancel_pending_tasks, start_loop_thread, stop_loop_thread
 
 log = logging.getLogger(__name__)
 
@@ -79,28 +80,13 @@ class _RegisterRPCProtocol(_CarrierRPCProtocol):
         if self._started:
             return
         self._ensure_executor()
-        self._event_loop = asyncio.new_event_loop()
-        ready = threading.Event()
-        boot: dict[str, BaseException] = {}
-
-        def _run_loop() -> None:
-            asyncio.set_event_loop(self._event_loop)
-            try:
-                self._event_loop.run_until_complete(self._async_start(ready))
-            except BaseException as exc:
-                boot["error"] = exc
-                ready.set()
-                return
-            self._event_loop.run_forever()
-
-        self._loop_thread = threading.Thread(
-            target=_run_loop, daemon=True, name=f"{type(self).__name__}-loop"
-        )
-        self._loop_thread.start()
-        ready.wait(timeout=max(self.handshake_timeout, 10.0))
-        if "error" in boot:
-            self._started = False
-            raise boot["error"]
+        try:
+            start_loop_thread(
+                self, self._async_start, ready_timeout=max(self.handshake_timeout, 10.0)
+            )
+        except BaseException:
+            self._shutdown_executor()
+            raise
         self._started = True
 
     async def _async_start(self, ready: threading.Event) -> None:
@@ -109,40 +95,34 @@ class _RegisterRPCProtocol(_CarrierRPCProtocol):
         ready.set()
 
     def stop(self) -> None:
-        """Stop polling, close the bus, stop the loop (idempotent)."""
+        """Say goodbye, stop polling, close the bus, stop the loop (idempotent)."""
         if not self._started:
             return
 
         async def _shutdown() -> None:
+            await self._goodbye_all()
+            for peer_id in list(self._connections):
+                self._unregister_peer(peer_id)
+            self._shutdown_lanes()
             if self._poll_task is not None:
                 self._poll_task.cancel()
+                await asyncio.gather(self._poll_task, return_exceptions=True)
+                self._poll_task = None
             await self._close_bus()
-            pending = [
-                task
-                for task in asyncio.all_tasks(self._event_loop)
-                if task is not asyncio.current_task()
-            ]
-            for task in pending:
-                task.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
+            await cancel_pending_tasks()
 
-        if self._event_loop is not None and self._event_loop.is_running():
-            try:
-                fut = asyncio.run_coroutine_threadsafe(_shutdown(), self._event_loop)
-                fut.result(timeout=5.0)
-            except Exception:
-                pass
-            self._event_loop.call_soon_threadsafe(self._event_loop.stop)
-
-        if self._loop_thread is not None:
-            self._loop_thread.join(timeout=5.0)
-            self._loop_thread = None
-
+        stop_loop_thread(self, _shutdown)
+        self._shutdown_lanes()
         self._handshake_pending.clear()
         self._pending_rpcs.clear()
         self._shutdown_executor()
         self._started = False
+
+    async def _send_goodbye(self, peer_id: str) -> None:
+        """Write ``peer.disconnect`` into the peer's mailbox."""
+        if peer_id not in self._connections:
+            return
+        await self._deliver(self._encode(self._goodbye_message()))
 
     async def _poll_loop(self) -> None:
         """Continuously poll the mailbox and dispatch inbound frames."""
@@ -168,8 +148,10 @@ class _RegisterRPCProtocol(_CarrierRPCProtocol):
         except Exception:
             return
         if rpc_protocol.is_request(msg):
-            if msg.get("method") == "peer.connect":
+            if msg.get("method") == _PEER_CONNECT:
                 self._handle_handshake(msg)
+            elif self._is_goodbye(msg):
+                self._on_peer_goodbye((msg.get("params") or {}).get("from_id"))
             else:
                 self._dispatch_request(msg)
         elif rpc_protocol.is_response(msg):
@@ -201,7 +183,7 @@ class _RegisterRPCProtocol(_CarrierRPCProtocol):
 
     def _deliver_async(self, obj: dict) -> None:
         data = self._encode(obj)
-        self._event_loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self._deliver(data)))
+        self._loop_call(lambda: asyncio.ensure_future(self._deliver(data)))
 
     # ------------------------------------------------------------------
     # Peering / RPC
@@ -238,5 +220,9 @@ class _RegisterRPCProtocol(_CarrierRPCProtocol):
             raise ConnectionError(f"No connection to peer {peer_id}")
         request_id, slot = self._register_pending()
         req = self._make_rpc_request(path, args, kwargs, request_id)
-        self._deliver_async(req)
+        try:
+            self._deliver_async(req)
+        except ConnectionError:
+            self._pending_rpcs.pop(request_id, None)
+            raise
         return self._await_pending(request_id, slot)

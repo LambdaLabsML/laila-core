@@ -17,21 +17,42 @@ from cryptography.fernet import Fernet
 key = Fernet.generate_key()
 ```
 
-## Build an encrypted pool
+## Register the key with LAILA
 
-`transformation_base64_compression_encryption(key)` returns a pre-built sequence that compresses, encrypts, then base64-encodes. Pass it to any pool via the `transformations` field — the same recipe works for S3, HDF5, SQLite, or any other backend:
+Like every other secret, the key lives in `laila.args`. Set it once per process, on
+**both** the writing and the reading side. The canonical location is
+`laila.args.encryption.key`; `laila.encryption_key` is a convenience alias:
 
 ```python
 import laila
+laila.encryption_key = key            # same as: laila.args.encryption.key = key
+```
+
+A secrets file loaded through `laila.read_args(...)` works too, e.g. a TOML file
+containing an `[encryption]` table with `key = "..."`.
+
+The key is never embedded in what gets stored: the recovery code written next to the
+ciphertext carries only a short fingerprint of the key, so a reader configured with a
+different key gets a clear `ValueError` instead of garbage.
+
+## Build an encrypted pool
+
+`transformation_base64_compression_encryption()` returns a pre-built sequence that compresses, encrypts, then base64-encodes, picking the key up from `laila.encryption_key`. Pass it to any pool via the `transformations` field — the same recipe works for S3, HDF5, SQLite, or any other backend:
+
+```python
 from laila.entry import transformation_base64_compression_encryption
 from laila.data import FilesystemPool
 
 vault = FilesystemPool(
     nickname="vault",
-    transformations=transformation_base64_compression_encryption(key),
+    transformations=transformation_base64_compression_encryption(),
 )
 laila.memory.extend(vault, pool_nickname="vault")
 ```
+
+Passing an explicit `key=` to the factory (or to `FernetEncryption(key=...)`) is still
+supported for ad-hoc pipelines; the reading side still resolves the key from its own
+`laila.encryption_key`.
 
 ## Memorize a secret
 
@@ -71,14 +92,15 @@ print(recovered.data)
 | Topic | Note |
 |---|---|
 | Key rotation | Re-encrypt by reading with the old key pool and writing to a new pool built with the new key. |
-| Key storage | Use a real KMS or the `secrets/` subdirectory under `set_default_directory`. |
+| Key storage | Use a real KMS or a file in the `secrets/` subdirectory under `set_default_directory`, loaded with `laila.read_args(...)` into `laila.args.encryption.key`. |
+| Key mismatch | Reading with a different `laila.encryption_key` than the writer raises `ValueError` mentioning the writer's key fingerprint. |
 | TTLs | `FernetEncryption.backward_kwargs = {"ttl": seconds}` rejects tokens older than the cutoff. |
 | Layering | Drop the encryption step into any `TransformationSequence` — it composes with compression, base64, and serializers freely. |
 
 ## Summary
 
 - `FernetEncryption` is one transformation step among many.
-- `transformation_base64_compression_encryption(key)` is the ready-made sequence for compact, encrypted blobs.
+- `transformation_base64_compression_encryption()` is the ready-made sequence for compact, encrypted blobs; the key comes from `laila.encryption_key` on both sides.
 - Decryption happens transparently inside `remember` — your code never sees ciphertext.
 
 Next: [Tutorial 19 — Object Stores Beyond AWS](19_object_stores_beyond_aws.md).

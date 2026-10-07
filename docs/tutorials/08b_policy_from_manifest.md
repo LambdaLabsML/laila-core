@@ -21,6 +21,12 @@ from laila.macros.defaults import DefaultPolicy
 from dotmap import DotMap
 
 laila.read_args("./secrets.toml")
+# secrets.toml example:
+#
+#   AWS_BUCKET_NAME = "my-bucket"
+#   AWS_ACCESS_KEY_ID = "AKIA..."
+#   AWS_SECRET_ACCESS_KEY = "..."
+#   AWS_REGION = "us-east-1"
 ```
 
 ## Step 1: Bootstrap a minimal policy

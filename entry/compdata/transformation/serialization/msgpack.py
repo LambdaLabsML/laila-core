@@ -1,4 +1,10 @@
-"""Msgpack serialisation / deserialisation transformation."""
+"""Msgpack serialisation / deserialisation transformation.
+
+``backward`` (and the emitted ``backward_code``) unpack with
+``strict_map_key=False`` so that dict payloads keyed by ``int`` /
+``float`` / ``bool`` -- which msgpack packs without complaint -- round-trip
+instead of raising ``ValueError`` on the way back.
+"""
 
 import textwrap
 from typing import Any
@@ -18,7 +24,7 @@ class MsgpackSerializer(_data_transformation):
         self.backward_code = textwrap.dedent(f"""
             def backward(inp):
                 import msgpack
-                kwargs = {{"raw": False, **{self.backward_kwargs!r}}}
+                kwargs = {{"raw": False, "strict_map_key": False, **{self.backward_kwargs!r}}}
                 return msgpack.unpackb(inp, **kwargs)
         """)
 
@@ -51,5 +57,5 @@ class MsgpackSerializer(_data_transformation):
         Any
             Deserialized Python object.
         """
-        kwargs = {"raw": False, **self.backward_kwargs}
+        kwargs = {"raw": False, "strict_map_key": False, **self.backward_kwargs}
         return msgpack.unpackb(inp, **kwargs)

@@ -35,6 +35,7 @@ logic on top of these helpers.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import time
@@ -60,6 +61,14 @@ _COMM_CHANNEL_OPEN_PATH = ["__comm_channel_open__"]
 _COMM_CHANNEL_CLOSE_PATH = ["__comm_channel_close__"]
 #: Highest allocatable lane id; ``0`` is reserved for RPC/control.
 _MAX_LANE = 255
+
+#: Peering control methods (top-level JSON-RPC ``method`` values).
+_PEER_CONNECT = "peer.connect"
+#: Notification a side sends right before dropping a peer / stopping, so
+#: the other side unregisters it at once rather than on liveness timeout.
+_PEER_DISCONNECT = "peer.disconnect"
+#: Upper bound on how long ``disconnect()`` waits for the goodbye to go out.
+_GOODBYE_TIMEOUT = 1.0
 
 
 class BackpressureError(RuntimeError):
@@ -329,14 +338,86 @@ class _CarrierRPCProtocol(_LAILA_IDENTIFIABLE_COMM_PROTOCOL):
         return peer_id in self._connections
 
     def disconnect(self, peer_id: str) -> None:
-        """Tear down a single peer's connection. Idempotent.
+        """Gracefully drop a single peer. Idempotent.
 
-        Carriers that hold a closable handle (socket/writer) override this
-        to close it; the base just drops the registry entry and notifies
-        the hub.
+        Sends the ``peer.disconnect`` notification (bounded, best effort)
+        so the remote unregisters us immediately, then unregisters the
+        peer locally -- which closes its lanes and, on carriers that hold
+        a closable handle, the handle itself (:meth:`_unregister_peer`).
         """
-        if peer_id in self._connections:
+        if peer_id not in self._connections:
+            return
+        self._goodbye_threadsafe(peer_id)
+        self._unregister_peer(peer_id)
+
+    # ------------------------------------------------------------------
+    # Graceful goodbye (``peer.disconnect``)
+    # ------------------------------------------------------------------
+
+    def _goodbye_message(self) -> dict:
+        """The ``peer.disconnect`` notification this endpoint sends."""
+        policy_id = self._communication.policy_id if self._communication else None
+        return rpc_protocol.make_notification(_PEER_DISCONNECT, {"from_id": policy_id})
+
+    @staticmethod
+    def _is_goodbye(msg: dict) -> bool:
+        """``True`` for an inbound ``peer.disconnect`` notification."""
+        return msg.get("method") == _PEER_DISCONNECT
+
+    async def _send_goodbye(self, peer_id: str) -> None:
+        """Write the goodbye to *peer_id* and wait (bounded) for it to leave.
+
+        Runs on the carrier loop. Default no-op; wire carriers override
+        with their own write primitive. Must never raise.
+        """
+        return None
+
+    async def _goodbye_all(self) -> None:
+        """Say goodbye to every registered peer (first step of ``stop()``)."""
+        for peer_id in list(self._connections):
+            try:
+                await asyncio.wait_for(self._send_goodbye(peer_id), timeout=_GOODBYE_TIMEOUT)
+            except Exception:
+                log.debug("goodbye to %s failed", peer_id, exc_info=True)
+
+    def _goodbye_threadsafe(self, peer_id: str) -> None:
+        """Run :meth:`_send_goodbye` from a user thread, bounded; never raises."""
+        loop = getattr(self, "_event_loop", None)
+        if loop is None or loop.is_closed() or not loop.is_running():
+            return
+        try:
+            if asyncio.get_running_loop() is loop:
+                # On the loop thread we cannot block; the caller is tearing
+                # the connection down right after, so skip the goodbye.
+                return
+        except RuntimeError:
+            pass
+        try:
+            fut = asyncio.run_coroutine_threadsafe(self._send_goodbye(peer_id), loop)
+            fut.result(timeout=_GOODBYE_TIMEOUT)
+        except Exception:
+            log.debug("goodbye to %s failed", peer_id, exc_info=True)
+
+    def _on_peer_goodbye(self, peer_id: str | None) -> None:
+        """Inbound ``peer.disconnect`` from an authenticated *peer_id*: drop it."""
+        if peer_id is not None and peer_id in self._connections:
             self._unregister_peer(peer_id)
+
+    def _loop_call(self, fn: Any, *args: Any) -> None:
+        """``call_soon_threadsafe`` on the carrier loop, or ``ConnectionError``.
+
+        The single place user-thread sends cross into the loop thread, so
+        a send after ``stop()`` (loop gone or closed) always surfaces as a
+        clear :class:`ConnectionError` rather than an ``AttributeError``
+        or asyncio's ``RuntimeError``.
+        """
+        loop = getattr(self, "_event_loop", None)
+        if loop is None or loop.is_closed():
+            raise ConnectionError(f"{self.protocol_name!r} transport is shut down.")
+        try:
+            loop.call_soon_threadsafe(fn, *args)
+        except RuntimeError as exc:
+            raise ConnectionError(f"{self.protocol_name!r} transport is shut down.") from exc
 
     # ------------------------------------------------------------------
     # Stream lanes

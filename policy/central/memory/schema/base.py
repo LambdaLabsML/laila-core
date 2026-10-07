@@ -269,6 +269,15 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
 
         src_pool = self._resolve_pool_ref(pool_src)
         dest_pool = self._resolve_pool_ref(pool_dest)
+        # Both legs are routed through central memory by pool gid, so an
+        # unregistered pool would otherwise fail per entry with an opaque
+        # KeyError on the gid. Check up front and say what to do instead.
+        for role, pool in (("source", src_pool), ("destination", dest_pool)):
+            if pool.global_id not in self.pool_router.pools:
+                raise KeyError(
+                    f"{role} pool {pool.global_id} is not registered with central memory; "
+                    "call laila.memory.extend(pool) first"
+                )
         entry_ids = list(src_pool.keys())
 
         duplicate_futures = {
@@ -469,7 +478,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             bump = getattr(e, "bump_evolution_if_locally_modified", None)
             if bump is not None:
                 bump()
-            record = Record(entry=e, creator=pgid, borrower=pgid)
+            record = Record(entry=e, recorder=pgid)
             blob = record.serialize(transformations=t)
             if hasattr(blob, "data"):
                 blob = blob.data

@@ -18,6 +18,10 @@ HF_REPO_ID = "your-username/laila-demo"
 ```python
 import laila
 laila.read_args("./secrets.toml")
+# secrets.toml example:
+#
+#   HF_TOKEN = "hf_..."
+#   HF_REPO_ID = "your-username/laila-demo"
 ```
 
 ## Build the pool

@@ -688,6 +688,21 @@ class _LAILA_IDENTIFIABLE_OBJECT(_LAILA_OBJECT):
         """
         return hash(self.global_id)
 
+    def __eq__(self, other: object) -> bool:
+        """Equality follows identity: same :attr:`global_id` means the
+        same object, regardless of payload, timestamps or process-local
+        state. This is the counterpart of :meth:`__hash__`; without it
+        two handles to one identity would hash alike yet compare unequal
+        and set / dict de-duplication would be unreliable.
+        """
+        if not isinstance(other, _LAILA_IDENTIFIABLE_OBJECT):
+            return NotImplemented
+        return self.global_id == other.global_id
+
+    def __ne__(self, other: object) -> bool:
+        eq = self.__eq__(other)
+        return eq if eq is NotImplemented else not eq
+
     def identity(self) -> dict[str, Any]:
         """Return a minimal dict describing this object's identity.
 

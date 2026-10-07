@@ -2,7 +2,7 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -euo pipefail -c
 
-.PHONY: help init lint fmt typecheck test test-fast test-cloud cov build clean docs docs-serve release-dryrun
+.PHONY: help init lint fmt typecheck test test-fast test-cloud test-workloads cov build clean docs docs-serve release-dryrun
 
 help:
 	@echo "laila — developer targets"
@@ -14,6 +14,7 @@ help:
 	@echo "  make test           Run the full test suite"
 	@echo "  make test-fast      Run only non-cloud, non-slow tests"
 	@echo "  make test-cloud     Run cloud-marked tests (requires creds)"
+	@echo "  make test-workloads Run the long-running workload/stress suite (tests/workloads)"
 	@echo "  make cov            Run tests with coverage report"
 	@echo "  make build          Build sdist + wheel into dist/"
 	@echo "  make clean          Remove build/dist/cache artifacts"
@@ -45,6 +46,11 @@ test-fast:
 
 test-cloud:
 	python -m pytest tests/ -m "cloud"
+
+# Long-running real-workload / stress suite (opt-in; ~1h on a 2-CPU box).
+# Tune with LAILA_WORKLOAD_SCALE=<float> and LAILA_WORKLOAD_TIMEOUT=<seconds>.
+test-workloads:
+	python -m pytest tests/workloads -m "workload" --tb=short -p no:cacheprovider
 
 transports-emulators-up:
 	docker compose -f tests/transports/emulators/docker-compose.yml up -d

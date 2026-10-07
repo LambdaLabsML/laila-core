@@ -32,6 +32,7 @@ from typing import Any, ClassVar
 from pydantic import Field, PrivateAttr
 
 from .. import protocol as rpc_protocol
+from ._carriers.loopthread import cancel_pending_tasks, start_loop_thread, stop_loop_thread
 from .base import _LAILA_IDENTIFIABLE_COMM_PROTOCOL
 
 log = logging.getLogger(__name__)
@@ -77,6 +78,10 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=0)
     peer_secret_key: str = Field(default_factory=lambda: _uuid.uuid4().hex)
+    #: Seconds a blocking :meth:`send_rpc` waits for the response.
+    rpc_timeout: float = Field(default=60.0)
+    #: Bound on a liveness :meth:`ping` round trip.
+    ping_timeout: float = Field(default=5.0)
 
     _server: Any = PrivateAttr(default=None)
     _connections: dict[str, Any] = PrivateAttr(default_factory=dict)
@@ -129,17 +134,7 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
         if self._started:
             return
 
-        self._event_loop = asyncio.new_event_loop()
-        ready = threading.Event()
-
-        def _run_loop() -> None:
-            asyncio.set_event_loop(self._event_loop)
-            self._event_loop.run_until_complete(self._async_start(ready))
-            self._event_loop.run_forever()
-
-        self._loop_thread = threading.Thread(target=_run_loop, daemon=True)
-        self._loop_thread.start()
-        ready.wait(timeout=10.0)
+        start_loop_thread(self, self._async_start, ready_timeout=10.0)
         self._started = True
         policy_id = self._communication.policy_id if self._communication else None
         log.info(
@@ -166,46 +161,36 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
         """Tear down the server, close every peer socket, and stop the loop.
 
         Idempotent: returns immediately when ``_started`` is False.
-        Cancels every outstanding task on the loop, joins the loop
-        thread (with a five-second timeout), clears the
-        pending-RPC table, and resets internal state so a subsequent
-        :meth:`start` brings the protocol back up cleanly.
+        Closes every peer socket (a WebSocket close frame is the
+        graceful goodbye; the remote's receive loop ends and it
+        unregisters us), closes the server, cancels *and awaits* every
+        outstanding task, joins the loop thread and closes the loop,
+        then clears the pending-RPC table so a subsequent :meth:`start`
+        brings the protocol back up cleanly.
         """
         if not self._started:
             return
 
         async def _shutdown() -> None:
-            if self._server is not None:
-                self._server.close()
-                await self._server.wait_closed()
-                self._server = None
-
             close_tasks = []
             for ws in list(self._connections.values()):
                 close_tasks.append(asyncio.ensure_future(ws.close()))
             if close_tasks:
                 await asyncio.gather(*close_tasks, return_exceptions=True)
-            self._connections.clear()
+            for peer_id in list(self._connections):
+                self._unregister_peer(peer_id)
 
-            for task in asyncio.all_tasks(self._event_loop):
-                if task is not asyncio.current_task():
-                    task.cancel()
+            if self._server is not None:
+                self._server.close()
+                try:
+                    await asyncio.wait_for(self._server.wait_closed(), timeout=2.0)
+                except Exception:
+                    pass
+                self._server = None
 
-        if self._event_loop is not None and self._event_loop.is_running():
-            future = asyncio.run_coroutine_threadsafe(
-                _shutdown(),
-                self._event_loop,
-            )
-            try:
-                future.result(timeout=5.0)
-            except Exception:
-                pass
-            self._event_loop.call_soon_threadsafe(self._event_loop.stop)
+            await cancel_pending_tasks()
 
-        if self._loop_thread is not None:
-            self._loop_thread.join(timeout=5.0)
-            self._loop_thread = None
-
+        stop_loop_thread(self, _shutdown)
         self._pending_rpcs.clear()
         self._bound_port = None
         self._started = False
@@ -267,9 +252,51 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
         """Return ``True`` if a live WebSocket to *peer_id* is currently held."""
         return peer_id in self._connections
 
+    def disconnect(self, peer_id: str) -> None:
+        """Close the WebSocket to *peer_id* and drop it. Idempotent.
+
+        The close handshake is the graceful goodbye: the remote's receive
+        loop ends with ``ConnectionClosed`` and unregisters us. Bounded
+        so a dead peer cannot stall the caller.
+        """
+        ws = self._connections.get(peer_id)
+        if ws is None:
+            return
+        loop = self._event_loop
+        if loop is not None and not loop.is_closed() and loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(ws.close(), loop).result(timeout=2.0)
+            except Exception:
+                log.debug("closing WebSocket to %s failed", peer_id, exc_info=True)
+        self._unregister_peer(peer_id)
+
     # ------------------------------------------------------------------
     # RPC (outbound)
     # ------------------------------------------------------------------
+
+    def ping(self, peer_id: str, timeout: float | None = None) -> bool:
+        """Round-trip the reserved ``__comm_ping__`` frame to *peer_id*.
+
+        Answered by the remote's :mod:`.connection` dispatcher before it
+        touches the policy. ``False`` on any transport error or timeout,
+        so the liveness loop drops only peers that really stopped
+        answering.
+        """
+        if not self.has_peer(peer_id):
+            return False
+        try:
+            return (
+                self._send(
+                    peer_id,
+                    ["__comm_ping__"],
+                    (),
+                    {},
+                    timeout=timeout if timeout is not None else self.ping_timeout,
+                )
+                == "pong"
+            )
+        except Exception:
+            return False
 
     def send_rpc(self, peer_id: str, path: list[str], args: tuple, kwargs: dict) -> Any:
         """Send an RPC call over the WebSocket to *peer_id* and block for the response.
@@ -277,20 +304,30 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
         Allocates a fresh request id, registers a pending-RPC slot
         keyed by that id, dispatches the encoded frame from the
         protocol's event loop, and waits on a
-        :class:`threading.Event` for up to sixty seconds. The
-        inbound dispatcher in :mod:`.connection` flips the event when
-        the matching response arrives.
+        :class:`threading.Event` for up to :attr:`rpc_timeout` seconds.
+        The inbound dispatcher in :mod:`.connection` flips the event
+        when the matching response arrives.
 
         Raises
         ------
         ConnectionError
             If no live connection to *peer_id* is held.
+        TimeoutError
+            If no response arrived within :attr:`rpc_timeout`.
         RuntimeError
             If the remote returned an error envelope.
         """
+        return self._send(peer_id, path, args, kwargs, timeout=self.rpc_timeout)
+
+    def _send(
+        self, peer_id: str, path: list[str], args: tuple, kwargs: dict, *, timeout: float
+    ) -> Any:
         ws = self._connections.get(peer_id)
         if ws is None:
             raise ConnectionError(f"No connection to peer {peer_id}")
+        loop = self._event_loop
+        if loop is None or loop.is_closed():
+            raise ConnectionError("TCP/IP transport is shut down.")
 
         request_id = str(_uuid.uuid4())
         event = threading.Event()
@@ -307,13 +344,16 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
             request_id=request_id,
         )
 
-        asyncio.run_coroutine_threadsafe(
-            ws.send(rpc_protocol.encode(req)),
-            self._event_loop,
-        )
+        try:
+            asyncio.run_coroutine_threadsafe(ws.send(rpc_protocol.encode(req)), loop)
+        except RuntimeError as exc:
+            self._pending_rpcs.pop(request_id, None)
+            raise ConnectionError("TCP/IP transport is shut down.") from exc
 
-        event.wait(timeout=60.0)
+        completed = event.wait(timeout=timeout)
         self._pending_rpcs.pop(request_id, None)
+        if not completed:
+            raise TimeoutError(f"RPC to peer {peer_id} timed out after {timeout}s.")
 
         if "error" in slot:
             err = slot["error"]

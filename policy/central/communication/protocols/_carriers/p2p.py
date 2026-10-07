@@ -34,7 +34,8 @@ from pydantic import Field, PrivateAttr
 from ... import protocol as rpc_protocol
 from ...channel import Channel
 from . import codec as _codec
-from .base import _CarrierRPCProtocol
+from .base import _PEER_CONNECT, _CarrierRPCProtocol
+from .loopthread import cancel_pending_tasks, start_loop_thread, stop_loop_thread
 from .stream import _Link
 
 log = logging.getLogger(__name__)
@@ -90,28 +91,13 @@ class _P2PStreamRPCProtocol(_CarrierRPCProtocol):
         if self._started:
             return
         self._ensure_executor()
-        self._event_loop = asyncio.new_event_loop()
-        ready = threading.Event()
-        boot: dict[str, BaseException] = {}
-
-        def _run_loop() -> None:
-            asyncio.set_event_loop(self._event_loop)
-            try:
-                self._event_loop.run_until_complete(self._async_start(ready))
-            except BaseException as exc:
-                boot["error"] = exc
-                ready.set()
-                return
-            self._event_loop.run_forever()
-
-        self._loop_thread = threading.Thread(
-            target=_run_loop, daemon=True, name=f"{type(self).__name__}-loop"
-        )
-        self._loop_thread.start()
-        ready.wait(timeout=max(self.handshake_timeout, 10.0))
-        if "error" in boot:
-            self._started = False
-            raise boot["error"]
+        try:
+            start_loop_thread(
+                self, self._async_start, ready_timeout=max(self.handshake_timeout, 10.0)
+            )
+        except BaseException:
+            self._shutdown_executor()
+            raise
         self._started = True
 
     async def _async_start(self, ready: threading.Event) -> None:
@@ -122,44 +108,42 @@ class _P2PStreamRPCProtocol(_CarrierRPCProtocol):
         ready.set()
 
     def stop(self) -> None:
-        """Close lanes, the stream and the loop (idempotent)."""
+        """Close lanes, the stream and the loop (idempotent).
+
+        Order: goodbye to the peer, unregister it, stop the receive task
+        (cancel *and wait*, so ``read_frame()`` has finished with the
+        reader before any fd underneath it is closed), close the stream,
+        cancel and await every remaining task, stop and close the loop.
+        """
         if not self._started:
             return
 
         async def _shutdown() -> None:
+            await self._goodbye_all()
             for peer_id in list(self._connections):
                 self._unregister_peer(peer_id)
             self._shutdown_lanes()
             if self._recv_task is not None:
                 self._recv_task.cancel()
+                await asyncio.gather(self._recv_task, return_exceptions=True)
+                self._recv_task = None
             await self._close_stream()
-            pending = [
-                task
-                for task in asyncio.all_tasks(self._event_loop)
-                if task is not asyncio.current_task()
-            ]
-            for task in pending:
-                task.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
+            await cancel_pending_tasks()
 
-        if self._event_loop is not None and self._event_loop.is_running():
-            try:
-                fut = asyncio.run_coroutine_threadsafe(_shutdown(), self._event_loop)
-                fut.result(timeout=5.0)
-            except Exception:
-                pass
-            self._event_loop.call_soon_threadsafe(self._event_loop.stop)
-
-        if self._loop_thread is not None:
-            self._loop_thread.join(timeout=5.0)
-            self._loop_thread = None
-
+        stop_loop_thread(self, _shutdown)
         self._shutdown_lanes()
         self._handshake_pending.clear()
         self._pending_rpcs.clear()
         self._shutdown_executor()
         self._started = False
+
+    async def _send_goodbye(self, peer_id: str) -> None:
+        """Queue ``peer.disconnect`` on the link and wait for it to be written."""
+        link = self._link
+        if link is None or link.closed or peer_id not in self._connections:
+            return
+        self._queue_frame(self._goodbye_message())
+        await link.flush(timeout=0.5)
 
     # ------------------------------------------------------------------
     # Receive loop / dispatch
@@ -188,8 +172,14 @@ class _P2PStreamRPCProtocol(_CarrierRPCProtocol):
                     continue
                 msg = self._decode(raw)
                 if rpc_protocol.is_request(msg):
-                    if msg.get("method") == "peer.connect":
+                    if msg.get("method") == _PEER_CONNECT:
                         await self._handle_handshake(msg)
+                    elif self._is_goodbye(msg):
+                        # The link stays open (it is the wire itself); only
+                        # the peering is dropped, so a new handshake can follow.
+                        from_id = (msg.get("params") or {}).get("from_id")
+                        if from_id == self._sole_peer():
+                            self._on_peer_goodbye(from_id)
                     else:
                         self._handle_request_frame(msg, reply, peer_id=self._sole_peer())
                 elif rpc_protocol.is_response(msg):
@@ -247,8 +237,8 @@ class _P2PStreamRPCProtocol(_CarrierRPCProtocol):
 
         def _reply(resp: dict) -> None:
             try:
-                self._event_loop.call_soon_threadsafe(self._queue_frame, resp)
-            except RuntimeError:
+                self._loop_call(self._queue_frame, resp)
+            except ConnectionError:
                 pass
 
         return _reply
@@ -268,7 +258,7 @@ class _P2PStreamRPCProtocol(_CarrierRPCProtocol):
         rid = req["id"]
         slot: dict[str, Any] = {"event": threading.Event()}
         self._handshake_pending[rid] = slot
-        self._event_loop.call_soon_threadsafe(self._queue_frame, req)
+        self._loop_call(self._queue_frame, req)
 
         completed = slot["event"].wait(timeout=self.handshake_timeout)
         self._handshake_pending.pop(rid, None)
@@ -290,10 +280,7 @@ class _P2PStreamRPCProtocol(_CarrierRPCProtocol):
     def _queue_rpc_threadsafe(self, msg: dict) -> None:
         if self._link is None or self._link.closed:
             raise ConnectionError("Point-to-point link is not open.")
-        try:
-            self._event_loop.call_soon_threadsafe(self._queue_frame, msg)
-        except RuntimeError as exc:
-            raise ConnectionError("Point-to-point transport is shut down.") from exc
+        self._loop_call(self._queue_frame, msg)
 
     def _send_once(self, peer_id: str, path: list[str], args: tuple, kwargs: dict) -> Any:
         """Write an ``rpc.call`` to the link and block for the response."""
@@ -321,7 +308,4 @@ class _P2PStreamRPCProtocol(_CarrierRPCProtocol):
         link = self._link
         if link is None or link.closed:
             raise ConnectionError("Point-to-point link is not open.")
-        try:
-            self._event_loop.call_soon_threadsafe(link.put_stream, channel, payload)
-        except RuntimeError as exc:
-            raise ConnectionError("Point-to-point transport is shut down.") from exc
+        self._loop_call(link.put_stream, channel, payload)

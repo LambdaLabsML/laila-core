@@ -34,6 +34,12 @@ import laila
 from laila.data import CloudflarePool, HDF5Pool
 
 laila.read_args("./secrets.toml")
+# secrets.toml example:
+#
+#   R2_ACCOUNT_ID = "0123456789abcdef0123456789abcdef"
+#   R2_ACCESS_KEY_ID = "..."
+#   R2_SECRET_ACCESS_KEY = "..."
+#   R2_BUCKET = "my-r2-bucket"
 ```
 
 ## Create the pools and wire the chain

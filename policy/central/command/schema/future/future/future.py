@@ -323,38 +323,57 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
         """
         self._exception = exception
 
+    # The public ``callbacks`` field mirrors the *last* callback registered
+    # per status (a single-slot view); ``_status_callbacks`` is the registry
+    # that actually fires on transitions. Both are kept in step here.
+
     def add_callback(self, status: FutureStatus, fn: Callable[[Future], Any]) -> None:
         """
         Register a callback for a specific status transition.
         """
         self.callbacks[status] = fn
+        self.add_status_callback(status, fn)
 
     def remove_callback(self, status: FutureStatus, fn: Callable[[Future], Any]) -> None:
         """
         Remove a callback for a specific status.
         """
-        self.callbacks[status] = None
+        bucket = self._status_callbacks.get(status)
+        if bucket is not None:
+            while fn in bucket:
+                bucket.remove(fn)
+            if not bucket:
+                self._status_callbacks.pop(status, None)
+        if self.callbacks.get(status) is fn:
+            self.callbacks.pop(status, None)
 
     def clear_callbacks(self, status: FutureStatus) -> None:
         """
         Clear the callback for a specific status.
         """
-        self._callbacks[status] = None
+        self._status_callbacks.pop(status, None)
+        self.callbacks.pop(status, None)
 
     def clear_all_callbacks(self) -> None:
         """
         Clear all registered callbacks.
         """
-        self._callbacks.clear()
+        self._status_callbacks.clear()
+        self.callbacks.clear()
 
     # TODO: This needs to go through the central command.
     def trigger_callback(self, status: FutureStatus) -> None:
         """
-        Trigger the callback for the given status, if present.
+        Fire every callback registered for *status* with this future.
+
+        Callbacks receive the future itself (never the blocking
+        ``.result``), mirroring what the status setter does.
         """
-        fn = self._callbacks[status]
-        if fn is not None:
-            fn(self.result)
+        for fn in list(self._status_callbacks.get(status, ())):
+            try:
+                fn(self)
+            except Exception:
+                pass
 
     @property
     def future_identity(self) -> _LAILA_IDENTIFIABLE_FUTURE:

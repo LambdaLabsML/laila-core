@@ -1,0 +1,140 @@
+{
+  "name": "laila-core",
+  "version": "1.0.12",
+  "description": "Lambda's Interdisciplinary Large Atlas - 1:1 JavaScript port of the Python `laila` package",
+  "license": "MIT",
+  "author": "Amir Zadeh",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./entry": "./src/entry/index.js",
+    "./data": "./src/data/index.js",
+    "./data/*": "./src/data/*/index.js",
+    "./policy": "./src/policy/index.js",
+    "./policy/*": "./src/policy/*",
+    "./runtime": "./src/runtime/index.js",
+    "./logger": "./src/logger/index.js",
+    "./utils": "./src/utils/index.js",
+    "./utils/*": "./src/utils/*",
+    "./macros": "./src/macros/index.js",
+    "./atomic": "./src/atomic/index.js",
+    "./basics": "./src/basics/index.js",
+    "./ndarray": "./src/_compat/ndarray.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "native/loop_pump.c",
+    "native/binding.gyp",
+    "prebuilds",
+    "README.md",
+    "examples"
+  ],
+  "gypfile": false,
+  "scripts": {
+    "install": "cd native && node-gyp-build",
+    "build:native": "cd native && node-gyp rebuild",
+    "prebuild:native": "cd native && prebuildify --napi --strip",
+    "test": "node --test --test-concurrency=4 'tests/**/*.test.js'",
+    "test:unit": "node --test --test-concurrency=4 'tests/unit/*.test.js'",
+    "test:interop": "node --test 'tests/interop/*.test.js'",
+    "test:vectors": "node --test 'tests/vectors/*.test.js'",
+    "vectors": "python3 tests/vectors/gen_vectors.py"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^4.5.0",
+    "node-gyp-build": "^4.8.4",
+    "smol-toml": "^1.3.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "duckdb": "^1",
+    "h5wasm": "^0.7",
+    "node-gyp": "^10.2.0",
+    "prebuildify": "^6.0.1"
+  },
+  "peerDependencies": {
+    "@aws-sdk/client-s3": "^3",
+    "@azure/storage-blob": "^12",
+    "@google-cloud/storage": "^7",
+    "@huggingface/hub": "^1",
+    "@xmpp/client": "^0.13",
+    "amqplib": "^0.10",
+    "duckdb": "^1",
+    "ethernet-ip": "^1",
+    "h5wasm": "^0.7",
+    "i2c-bus": "^5",
+    "jsmodbus": "^4",
+    "mongodb": "^6",
+    "mqtt": "^5",
+    "pg": "^8",
+    "redis": "^4",
+    "serialport": "^12",
+    "socketcan": "^4",
+    "spi-device": "^3",
+    "zeromq": "^6"
+  },
+  "peerDependenciesMeta": {
+    "@aws-sdk/client-s3": {
+      "optional": true
+    },
+    "@azure/storage-blob": {
+      "optional": true
+    },
+    "@google-cloud/storage": {
+      "optional": true
+    },
+    "@huggingface/hub": {
+      "optional": true
+    },
+    "@xmpp/client": {
+      "optional": true
+    },
+    "amqplib": {
+      "optional": true
+    },
+    "duckdb": {
+      "optional": true
+    },
+    "ethernet-ip": {
+      "optional": true
+    },
+    "h5wasm": {
+      "optional": true
+    },
+    "i2c-bus": {
+      "optional": true
+    },
+    "jsmodbus": {
+      "optional": true
+    },
+    "mongodb": {
+      "optional": true
+    },
+    "mqtt": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    },
+    "redis": {
+      "optional": true
+    },
+    "serialport": {
+      "optional": true
+    },
+    "socketcan": {
+      "optional": true
+    },
+    "spi-device": {
+      "optional": true
+    },
+    "zeromq": {
+      "optional": true
+    }
+  }
+}

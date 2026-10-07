@@ -14,9 +14,12 @@ future per child, released as soon as the entries have been collected.
 from __future__ import annotations
 
 import copy
+import hashlib
 import os
 import re
 import sqlite3
+import threading
+import uuid as _uuid
 from collections.abc import Hashable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any, ClassVar
@@ -47,6 +50,69 @@ _SQL_ROW_IDX_COL = "__row_idx__"
 _SQL_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
+_SQL_META_TABLE = "__laila_index_meta__"
+
+
+class _SqlResult:
+    """Eagerly fetched query result with the cursor methods the index uses."""
+
+    __slots__ = ("_rows",)
+
+    def __init__(self, rows: list) -> None:
+        self._rows = rows
+
+    def fetchall(self) -> list:
+        rows, self._rows = self._rows, []
+        return rows
+
+    def fetchone(self):
+        return self._rows.pop(0) if self._rows else None
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+
+class _LockedConnection:
+    """Serialize every use of one ``sqlite3`` connection behind an ``RLock``.
+
+    The index connection is opened with ``check_same_thread=False`` so
+    queries can come from any thread (taskforce workers included), but
+    CPython's ``sqlite3`` cursors and statement cache are not safe for
+    concurrent use: two threads running the same statement text could
+    reset each other's cursor and read truncated / duplicated rows.
+    Every statement here runs *and* fetches under the lock, so callers
+    get a complete, consistent result regardless of thread.
+    """
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+        self.lock = threading.RLock()
+
+    def execute(self, sql: str, params: Iterable[Any] = ()) -> _SqlResult:
+        with self.lock:
+            cursor = self._conn.execute(sql, tuple(params))
+            try:
+                rows = cursor.fetchall()
+            finally:
+                cursor.close()
+            return _SqlResult(rows)
+
+    def executemany(self, sql: str, seq_of_params: Iterable[Iterable[Any]]) -> None:
+        with self.lock:
+            self._conn.executemany(sql, seq_of_params).close()
+
+    def commit(self) -> None:
+        with self.lock:
+            self._conn.commit()
+
+    def close(self) -> None:
+        with self.lock:
+            self._conn.close()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._conn, name)
+
+
 @dataclass
 class _SqlState:
     """In-memory handle for a manifest's non-memorizing SQL index.
@@ -57,7 +123,7 @@ class _SqlState:
     on-the-wire serialization.
     """
 
-    conn: sqlite3.Connection
+    conn: _LockedConnection
     db_path: str
     is_persistent: bool
     table_name: str
@@ -455,30 +521,34 @@ class Manifest(Entry):
         """
         select_items, _from_alias, where = Manifest._parse_sql(query)
 
-        if self._sql_state is None:
-            self.build_index()
-        elif self._sql_state.stale:
-            self._sql_rebuild_in_place(widen=True)
+        # The manifest's own (re-entrant) lock serializes build / rebuild /
+        # query / clear across threads; the connection adds its own
+        # statement-level lock underneath.
+        with self.atomic():
+            if self._sql_state is None:
+                self.build_index()
+            elif self._sql_state.stale:
+                self._sql_rebuild_in_place(widen=True)
 
-        state = self._sql_state
-        sql_text = f'SELECT "{_SQL_ROW_IDX_COL}" FROM "{state.table_name}"'
-        if where:
-            sql_text += f" WHERE {where}"
+            state = self._sql_state
+            sql_text = f'SELECT "{_SQL_ROW_IDX_COL}" FROM "{state.table_name}"'
+            if where:
+                sql_text += f" WHERE {where}"
 
-        try:
-            cursor = state.conn.execute(sql_text)
-            matched_idx = [row[0] for row in cursor.fetchall()]
-        except sqlite3.OperationalError as exc:
-            message = str(exc)
-            if "no such column" in message:
-                raise ValueError(
-                    f"{message}. If you meant a string literal, wrap it in single "
-                    "quotes (e.g. WHERE owner = 'alice'); unquoted barewords are "
-                    "treated as column names by SQL."
-                ) from exc
-            raise
+            try:
+                cursor = state.conn.execute(sql_text)
+                matched_idx = [row[0] for row in cursor.fetchall()]
+            except sqlite3.OperationalError as exc:
+                message = str(exc)
+                if "no such column" in message:
+                    raise ValueError(
+                        f"{message}. If you meant a string literal, wrap it in single "
+                        "quotes (e.g. WHERE owner = 'alice'); unquoted barewords are "
+                        "treated as column names by SQL."
+                    ) from exc
+                raise
 
-        matched_keys = [state.row_keys[i] for i in matched_idx]
+            matched_keys = [state.row_keys[i] for i in matched_idx]
         return self._sql_project(matched_keys, select_items)
 
     def build_index(
@@ -502,11 +572,12 @@ class Manifest(Entry):
         rebuild when it already holds a matching table); otherwise the
         index lives under ``<laila_root>/indices/<manifest-uuid>/``.
         """
-        if self._sql_state is not None:
-            if self._sql_state.stale:
-                self._sql_rebuild_in_place(widen=widen)
-            return
-        self._sql_build_fresh(on=on, composite=composite, persist=persist)
+        with self.atomic():
+            if self._sql_state is not None:
+                if self._sql_state.stale:
+                    self._sql_rebuild_in_place(widen=widen)
+                return
+            self._sql_build_fresh(on=on, composite=composite, persist=persist)
 
     def invalidate_index(self) -> None:
         """Mark the cached index stale without closing the connection.
@@ -527,21 +598,22 @@ class Manifest(Entry):
         place unless ``remove_persisted`` is true.  After
         ``clear_index()`` the next :meth:`sql` rebuilds from scratch.
         """
-        finalizer = self._sql_finalizer
-        if finalizer is not None:
-            finalizer.detach()
-            self._sql_finalizer = None
+        with self.atomic():
+            finalizer = self._sql_finalizer
+            if finalizer is not None:
+                finalizer.detach()
+                self._sql_finalizer = None
 
-        state = self._sql_state
-        if state is None:
-            return
-        try:
-            state.conn.close()
-        except Exception:
-            pass
-        if (not state.is_persistent) or remove_persisted:
-            Manifest._sql_unlink_db(state.db_path)
-        self._sql_state = None
+            state = self._sql_state
+            if state is None:
+                return
+            try:
+                state.conn.close()
+            except Exception:
+                pass
+            if (not state.is_persistent) or remove_persisted:
+                Manifest._sql_unlink_db(state.db_path)
+            self._sql_state = None
 
     # ----- Subclass hooks --------------------------------------------
 
@@ -672,12 +744,18 @@ class Manifest(Entry):
     # ----- SQL index internals ---------------------------------------
 
     def _index_db_path(self) -> str:
-        """Default on-disk path for this manifest's index file."""
+        """Default on-disk path for this manifest's index file.
+
+        One file per *instance* (``<pid>-<random>.laila_sqlitedb``) inside
+        the per-manifest ``indices/<uuid>/`` directory: two live manifests
+        that share a uuid (same nickname, or the same gid loaded twice)
+        must never attach to each other's temporary table.
+        """
         from .....macros.defaults import LAILA_DEFAULT_DIRECTORIES
 
         base = os.path.join(LAILA_DEFAULT_DIRECTORIES["indices"], self.uuid)
         os.makedirs(base, exist_ok=True)
-        return os.path.join(base, "sql_index.laila_sqlitedb")
+        return os.path.join(base, f"{os.getpid()}-{_uuid.uuid4().hex[:8]}.laila_sqlitedb")
 
     def _sql_build_fresh(
         self,
@@ -701,11 +779,15 @@ class Manifest(Entry):
         else:
             db_path = self._index_db_path()
 
-        conn = sqlite3.connect(db_path, check_same_thread=False)
+        conn = _LockedConnection(sqlite3.connect(db_path, check_same_thread=False))
+        fingerprint = Manifest._sql_fingerprint(columns, rows)
 
         if Manifest._index_table_exists(conn) and Manifest._index_row_count(conn) == len(rows):
             existing_columns = Manifest._existing_columns(conn)
-            if set(existing_columns) == set(columns):
+            if (
+                set(existing_columns) == set(columns)
+                and Manifest._read_fingerprint(conn) == fingerprint
+            ):
                 self._sql_state = _SqlState(
                     conn=conn,
                     db_path=db_path,
@@ -720,6 +802,7 @@ class Manifest(Entry):
                 return
 
         Manifest._create_and_populate(conn, columns, rows)
+        Manifest._write_fingerprint(conn, fingerprint)
         indexed = Manifest._apply_indexes(conn, on, composite)
         self._sql_state = _SqlState(
             conn=conn,
@@ -754,6 +837,7 @@ class Manifest(Entry):
         all_columns = list(state.columns) + new_columns
         conn.execute(f'DELETE FROM "{state.table_name}"')
         Manifest._insert_rows(conn, state.table_name, all_columns, rows)
+        Manifest._write_fingerprint(conn, Manifest._sql_fingerprint(columns, rows))
         conn.commit()
 
         state.columns = all_columns
@@ -761,7 +845,39 @@ class Manifest(Entry):
         state.stale = False
 
     @staticmethod
-    def _index_table_exists(conn: sqlite3.Connection) -> bool:
+    def _sql_fingerprint(columns: list[str], rows: list[tuple[Hashable, dict]]) -> str:
+        """Content hash of what the index table holds (columns + rows).
+
+        Rows are validated to be primitive scalars before this runs, so
+        ``repr`` is a stable, order-preserving encoding.
+        """
+        payload = repr((list(columns), [(row_key, row) for row_key, row in rows]))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _write_fingerprint(conn: _LockedConnection, fingerprint: str) -> None:
+        conn.execute(f'CREATE TABLE IF NOT EXISTS "{_SQL_META_TABLE}" (key TEXT PRIMARY KEY, value TEXT)')
+        conn.execute(
+            f'INSERT OR REPLACE INTO "{_SQL_META_TABLE}" (key, value) VALUES (?, ?)',
+            ("fingerprint", fingerprint),
+        )
+        conn.commit()
+
+    @staticmethod
+    def _read_fingerprint(conn: _LockedConnection) -> str | None:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (_SQL_META_TABLE,),
+        ).fetchone()
+        if row is None:
+            return None
+        row = conn.execute(
+            f'SELECT value FROM "{_SQL_META_TABLE}" WHERE key = ?', ("fingerprint",)
+        ).fetchone()
+        return None if row is None else row[0]
+
+    @staticmethod
+    def _index_table_exists(conn: _LockedConnection) -> bool:
         row = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
             (_SQL_INDEX_TABLE,),
@@ -769,22 +885,22 @@ class Manifest(Entry):
         return row is not None
 
     @staticmethod
-    def _index_row_count(conn: sqlite3.Connection) -> int:
+    def _index_row_count(conn: _LockedConnection) -> int:
         return conn.execute(f'SELECT COUNT(*) FROM "{_SQL_INDEX_TABLE}"').fetchone()[0]
 
     @staticmethod
-    def _existing_columns(conn: sqlite3.Connection) -> list[str]:
+    def _existing_columns(conn: _LockedConnection) -> list[str]:
         rows = conn.execute(f'PRAGMA table_info("{_SQL_INDEX_TABLE}")').fetchall()
         return [r[1] for r in rows if r[1] != _SQL_ROW_IDX_COL]
 
     @staticmethod
-    def _existing_indexes(conn: sqlite3.Connection) -> set:
+    def _existing_indexes(conn: _LockedConnection) -> set:
         rows = conn.execute(f'PRAGMA index_list("{_SQL_INDEX_TABLE}")').fetchall()
         return {r[1] for r in rows}
 
     @staticmethod
     def _create_and_populate(
-        conn: sqlite3.Connection,
+        conn: _LockedConnection,
         columns: list[str],
         rows: list[tuple[Hashable, dict]],
     ) -> None:
@@ -801,7 +917,7 @@ class Manifest(Entry):
 
     @staticmethod
     def _insert_rows(
-        conn: sqlite3.Connection,
+        conn: _LockedConnection,
         table: str,
         columns: list[str],
         rows: list[tuple[Hashable, dict]],
@@ -823,7 +939,7 @@ class Manifest(Entry):
 
     @staticmethod
     def _apply_indexes(
-        conn: sqlite3.Connection,
+        conn: _LockedConnection,
         on: Iterable[str],
         composite: Iterable[tuple[str, ...]],
     ) -> set:
@@ -881,7 +997,7 @@ class Manifest(Entry):
         )
 
     @staticmethod
-    def _sql_finalize(conn: sqlite3.Connection, db_path: str) -> None:
+    def _sql_finalize(conn: _LockedConnection, db_path: str) -> None:
         """Close the connection and delete a temporary index file."""
         try:
             conn.close()
@@ -962,6 +1078,9 @@ class Manifest(Entry):
             new_bp.update(copy.deepcopy(other_bp))
 
         self._payload = ComputationalData(new_bp)
+        # Same bookkeeping as the ``data`` setter: the blueprint changed in
+        # this process, so a later memorize of a variable manifest bumps.
+        self._locally_modified = True
 
         if other._pending_entries:
             if self._pending_entries is None:

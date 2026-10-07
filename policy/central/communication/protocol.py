@@ -6,6 +6,10 @@ Two RPC methods are defined by laila on top of that:
 - ``peer.connect`` -- the inbound side of an outbound peering
   handshake. Carries the initiating policy's ``global_id`` and the
   shared secret.
+- ``peer.disconnect`` -- a *notification* (no ``id``, no reply) a
+  policy sends right before it drops a peer or shuts a transport down,
+  so the other side can unregister it at once instead of waiting for a
+  liveness timeout. Carries the sender's ``global_id`` as ``from_id``.
 - ``rpc.call`` -- a remote attribute-chain invocation. Carries
   ``path`` (list[str]), ``args`` (list), ``kwargs`` (dict).
 
@@ -159,6 +163,27 @@ def make_request(
         "params": params,
         "id": request_id,
     }
+
+
+def make_notification(method: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Build a JSON-RPC 2.0 notification (a request without an ``id``).
+
+    Per the spec the receiver must not reply to a notification; laila
+    uses it for ``peer.disconnect``.
+
+    Parameters
+    ----------
+    method : str
+        RPC method name.
+    params : dict
+        Method parameters.
+
+    Returns
+    -------
+    dict
+        JSON-RPC notification message.
+    """
+    return {"jsonrpc": JSONRPC_VERSION, "method": method, "params": params}
 
 
 def make_result(request_id: str, result: Any) -> dict[str, Any]:

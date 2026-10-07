@@ -17,6 +17,12 @@ import laila
 from laila.data import S3Pool
 
 laila.read_args("./secrets.toml")
+# secrets.toml example:
+#
+#   AWS_BUCKET_NAME = "my-bucket"
+#   AWS_ACCESS_KEY_ID = "AKIA..."
+#   AWS_SECRET_ACCESS_KEY = "..."
+#   AWS_REGION = "us-east-1"
 
 s3_pool = S3Pool(
     bucket_name=laila.args.AWS_BUCKET_NAME,

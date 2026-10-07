@@ -248,14 +248,25 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
         """Stop every registered protocol and drop all peer proxies.
 
         Note that the protocols are responsible for breaking their
-        own connections; this method just clears the in-memory peer
-        registry afterwards so subsequent code does not try to talk
-        to detached proxies.
+        own connections (each says goodbye to its peers, closes its
+        endpoints and its event loop); this method just clears the
+        in-memory peer registry afterwards so subsequent code does not
+        try to talk to detached proxies. Best-effort: a protocol whose
+        ``stop()`` raises is logged and the remaining ones still stop.
         """
         self._stop_liveness()
-        for proto in self.connections.values():
-            proto.stop()
-        self.peers.clear()
+        for proto in list(self.connections.values()):
+            try:
+                proto.stop()
+            except Exception:
+                log.warning(
+                    "Protocol %s failed to stop cleanly for policy %s",
+                    type(proto).__name__,
+                    self.policy_id,
+                    exc_info=True,
+                )
+        for peer_id in list(self.peers):
+            self._unregister_peer(peer_id)
         log.info("Communication stopped for policy %s", self.policy_id)
 
     # ------------------------------------------------------------------

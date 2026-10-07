@@ -50,6 +50,10 @@ class AtomicFlag(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel):
         with self._lock:
             return self.value
 
+    def __bool__(self) -> bool:
+        """``if flag:`` reads the flag value (same as :meth:`is_set`)."""
+        return self.is_set()
+
     def set_to(self, state: bool) -> None:
         """Set the flag to *state*."""
         with self._lock:

@@ -33,6 +33,23 @@ B2_BUCKET = "my-b2-bucket"
 ```python
 import laila
 laila.read_args("./secrets.toml")
+# secrets.toml example:
+#
+#   GCS_PROJECT_ID = "my-gcp-project"
+#   GCS_BUCKET = "my-gcs-bucket"
+#   GCS_SERVICE_ACCOUNT_JSON = "/path/to/service-account.json"
+#
+#   AZURE_CONNECTION_STRING = "DefaultEndpointsProtocol=..."
+#   AZURE_CONTAINER = "my-container"
+#
+#   R2_ACCOUNT_ID = "..."
+#   R2_ACCESS_KEY_ID = "..."
+#   R2_SECRET_ACCESS_KEY = "..."
+#   R2_BUCKET = "my-r2-bucket"
+#
+#   B2_APP_KEY_ID = "..."
+#   B2_APP_KEY = "..."
+#   B2_BUCKET = "my-b2-bucket"
 ```
 
 ## Google Cloud Storage

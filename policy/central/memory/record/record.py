@@ -6,7 +6,7 @@ with three pieces of provenance:
 - **recorder** -- the policy gid that originated the write (defaults
   to the active policy at construction time);
 - **borrower** -- the policy gid that requested the entry on behalf of
-  someone else (currently always ``None``, reserved for future
+  someone else (``None`` unless a caller sets it; reserved for future
   attribution flows);
 - **record_timestamp** -- ISO-8601 UTC timestamp of when the record
   was constructed.
@@ -45,20 +45,21 @@ class Record(BaseModel):
         default_factory=lambda: datetime.now(UTC).isoformat(timespec="milliseconds")
     )
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    # ``extra="forbid"`` so a misspelled provenance kwarg (``creator=``)
+    # fails loudly instead of being silently dropped.
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     def model_post_init(self, __context: Any) -> None:
         """Default the recorder to the active policy's gid when not provided.
 
-        Also pins ``borrower`` to ``None`` since the borrower-attribution
-        flow is not yet wired through the rest of the system.
+        ``borrower`` is left exactly as given (``None`` unless a caller
+        attributes the write to another policy).
         """
         super().model_post_init(__context)
         from ..... import active_policy
 
         if self.recorder is None:
             self.recorder = active_policy.global_id
-            self.borrower = None  # for now, we don't want to record the borrower
 
     def serialize(self, transformations: TransformationSequence) -> str:
         """Serialize the record into a pool-storable dict.
@@ -94,7 +95,10 @@ class Record(BaseModel):
         if isinstance(self.entry, Mapping):
             return self.entry["_global_id"]
 
-        raise
+        raise TypeError(
+            "Record.entry must expose a `global_id` or be a serialized entry mapping with "
+            f"`_global_id`; got {type(self.entry).__name__}"
+        )
 
     @property
     def as_dict(
@@ -108,9 +112,37 @@ class Record(BaseModel):
         return data
 
     @classmethod
-    def from_dict(cls, in_dict: dict):
-        """Construct a Record from a dict (not yet implemented)."""
-        raise
+    def from_dict(cls, in_dict: Mapping):
+        """Construct a Record from the dict shape produced by :attr:`as_dict`.
+
+        ``entry`` may be a live :class:`Entry` or its ``to_dict`` /
+        serialized-dict form, in which case it is rebuilt through
+        :meth:`Entry.from_dict`. ``recorder``, ``borrower`` and
+        ``record_timestamp`` are passed through when present.
+
+        Raises
+        ------
+        TypeError
+            *in_dict* is not a mapping.
+        ValueError
+            *in_dict* has no ``entry`` slot.
+        """
+        if not isinstance(in_dict, Mapping):
+            raise TypeError(f"Record.from_dict expects a mapping, got {type(in_dict).__name__}")
+        if "entry" not in in_dict:
+            raise ValueError("Record.from_dict requires an 'entry' slot")
+
+        entry = in_dict["entry"]
+        if isinstance(entry, Mapping):
+            from .....entry.entry import Entry
+
+            entry = Entry.from_dict(dict(entry))
+
+        kwargs: dict[str, Any] = {"entry": entry}
+        for name in ("recorder", "borrower", "record_timestamp"):
+            if in_dict.get(name) is not None:
+                kwargs[name] = in_dict[name]
+        return cls(**kwargs)
 
     @classmethod
     def _build_sync(cls, record: Any) -> dict:

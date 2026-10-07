@@ -150,8 +150,25 @@ class ComputationalData(BaseModel):
             then bundles this code into the inverse-transformation
             chain so the read-side can rebuild without knowing the
             specific serializer that was used at write time.
+
+        Notes
+        -----
+        Format-specific serializers (msgpack for dicts/lists, ...) reject
+        values their wire format cannot express -- numpy arrays nested in
+        a dict, ``datetime`` objects, integers beyond 64 bits. Rather
+        than failing the memorize, such payloads fall back to the
+        universal :class:`PickleSerializer`. Because the inverse code
+        travels with the entry, readers are oblivious to which path was
+        taken.
         """
-        return self.serializer.forward(self.data), self.serializer.backward_code
+        serializer = self.serializer
+        try:
+            return serializer.forward(self.data), serializer.backward_code
+        except (TypeError, OverflowError, ValueError):
+            if isinstance(serializer, PickleSerializer):
+                raise
+            fallback = PickleSerializer()
+            return fallback.forward(self.data), fallback.backward_code
 
     def __init__(self, *args, **kwargs):
         """Construct from either a positional payload or ``data=`` kwarg.

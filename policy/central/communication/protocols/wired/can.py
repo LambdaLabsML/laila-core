@@ -57,6 +57,7 @@ class _LAILA_IDENTIFIABLE_CAN_COMM_PROTOCOL(_P2PStreamRPCProtocol):
 
     _bus: Any = PrivateAttr(default=None)
     _isotp_sock: Any = PrivateAttr(default=None)
+    _read_transport: Any = PrivateAttr(default=None)
 
     @classmethod
     def matches_token(cls, token: str) -> bool:
@@ -86,7 +87,9 @@ class _LAILA_IDENTIFIABLE_CAN_COMM_PROTOCOL(_P2PStreamRPCProtocol):
 
         os.set_blocking(fileno, False)
         reader = asyncio.StreamReader()
-        await loop.connect_read_pipe(
+        # Keep the read transport so ``_close_stream`` can unregister the
+        # socket fd from the selector before the ISO-TP socket closes it.
+        self._read_transport, _ = await loop.connect_read_pipe(
             lambda: asyncio.StreamReaderProtocol(reader),
             os.fdopen(fileno, "rb", buffering=0, closefd=False),
         )
@@ -98,6 +101,12 @@ class _LAILA_IDENTIFIABLE_CAN_COMM_PROTOCOL(_P2PStreamRPCProtocol):
         return reader, writer
 
     async def _close_stream(self) -> None:
+        if self._read_transport is not None:
+            try:
+                self._read_transport.close()
+            except Exception:
+                pass
+            self._read_transport = None
         await super()._close_stream()
         if self._isotp_sock is not None:
             try:

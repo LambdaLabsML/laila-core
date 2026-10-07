@@ -48,7 +48,8 @@ from pydantic import Field, PrivateAttr
 from ... import protocol as rpc_protocol
 from ...channel import Channel
 from . import codec as _codec
-from .base import _CarrierRPCProtocol
+from .base import _PEER_CONNECT, _CarrierRPCProtocol
+from .loopthread import cancel_pending_tasks, start_loop_thread, stop_loop_thread
 
 log = logging.getLogger(__name__)
 
@@ -148,28 +149,13 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
             return
         self._seen = set()
         self._ensure_executor()
-        self._event_loop = asyncio.new_event_loop()
-        ready = threading.Event()
-        boot: dict[str, BaseException] = {}
-
-        def _run_loop() -> None:
-            asyncio.set_event_loop(self._event_loop)
-            try:
-                self._event_loop.run_until_complete(self._async_start(ready))
-            except BaseException as exc:
-                boot["error"] = exc
-                ready.set()
-                return
-            self._event_loop.run_forever()
-
-        self._loop_thread = threading.Thread(
-            target=_run_loop, daemon=True, name=f"{type(self).__name__}-loop"
-        )
-        self._loop_thread.start()
-        ready.wait(timeout=max(self.handshake_timeout, 10.0))
-        if "error" in boot:
-            self._started = False
-            raise boot["error"]
+        try:
+            start_loop_thread(
+                self, self._async_start, ready_timeout=max(self.handshake_timeout, 10.0)
+            )
+        except BaseException:
+            self._shutdown_executor()
+            raise
         self._started = True
 
     async def _async_start(self, ready: threading.Event) -> None:
@@ -179,39 +165,29 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
         ready.set()
 
     def stop(self) -> None:
-        """Tear down the endpoint and loop (idempotent)."""
+        """Tear down the endpoint and loop (idempotent).
+
+        Order: goodbye to every peer (a datagram peer has no EOF to
+        notice, so without it the remote only drops us on liveness
+        timeout), unregister, stop the retransmit timer, close the
+        endpoint, cancel and await remaining tasks, stop and close the loop.
+        """
         if not self._started:
             return
 
         async def _shutdown() -> None:
+            await self._goodbye_all()
             for peer_id in list(self._connections):
                 self._unregister_peer(peer_id)
             self._shutdown_lanes()
             if self._retransmit_task is not None:
                 self._retransmit_task.cancel()
+                await asyncio.gather(self._retransmit_task, return_exceptions=True)
+                self._retransmit_task = None
             await self._close_endpoint()
-            pending = [
-                task
-                for task in asyncio.all_tasks(self._event_loop)
-                if task is not asyncio.current_task()
-            ]
-            for task in pending:
-                task.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
+            await cancel_pending_tasks()
 
-        if self._event_loop is not None and self._event_loop.is_running():
-            try:
-                fut = asyncio.run_coroutine_threadsafe(_shutdown(), self._event_loop)
-                fut.result(timeout=5.0)
-            except Exception:
-                pass
-            self._event_loop.call_soon_threadsafe(self._event_loop.stop)
-
-        if self._loop_thread is not None:
-            self._loop_thread.join(timeout=5.0)
-            self._loop_thread = None
-
+        stop_loop_thread(self, _shutdown)
         self._shutdown_lanes()
         self._reasm.clear()
         self._unacked.clear()
@@ -325,8 +301,13 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
 
         if rpc_protocol.is_request(msg):
             method = msg.get("method")
-            if method == "peer.connect":
+            if method == _PEER_CONNECT:
                 self._handle_handshake(addr, msg)
+            elif self._is_goodbye(msg):
+                # only honoured from the address the peer is registered on
+                peer_id = self._peer_for_addr(addr)
+                if peer_id is not None and peer_id == (msg.get("params") or {}).get("from_id"):
+                    self._on_peer_goodbye(peer_id)
             else:
                 self._dispatch_rpc(addr, msg)
         elif rpc_protocol.is_response(msg):
@@ -362,9 +343,19 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
         """Run an inbound ``rpc.call`` off the loop and reply to *addr*."""
 
         def _reply(resp: dict) -> None:
-            self._event_loop.call_soon_threadsafe(self._send_message, addr, self._encode(resp))
+            try:
+                self._loop_call(self._send_message, addr, self._encode(resp))
+            except ConnectionError:
+                pass
 
         self._handle_request_frame(msg, _reply, peer_id=self._peer_for_addr(addr))
+
+    async def _send_goodbye(self, peer_id: str) -> None:
+        """Send ``peer.disconnect`` to the peer's address (first try goes out at once)."""
+        addr = self._connections.get(peer_id)
+        if addr is None or self._transport is None:
+            return
+        self._send_message(addr, self._encode(self._goodbye_message()))
 
     # ------------------------------------------------------------------
     # Peering / RPC
@@ -384,7 +375,7 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
         rid = req["id"]
         slot: dict[str, Any] = {"event": threading.Event()}
         self._handshake_pending[rid] = slot
-        self._event_loop.call_soon_threadsafe(self._send_message, addr, self._encode(req))
+        self._loop_call(self._send_message, addr, self._encode(req))
 
         completed = slot["event"].wait(timeout=self.handshake_timeout)
         self._handshake_pending.pop(rid, None)
@@ -410,7 +401,11 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
             raise ConnectionError(f"No connection to peer {peer_id}")
         request_id, slot = self._register_pending()
         req = self._make_rpc_request(path, args, kwargs, request_id)
-        self._event_loop.call_soon_threadsafe(self._send_message, addr, self._encode(req))
+        try:
+            self._loop_call(self._send_message, addr, self._encode(req))
+        except ConnectionError:
+            self._pending_rpcs.pop(request_id, None)
+            raise
         return self._await_pending(request_id, slot)
 
     def _send_oneway(self, peer_id: str, path: list, kwargs: dict) -> None:
@@ -419,7 +414,7 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
         if addr is None:
             raise ConnectionError(f"No connection to peer {peer_id}")
         req = self._make_rpc_request(path, (), kwargs, str(_uuid.uuid4()))
-        self._event_loop.call_soon_threadsafe(self._send_message, addr, self._encode(req))
+        self._loop_call(self._send_message, addr, self._encode(req))
 
     # ------------------------------------------------------------------
     # Stream lanes (single datagram per message, best effort)
@@ -447,10 +442,7 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
         packet = _codec.pack_stream_frame(
             channel.tx_lane_id, seq, _codec.FLAG_START | _codec.FLAG_END, payload
         )
-        try:
-            self._event_loop.call_soon_threadsafe(self._safe_sendto, addr, packet)
-        except RuntimeError as exc:
-            raise ConnectionError("Datagram transport is shut down.") from exc
+        self._loop_call(self._safe_sendto, addr, packet)
 
     def _safe_sendto(self, addr: Any, packet: bytes) -> None:
         try:

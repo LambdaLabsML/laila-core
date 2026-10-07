@@ -112,8 +112,23 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
         task -- so it must not walk the keys: a full O(n) validation here
         made every submit quadratic in the number of pending tasks. Use
         :meth:`reindex` to force a rebuild after out-of-band edits.
+
+        Accessors that already walk the full order (``items``,
+        ``values``, ``__repr__``, ...) use :meth:`_ensure_order_valid`
+        instead, which also catches same-length key replacement.
         """
         if len(self._order) != len(self.data):
+            self._order = list(self.data.keys())
+
+    def _ensure_order_valid(self) -> None:
+        """O(n) variant of :meth:`_ensure_order_synced` for O(n) accessors.
+
+        A same-length out-of-band edit (``del d.data["a"]; d.data["b"] = 2``)
+        slips past the length comparison and would make ``self.data[k]``
+        raise ``KeyError`` for a stale ``k``. Callers that are about to
+        walk ``_order`` anyway pay nothing extra for the membership scan.
+        """
+        if len(self._order) != len(self.data) or any(k not in self.data for k in self._order):
             self._order = list(self.data.keys())
 
     def reindex(self) -> None:
@@ -166,7 +181,7 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
     def __repr__(self) -> str:
         """Return an ordered string representation."""
         with self._lock:
-            self._ensure_order_synced()
+            self._ensure_order_valid()
             ordered = {k: self.data[k] for k in self._order}
             return f"AtomicDict({ordered!r})"
 
@@ -255,13 +270,13 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
     def values(self) -> list[V]:  # type: ignore[override]
         """Return a snapshot list of values in insertion order."""
         with self._lock:
-            self._ensure_order_synced()
+            self._ensure_order_valid()
             return [self.data[k] for k in self._order]
 
     def items(self) -> list[tuple[K, V]]:  # type: ignore[override]
         """Return a snapshot list of ``(key, value)`` pairs in insertion order."""
         with self._lock:
-            self._ensure_order_synced()
+            self._ensure_order_valid()
             return [(k, self.data[k]) for k in self._order]
 
     def item_at(self, index: int) -> tuple[K, V]:
@@ -290,6 +305,11 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
             if index < 0 or index >= n:
                 raise IndexError("Index out of range")
             k = self._order[index]
+            if k not in self.data:  # stale order after an out-of-band edit
+                self._ensure_order_valid()
+                if index >= len(self._order):
+                    raise IndexError("Index out of range")
+                k = self._order[index]
             return k, self.data[k]
 
     def key_at(self, index: int) -> K:
@@ -367,7 +387,7 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
     def pretty(self, indent: int = 2) -> str:
         """Return a human-readable, multi-line string representation."""
         with self._lock:
-            self._ensure_order_synced()
+            self._ensure_order_valid()
             lines = ["AtomicDict {"]
             for k in self._order:
                 lines.append(" " * indent + f"{k!r}: {self.data[k]!r},")

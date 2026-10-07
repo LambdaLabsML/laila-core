@@ -770,7 +770,7 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
 
         .. code-block:: python
 
-            src = "def f(m):\\n    return m['x'].data + m['y'].data\\n"
+            src = "def f(m):\\n    return m.realized['x'].data + m.realized['y'].data\\n"
             e = Entry.variable(constitution=src, manifest=Manifest({"x": x, "y": y}))
             laila.build(e).wait()
         """
@@ -783,28 +783,44 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         if (constitution is None) != (manifest is None):
             raise ValueError("`constitution` and `manifest` must both be provided together.")
 
+        scopes = None
         if global_id is not None:
             identity_data = _LAILA_IDENTIFIABLE_OBJECT.process_global_id(global_id)
             uuid = identity_data["uuid"]
             evolution = identity_data["evolution"]
+            scopes = identity_data["scopes"] or None
 
         evolution = evolution if evolution is not None else 0
 
-        if nickname is not None:
-            uuid = cls.generate_uuid_from_nickname(nickname)
+        uuid = cls._merge_nickname_identity(uuid, nickname)
+
+        identity_kwargs = {"uuid": uuid, "evolution": evolution}
+        if scopes is not None:
+            identity_kwargs["scopes"] = scopes
 
         if constitution is not None:
             return Entry(
                 constitution=constitution,
                 manifest=manifest,
-                evolution=evolution,
-                uuid=uuid,
+                **identity_kwargs,
             )
 
         if state is None:
             state = EntryState.READY
 
-        return Entry(data=data, evolution=evolution, state=state, uuid=uuid)
+        return Entry(data=data, state=state, **identity_kwargs)
+
+    @classmethod
+    def _merge_nickname_identity(cls, uuid, nickname):
+        """Combine an explicit ``uuid`` with a ``nickname``.
+
+        A nickname is a deterministic uuid generator and, exactly as in
+        ``Entry.__init__``, it takes precedence over an explicit ``uuid``
+        / ``global_id`` uuid when both are given.
+        """
+        if nickname is None:
+            return uuid
+        return cls.generate_uuid_from_nickname(nickname)
 
     def evolve(self, data=None):
         """Return a new Entry representing the next evolution.
@@ -930,16 +946,21 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         if global_id is not None and (uuid is not None):
             raise RuntimeError("Cannot set both global_id and uuid at the same time.")
 
+        scopes = None
         if uuid is None and global_id is not None:
             identity_data = _LAILA_IDENTIFIABLE_OBJECT.process_global_id(global_id)
             uuid = identity_data["uuid"]
+            scopes = identity_data["scopes"] or None
             if identity_data["evolution"] is not None:
                 raise RuntimeError("Cannot have a constant with an evolution.")
 
-        if nickname is not None:
-            uuid = cls.generate_uuid_from_nickname(nickname)
+        uuid = cls._merge_nickname_identity(uuid, nickname)
 
-        new_entry = Entry(uuid=uuid, data=data, state=EntryState.READY, evolution=None)
+        identity_kwargs = {"uuid": uuid, "evolution": None}
+        if scopes is not None:
+            identity_kwargs["scopes"] = scopes
+
+        new_entry = Entry(data=data, state=EntryState.READY, **identity_kwargs)
 
         return new_entry
 

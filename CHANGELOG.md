@@ -7,6 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **laila-js** (`laila-js/`): an exact, 1:1 JavaScript port of the package
+  for Node.js >= 22.12 (ESM + JSDoc), published as `laila-core` on npm. Same
+  module tree, class / method / field names, defaults, error types and
+  messages, log records, on-disk pool layouts and wire protocol; Python
+  keyword arguments become a trailing object. Byte-compatible codecs
+  (CPython pickle protocol 5 reader/writer, msgpack, `.npy`, Fernet, the
+  recovery-code emitter and recogniser) verified against fixtures generated
+  by the Python package (`laila-js/tests/vectors`). A small N-API addon
+  (`native/loop_pump.c`) pumps the libuv loop so blocking APIs
+  (`Future.wait()`, `Thread.join()`, synchronous pool access) behave like
+  their Python counterparts; the `async` surface works without it. All 14
+  pool backends, the 60+ communication protocols (TCP/WebSocket, UDP, Unix
+  sockets, serial, broker, register-bus, p2p and loopback carriers), the
+  process-pool and async taskforces, manifests and the SQL index are
+  ported. The Python test tree is ported one file to one file under
+  `laila-js/tests/{unit,deep_eval}`, and `laila-js/tests/interop` runs live
+  Python <-> JS peers in both directions over TCP and WebSocket.
+  A dedicated `laila-js` GitHub Actions workflow runs it all.
+
+## [1.0.13]
+
+### Changed
+
+- Graceful teardown for **every** transport, not just serial. A new
+  `peer.disconnect` JSON-RPC *notification* (no `id`, no reply) is sent by
+  `disconnect()` / `remove_peer()` and by `stop()` to each peer right before
+  the handle closes, so the remote unregisters us at once instead of on the
+  liveness timeout. Matters most for carriers with no EOF to notice:
+  datagram (UDP/CoAP/radios), broker (MQTT/AMQP/...), register buses,
+  point-to-point serial, and loopback (where the remote's pings kept
+  succeeding forever). Stream and WebSocket receive loops also end on it.
+  Receivers only honour the notification from the address/connection the
+  peer is registered on; older peers answer it with a harmless
+  `method not found` error.
+- Shared loop-thread lifecycle (`protocols/_carriers/loopthread.py`) used by
+  the stream, datagram, p2p, broker and register carriers and by the
+  WebSocket `tcpip` protocol. `stop()` now cancels *and awaits* every task,
+  stops the loop, joins the thread and **closes the loop**; a `start()` whose
+  boot raises closes its loop too. Previously every lifecycle leaked the
+  loop's selector fd + self-pipe pair (3 fds) and `tcpip` left cancelled
+  tasks pending. After `stop()` the carrier's `_event_loop` is `None` and any
+  send raises `ConnectionError` (never `AttributeError` / asyncio
+  `RuntimeError`).
+- `communication.stop()` is best-effort per protocol (one failing `stop()` no
+  longer prevents the others from closing) and unregisters remaining peers
+  from `laila._remote_policies`.
+
+### Fixed
+
+- WebSocket (`tcpip`): `ping()` was the base-class `return False` while
+  `supports_ping` was `True`, so **every ws peer was dropped by the first
+  liveness sweep** (default 15 s). It now round-trips `__comm_ping__`
+  (answered before the policy, like the carriers). `remove_peer()` on a ws
+  peer was a no-op (`disconnect()` not implemented) -- it now closes the
+  socket; `send_rpc` raises `TimeoutError` after `rpc_timeout` instead of
+  silently returning `None`.
+- UART/serial: close the asyncio read transport before the serial fd; silence
+  "Fatal read error on pipe transport" (`OSError: [Errno 9] Bad file
+  descriptor`) on shutdown. `_open_stream` now keeps the `connect_read_pipe`
+  transport and `_close_stream` unregisters it from the selector before
+  pyserial closes the fd. Same fix applied to the CAN (ISO-TP) transport,
+  which used the same pattern. The point-to-point carrier's `stop()` now
+  awaits the cancelled receive task before closing any fd, so `read_frame()`
+  can no longer wake on a closed descriptor. Hardware-free regression tests
+  on an `os.openpty()` pair cover `communication.stop()`, `laila.terminate()`,
+  `remove_connection()`, stop/start/re-peer, teardown mid-frame and teardown
+  under an active stream lane.
+
+### Added
+
+- `tests/.../test_graceful_teardown.py`: teardown conformance across
+  loopback, raw TCP, Unix socket, UDP, WebSocket, UART (pty) and the
+  in-memory broker / register / datagram / p2p carrier fakes -- clean stop
+  (no asyncio errors, loop closed, zero fd leak per lifecycle, registries
+  empty), remote notices `remove_peer()` and one-sided `stop()`, sends after
+  stop raise `ConnectionError`, healthy peers survive liveness sweeps,
+  `laila.terminate()` reports no errors.
+
 ## [1.0.11]
 
 ### Changed
@@ -134,6 +214,7 @@ the 1.0.7 - 1.0.11 patch series.
 
 Initial public history baseline. Earlier versions tracked privately.
 
-[Unreleased]: https://github.com/LambdaLabsML/laila-core/compare/v1.0.11...HEAD
+[Unreleased]: https://github.com/LambdaLabsML/laila-core/compare/v1.0.13...HEAD
+[1.0.13]: https://github.com/LambdaLabsML/laila-core/compare/v1.0.12...v1.0.13
 [1.0.11]: https://github.com/LambdaLabsML/laila-core/compare/v1.0.6...v1.0.11
 [1.0.6]: https://github.com/LambdaLabsML/laila-core/releases/tag/v1.0.6

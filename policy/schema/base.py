@@ -136,7 +136,7 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
         new_pool : _LAILA_IDENTIFIABLE_POOL
             The pool to register.
         """
-        self.central.memory[new_pool.pool_id] = new_pool
+        self.central.memory.extend(new_pool)
 
     def remember(
         self,
@@ -182,9 +182,16 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
         """
         if global_fetch:
             raise NotImplementedError
+        if pool_subset is not None or hint is not None:
+            raise NotImplementedError("pool_subset / hint routing is not implemented yet")
 
-        entry = self.central.memory.fetch(key=global_id, pool_subset=pool_subset, hint=hint)
-
+        try:
+            ref = self.central.memory.remember([global_id], persist=False)
+            entry = ref.wait()
+        except KeyError:
+            return None
+        if isinstance(entry, list):
+            entry = entry[0] if entry else None
         return entry
 
     def memorize(
@@ -196,13 +203,16 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
     ) -> None:
         """Persist *entries* into central memory.
 
-        Thin wrapper around ``self.central.memory.record(entries)``.
-        The propagation kwargs (``require_local_update`` /
-        ``require_global_update``) are placeholders for future
-        replication semantics and are currently ignored -- writes
-        affect only the routed pool.
+        Blocking thin wrapper around ``self.central.memory.memorize(entries)``
+        (the write lands in the alpha pool before this returns). Most
+        callers should use the top-level :func:`laila.memorize`, which
+        returns the future instead. The propagation kwargs
+        (``require_local_update`` / ``require_global_update``) are
+        placeholders for future replication semantics and are currently
+        ignored -- writes affect only the routed pool.
         """
-        return self.central.memory.record(entries)
+        self.central.memory.memorize(entries).wait()
+        return None
 
     # ------------------------------------------------------------------
     # RPC helpers for remote future introspection

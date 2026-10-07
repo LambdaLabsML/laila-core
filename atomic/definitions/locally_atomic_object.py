@@ -20,11 +20,13 @@ dead-locking.
 
 from __future__ import annotations
 
+import copy
 import threading
 from contextlib import contextmanager
 from typing import Any
 
 from pydantic import ConfigDict
+from pydantic_core import PydanticUndefined
 
 from ...basics.definitions.laila_object import _LAILA_OBJECT
 
@@ -168,3 +170,79 @@ class _LAILA_LOCALLY_ATOMIC_OBJECT(_LAILA_OBJECT):
         :meth:`atomic` context manager for synchronisation.
         """
         return self._ensure_local_lock().locked()
+
+    # ------------------------------------------------------------------
+    # copy / pickle support
+    # ------------------------------------------------------------------
+    # Locks are process-local primitives: they cannot be pickled or
+    # deep-copied, and a copy must never share its lock with the original.
+    # ``copy.deepcopy`` / ``pickle`` therefore skip every lock found on the
+    # instance (``_local_lock`` in ``__dict__``, ``_lock`` private attrs on
+    # the Atomic* types, ...) and the copy gets fresh ones of the same type.
+
+    def __deepcopy__(self, memo=None):
+        cls = type(self)
+        m = cls.__new__(cls)
+        plain, locks = _split_locks(self.__dict__)
+        new_dict = copy.deepcopy(plain, memo)
+        new_dict.update({k: _LOCK_FACTORIES[name]() for k, name in locks.items()})
+        object.__setattr__(m, "__dict__", new_dict)
+        object.__setattr__(
+            m, "__pydantic_extra__", copy.deepcopy(getattr(self, "__pydantic_extra__", None), memo)
+        )
+        object.__setattr__(
+            m, "__pydantic_fields_set__", copy.copy(getattr(self, "__pydantic_fields_set__", set()))
+        )
+        private = getattr(self, "__pydantic_private__", None)
+        if private is None:
+            object.__setattr__(m, "__pydantic_private__", None)
+        else:
+            plain, locks = _split_locks({k: v for k, v in private.items() if v is not PydanticUndefined})
+            new_private = copy.deepcopy(plain, memo)
+            new_private.update({k: _LOCK_FACTORIES[name]() for k, name in locks.items()})
+            object.__setattr__(m, "__pydantic_private__", new_private)
+        return m
+
+    def __getstate__(self) -> dict[Any, Any]:
+        state = dict(super().__getstate__())
+        plain, locks = _split_locks(state.get("__dict__") or {})
+        state["__dict__"] = plain
+        state["__laila_dict_locks__"] = locks
+        private = state.get("__pydantic_private__")
+        if private:
+            plain, locks = _split_locks(private)
+            state["__pydantic_private__"] = plain
+            state["__laila_private_locks__"] = locks
+        return state
+
+    def __setstate__(self, state: dict[Any, Any]) -> None:
+        state = dict(state)
+        dict_locks = state.pop("__laila_dict_locks__", {})
+        private_locks = state.pop("__laila_private_locks__", {})
+        super().__setstate__(state)
+        for k, name in dict_locks.items():
+            object.__setattr__(self, k, _LOCK_FACTORIES[name]())
+        if private_locks:
+            private = self.__pydantic_private__
+            if private is None:
+                private = {}
+                object.__setattr__(self, "__pydantic_private__", private)
+            for k, name in private_locks.items():
+                private[k] = _LOCK_FACTORIES[name]()
+
+
+_LOCK_FACTORIES = {"rlock": threading.RLock, "lock": threading.Lock}
+_LOCK_NAMES = {type(threading.RLock()): "rlock", type(threading.Lock()): "lock"}
+_LOCK_TYPES = tuple(_LOCK_NAMES)
+
+
+def _split_locks(mapping: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+    """Split *mapping* into (copyable entries, {key: lock kind name})."""
+    plain: dict[str, Any] = {}
+    locks: dict[str, str] = {}
+    for k, v in mapping.items():
+        if isinstance(v, _LOCK_TYPES):
+            locks[k] = _LOCK_NAMES[type(v)]
+        else:
+            plain[k] = v
+    return plain, locks

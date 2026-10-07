@@ -50,7 +50,8 @@ from pydantic import PrivateAttr
 from ... import protocol as rpc_protocol
 from ...channel import Channel
 from . import codec as _codec
-from .base import _CarrierRPCProtocol
+from .base import _PEER_CONNECT, _CarrierRPCProtocol
+from .loopthread import cancel_pending_tasks, start_loop_thread, stop_loop_thread
 
 log = logging.getLogger(__name__)
 
@@ -254,28 +255,13 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
         if self._started:
             return
         self._ensure_executor()
-        self._event_loop = asyncio.new_event_loop()
-        ready = threading.Event()
-        boot: dict[str, BaseException] = {}
-
-        def _run_loop() -> None:
-            asyncio.set_event_loop(self._event_loop)
-            try:
-                self._event_loop.run_until_complete(self._async_start(ready))
-            except BaseException as exc:
-                boot["error"] = exc
-                ready.set()
-                return
-            self._event_loop.run_forever()
-
-        self._loop_thread = threading.Thread(
-            target=_run_loop, daemon=True, name=f"{type(self).__name__}-loop"
-        )
-        self._loop_thread.start()
-        ready.wait(timeout=max(self.handshake_timeout, 10.0))
-        if "error" in boot:
-            self._started = False
-            raise boot["error"]
+        try:
+            start_loop_thread(
+                self, self._async_start, ready_timeout=max(self.handshake_timeout, 10.0)
+            )
+        except BaseException:
+            self._shutdown_executor()
+            raise
         self._started = True
 
     async def _async_start(self, ready: threading.Event) -> None:
@@ -284,42 +270,27 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
         ready.set()
 
     def stop(self) -> None:
-        """Tear down the server, every peer stream and lane, and the loop (idempotent)."""
+        """Tear down the server, every peer stream and lane, and the loop (idempotent).
+
+        Order: say goodbye to every peer, unregister them (closing lanes
+        -- waking relays -- and links, so the server's ``wait_closed()``
+        completes promptly), close the server, cancel and await every
+        remaining task, then stop and **close** the loop.
+        """
         if not self._started:
             return
 
         async def _shutdown() -> None:
-            # Unregister peers first: closes their lanes (waking relays)
-            # and their links, so the server's wait_closed() completes
-            # promptly; then tear the server down.
+            await self._goodbye_all()
             for peer_id in list(self._connections):
                 self._unregister_peer(peer_id)
             self._connections.clear()
             self._shutdown_lanes()
             await self._close_server(self._server)
             self._server = None
-            pending = [
-                task
-                for task in asyncio.all_tasks(self._event_loop)
-                if task is not asyncio.current_task()
-            ]
-            for task in pending:
-                task.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
+            await cancel_pending_tasks()
 
-        if self._event_loop is not None and self._event_loop.is_running():
-            try:
-                fut = asyncio.run_coroutine_threadsafe(_shutdown(), self._event_loop)
-                fut.result(timeout=5.0)
-            except Exception:
-                pass
-            self._event_loop.call_soon_threadsafe(self._event_loop.stop)
-
-        if self._loop_thread is not None:
-            self._loop_thread.join(timeout=5.0)
-            self._loop_thread = None
-
+        stop_loop_thread(self, _shutdown)
         self._shutdown_lanes()
         self._pending_rpcs.clear()
         self._shutdown_executor()
@@ -351,6 +322,14 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
             link.close()
         else:
             link.close_threadsafe()
+
+    async def _send_goodbye(self, peer_id: str) -> None:
+        """Queue ``peer.disconnect`` on the peer's link and wait for it to be written."""
+        link = self._connections.get(peer_id)
+        if link is None or link.closed:
+            return
+        link.put_rpc(_codec.frame(self._encode(self._goodbye_message())))
+        await link.flush(timeout=0.5)
 
     # ------------------------------------------------------------------
     # Peering
@@ -405,11 +384,6 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
         asyncio.ensure_future(self._receive_loop(reader, link, peer_id))
         return peer_id
 
-    def disconnect(self, peer_id: str) -> None:
-        """Close a single peer's stream, its lanes, and drop it (idempotent)."""
-        if peer_id in self._connections:
-            self._unregister_peer(peer_id)
-
     async def _handle_inbound_stream(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
@@ -427,7 +401,7 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
         self._on_stream_ready(writer)
         link = self._make_link(writer)
         msg = self._decode(raw)
-        if not rpc_protocol.is_request(msg) or msg.get("method") != "peer.connect":
+        if not rpc_protocol.is_request(msg) or msg.get("method") != _PEER_CONNECT:
             resp = rpc_protocol.make_error(
                 msg.get("id"),
                 rpc_protocol.ERR_INVALID_REQUEST,
@@ -472,6 +446,9 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
                     continue
                 msg = self._decode(raw)
                 if rpc_protocol.is_request(msg):
+                    if self._is_goodbye(msg):
+                        # peer is dropping us gracefully: end this stream now
+                        break
                     self._handle_request_frame(msg, reply, peer_id=peer_id)
                 elif rpc_protocol.is_response(msg):
                     self._complete_pending(msg)
@@ -493,8 +470,8 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
         def _reply(resp: dict) -> None:
             data = _codec.frame(self._encode(resp))
             try:
-                self._event_loop.call_soon_threadsafe(link.put_rpc, data)
-            except RuntimeError:
+                self._loop_call(link.put_rpc, data)
+            except ConnectionError:
                 pass
 
         return _reply
@@ -508,11 +485,7 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
         link = self._connections.get(peer_id)
         if link is None or link.closed:
             raise ConnectionError(f"No connection to peer {peer_id}")
-        data = _codec.frame(self._encode(msg))
-        try:
-            self._event_loop.call_soon_threadsafe(link.put_rpc, data)
-        except RuntimeError as exc:
-            raise ConnectionError(f"Transport to peer {peer_id} is shut down.") from exc
+        self._loop_call(link.put_rpc, _codec.frame(self._encode(msg)))
 
     def _send_once(self, peer_id: str, path: list[str], args: tuple, kwargs: dict) -> Any:
         """Send one ``rpc.call`` to *peer_id* and block for the response."""
@@ -538,7 +511,4 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
         link = self._connections.get(channel.peer_id)
         if link is None or link.closed:
             raise ConnectionError(f"No connection to peer {channel.peer_id}")
-        try:
-            self._event_loop.call_soon_threadsafe(link.put_stream, channel, payload)
-        except RuntimeError as exc:
-            raise ConnectionError(f"Transport to peer {channel.peer_id} is shut down.") from exc
+        self._loop_call(link.put_stream, channel, payload)

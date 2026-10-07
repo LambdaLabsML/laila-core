@@ -194,12 +194,17 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         """
         Return a dict with all identity fields.
         """
+
+
+        def _gid(x: Any) -> Any:
+            return getattr(x, "global_id", x)
+
         return {
-            "task_id": self.task_id,
-            "taskforce_id": self.taskforce_id,
-            "policy_id": self.policy_id,
-            "task_group_id": self.task_group_id,
-            "precedence": self.precedence,
+            "global_id": self.global_id,
+            "taskforce_id": _gid(self.taskforce_id),
+            "policy_id": _gid(self.policy_id),
+            "future_group_id": _gid(self.future_group_id),
+            "precedence": _gid(self.precedence),
             "purpose": self.purpose,
         }
 

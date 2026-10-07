@@ -21,13 +21,18 @@ Available presets
   The default for textual / network-friendly storage where bandwidth or
   disk space matter.
 - :data:`transformation_base64_compression_encryption` -- factory:
-  ``transformation_base64_compression_encryption(key)`` returns a
+  ``transformation_base64_compression_encryption(key=None)`` returns a
   pipeline that compresses, encrypts (Fernet), then base64-encodes. Use
   when stored bytes must be both compact and confidential.
 - :data:`transformation_encryption` -- factory:
-  ``transformation_encryption(key)`` returns a Fernet-only pipeline.
+  ``transformation_encryption(key=None)`` returns a Fernet-only pipeline.
   Suitable when the destination pool already handles its own binary
   framing (e.g. a SQL ``BYTEA`` column).
+
+With ``key=None`` the Fernet step reads the process-wide key from
+``laila.args.encryption.key`` (alias ``laila.encryption_key``); the
+reading side must configure the same key. The key never travels with
+the data.
 """
 
 from .compdata.transformation import *
@@ -39,7 +44,7 @@ transformation_base64 = TransformationSequence(transformations=[Base64()])
 
 transformation_base64_compression = TransformationSequence(transformations=[Base64(), Zlib()])
 
-transformation_base64_compression_encryption = lambda key: TransformationSequence(
+transformation_base64_compression_encryption = lambda key=None: TransformationSequence(
     transformations=[
         Base64(),
         Zlib(),
@@ -47,7 +52,7 @@ transformation_base64_compression_encryption = lambda key: TransformationSequenc
     ]
 )
 
-transformation_encryption = lambda key: TransformationSequence(
+transformation_encryption = lambda key=None: TransformationSequence(
     transformations=[
         FernetEncryption(key=key),
     ]

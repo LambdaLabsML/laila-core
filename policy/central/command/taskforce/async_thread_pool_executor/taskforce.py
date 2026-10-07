@@ -2,10 +2,11 @@
 
 Each loop hosts up to ``max_async_per_thread`` concurrent in-flight tasks
 (*slots*). Submitted callables must be coroutine functions (zero-arg).
-Plain sync callables are auto-wrapped at the ``Command.submit`` boundary
-into ``async def`` shims that offload the body to this taskforce's
-``sync`` executor (see ``ensure_coroutine_function``), so a sync body
-never blocks a loop thread. Async bodies yield on every ``await`` and let
+Plain sync callables are auto-wrapped (at the ``Command.submit`` boundary
+and again, idempotently, in :meth:`_queue_submit` for direct
+``taskforce.submit`` callers) into ``async def`` shims that offload the
+body to this taskforce's ``sync`` executor (see
+``ensure_coroutine_function``), so a sync body never blocks a loop thread. Async bodies yield on every ``await`` and let
 the loop interleave other in-flight coroutines.
 
 The dispatcher routes each task to the loop with the lowest current
@@ -65,6 +66,7 @@ from pydantic import ConfigDict, Field, PrivateAttr
 from ...schema.exceptions import (
     _register_async_loop_thread,
     _unregister_async_loop_thread,
+    ensure_coroutine_function,
 )
 from ...schema.future.future.future_status import FutureStatus
 from ...schema.future.future.group_future import GroupFuture
@@ -205,11 +207,37 @@ class _LoopThread:
     def submit_coro(self, coro):
         return asyncio.run_coroutine_threadsafe(coro, self.loop)
 
-    def stop(self, timeout: float | None = None) -> None:
-        try:
-            self.loop.call_soon_threadsafe(self.loop.stop)
-        except RuntimeError:
-            pass
+    def stop(self, timeout: float | None = None, *, drain: bool = False) -> None:
+        """Stop the loop and join its thread.
+
+        With ``drain=True`` the loop keeps running until every task
+        currently scheduled on it (runners, parked re-acquires, pending
+        sync offloads) has completed, then stops -- this is what makes
+        ``shutdown(wait=True)`` honour its "block until in-flight tasks
+        finish" contract. Without it (``wait=False`` or an explicit
+        ``cancel_pending=True``) the loop stops immediately and
+        :meth:`_run` cancels whatever is still pending.
+        """
+        if drain:
+
+            async def _drain_then_stop() -> None:
+                me = asyncio.current_task()
+                while True:
+                    others = [t for t in asyncio.all_tasks(self.loop) if t is not me]
+                    if not others:
+                        break
+                    await asyncio.wait(others, timeout=0.1)
+                self.loop.stop()
+
+            try:
+                asyncio.run_coroutine_threadsafe(_drain_then_stop(), self.loop)
+            except RuntimeError:
+                pass
+        else:
+            try:
+                self.loop.call_soon_threadsafe(self.loop.stop)
+            except RuntimeError:
+                pass
         self.thread.join(timeout=timeout)
 
 
@@ -263,6 +291,11 @@ class PythonAsyncThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
         if self.backend.lower() != "async_threads":
             raise ValueError("PythonAsyncThreadPoolTaskForce supports async_threads only.")
 
+        # ``pause()`` -> ``start()`` resumes the existing machinery; only a
+        # cold start (or a start after shutdown) spawns loops and a dispatcher.
+        if self._dispatcher is not None and self._dispatcher.is_alive():
+            return
+
         tag = self.global_id[-8:]
         self._cv = threading.Condition()
         self._capacity_cv = threading.Condition()
@@ -283,9 +316,18 @@ class PythonAsyncThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
         self._dispatcher.start()
 
     def _on_pause(self) -> None:
-        raise NotImplementedError
+        # Safe no-op (see the base-class contract): the status flips to
+        # ``PAUSED`` so ``_queue_submit`` rejects new work; in-flight tasks
+        # keep running and ``start()`` resumes without re-spawning threads.
+        return
 
     def _on_shutdown(self, *, wait: bool = True, cancel_pending: bool = True) -> None:
+        # ``wait=True`` on its own is a graceful stop: in-flight tasks run
+        # to completion (loops drain) before the threads are joined.
+        # ``cancel_pending=True`` is an explicit request to drop work, so
+        # in-flight coroutines are cancelled as before (``wait`` then only
+        # governs whether we join the threads).
+        drain = wait and not cancel_pending
         if self._stop is not None:
             self._stop.set()
         if self._cv is not None:
@@ -295,8 +337,11 @@ class PythonAsyncThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
             with self._capacity_cv:
                 self._capacity_cv.notify_all()
 
-        if wait and self._dispatcher is not None:
-            self._dispatcher.join()
+        # Always let the dispatcher exit (it polls every 0.1 s and re-queues
+        # an item it popped but could not place) *before* the cancel pass,
+        # so that pass sees every undispatched task.
+        if self._dispatcher is not None:
+            self._dispatcher.join(timeout=None if wait else 1.0)
 
         if cancel_pending:
             with self._q.atomic("cancel"):
@@ -310,7 +355,7 @@ class PythonAsyncThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
                 self._q.clear()
 
         for lt in self._loops:
-            lt.stop(timeout=None if wait else 0.0)
+            lt.stop(timeout=None if wait else 0.0, drain=drain)
 
         if self._executor is not None:
             self._executor.shutdown(wait=wait, cancel_futures=cancel_pending)
@@ -366,6 +411,11 @@ class PythonAsyncThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
     def _queue_submit(self, task: Callable[..., Any], *args, **kwargs) -> ConcurrentPackageFuture:
         if self.status != TaskForceStatus.RUNNING:
             raise RuntimeError("TaskForce must be running before submitting tasks.")
+
+        # Direct ``taskforce.submit`` / ``imap`` callers bypass
+        # ``Command.submit``; wrap here as well (idempotent) so a plain sync
+        # body is offloaded to the executor instead of blocking a loop thread.
+        task = ensure_coroutine_function(task)
 
         fut = ConcurrentPackageFuture(
             taskforce_id=self.global_id,

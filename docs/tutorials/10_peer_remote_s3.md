@@ -48,6 +48,12 @@ REMOTE_SCRIPT = textwrap.dedent("""\
     from laila.data import S3Pool
 
     laila.read_args("./secrets.toml")
+    # secrets.toml example:
+    #
+    #   AWS_BUCKET_NAME = "my-bucket"
+    #   AWS_ACCESS_KEY_ID = "AKIA..."
+    #   AWS_SECRET_ACCESS_KEY = "..."
+    #   AWS_REGION = "us-east-1"
 
     node_b = DefaultPolicy()
     laila.activate_policy(node_b)

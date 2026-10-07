@@ -42,6 +42,9 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+#: Reserved dotted path of the liveness ping (same as the carriers').
+_COMM_PING_PATH = ["__comm_ping__"]
+
 
 async def start_server(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL) -> None:
     """Start the WebSocket listener and store the server handle on *proto*.
@@ -206,6 +209,9 @@ async def _receive_loop(
             msg = protocol.decode(raw)
 
             if protocol.is_request(msg):
+                if msg.get("method") == "peer.disconnect":
+                    # graceful goodbye from the peer: end this connection
+                    break
                 await _handle_rpc_request(proto, ws, msg)
             elif protocol.is_response(msg):
                 _handle_rpc_response(proto, msg)
@@ -247,6 +253,11 @@ async def _handle_rpc_request(
     path = params.get("path", [])
     args = params.get("args", [])
     kwargs = params.get("kwargs", {})
+
+    # Liveness control frame: answered here, never reaches the policy.
+    if path == _COMM_PING_PATH:
+        await ws.send(protocol.encode(protocol.make_result(request_id, "pong")))
+        return
 
     try:
         result = proto._communication._execute_rpc(path, args, kwargs)

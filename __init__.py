@@ -756,6 +756,32 @@ class _LailaModule(types.ModuleType):
 
         return importlib.import_module("laila.runtime")
 
+    @runtime.setter
+    def runtime(self, value):
+        """No-op: the import system binds the ``laila.runtime`` submodule
+        onto the package after loading it. The property above always
+        resolves the module lazily, so there is nothing to store."""
+        return
+
+    @property
+    def encryption_key(self):
+        """Process-wide Fernet key used by ``FernetEncryption`` when no
+        explicit ``key=`` is given. Alias of ``laila.args.encryption.key``.
+
+        Both the writer and the reader of encrypted entries must set the
+        same key in their own process. ``None`` when unset.
+        """
+        section = args.get("encryption")
+        if section is None or not hasattr(section, "get"):
+            return None
+        key = section.get("key")
+        return None if key is None or key == {} or key == "" else key
+
+    @encryption_key.setter
+    def encryption_key(self, value):
+        """Store *value* under ``laila.args.encryption.key``."""
+        args.encryption.key = value
+
     @property
     def logger(self):
         """Process-wide :class:`laila.logger.Logger` singleton (lazy).
