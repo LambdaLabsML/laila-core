@@ -18,6 +18,10 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
+  # One-shot builds gain nothing from incremental caches, and the ~60
+  # macro-expanded test crates would otherwise leave several GB under
+  # `target/debug/incremental`.
+  CARGO_INCREMENTAL: "0"
   # DuckDB C library for the `duckdb` pool backend (same major as the Python
   # `duckdb` wheel the Python suite runs against).
   DUCKDB_VERSION: "1.5.5"
@@ -33,6 +37,22 @@ jobs:
         working-directory: laila-rs
     steps:
       - uses: actions/checkout@v5
+
+      # `cargo test --workspace` links ~60 test binaries of ~180 MB each
+      # (opt-level 1 + line tables) on top of the dependency tree, the
+      # `laila-core` lib tests, the examples and the `trybuild` sub-build:
+      # ~20 GB, more than the hosted runner leaves free. Linking into a
+      # full disk kills `rust-lld` with SIGBUS, so drop the preinstalled
+      # toolchains this job never touches (~25 GB) before building.
+      - name: free runner disk space
+        working-directory: /
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/local/share/powershell \
+            /usr/local/share/chromium /usr/local/lib/node_modules /usr/lib/google-cloud-sdk
+          sudo docker image prune --all --force > /dev/null 2>&1 || true
+          df -h / | tail -1
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -68,6 +88,12 @@ jobs:
 
       - name: tests (unit, functional, codec byte-identity vectors)
         run: cargo test --workspace
+
+      - name: disk usage after the test build
+        if: always()
+        run: |
+          df -h / | tail -1
+          du -sh target 2>/dev/null || true
 
       - name: py2rs regenerate-and-diff (generated tests are byte-exact)
         # Every test directory that carries a py2rs-generated main.rs is
