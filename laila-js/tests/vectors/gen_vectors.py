@@ -34,6 +34,13 @@ if _PKG_PARENT not in sys.path:
 
 cases: dict[str, dict] = {}
 
+# The JS ``pickle.dumps`` is a protocol-5 writer (``DEFAULT_PROTOCOL = 5`` in
+# ``src/_codecs/pickle.js``). CPython's ``pickle.DEFAULT_PROTOCOL`` is 4 on
+# 3.8-3.13 and 5 on 3.14+, so pin the protocol explicitly: otherwise the
+# fixture depends on which interpreter regenerated it and the byte-identity
+# tests fail on every other version.
+PICKLE_PROTOCOL = 5
+
 
 def enc(b: bytes) -> str:
     """Hex for small payloads; ``z:`` + base64(zlib) for large ones (keeps the fixture small)."""
@@ -43,7 +50,7 @@ def enc(b: bytes) -> str:
 
 
 def add(name, obj, mp=True):
-    cases[name] = {"pickle": enc(pickle.dumps(obj))}
+    cases[name] = {"pickle": enc(pickle.dumps(obj, protocol=PICKLE_PROTOCOL))}
     if mp:
         try:
             cases[name]["msgpack"] = enc(msgpack.packb(obj, use_bin_type=True))
@@ -193,7 +200,7 @@ for name, arr in [
 ]:
     cases[name] = {
         "npy": npy(arr),
-        "pickle": enc(pickle.dumps(arr)),
+        "pickle": enc(pickle.dumps(arr, protocol=PICKLE_PROTOCOL)),
         "pickle4": enc(pickle.dumps(arr, protocol=4)),
     }
 
@@ -251,12 +258,11 @@ try:
         "fernet": FernetEncryption(key=key).backward_code,
         "fernet_kw": FernetEncryption(key=key, backward_kwargs={"ttl": 60}).backward_code,
     }
-    try:
-        from laila.entry.compdata.transformation.serialization.torch import TorchSerializer
-
-        rc["torch"] = TorchSerializer().backward_code
-    except Exception:  # torch optional
-        pass
+    # ``TorchSerializer`` is intentionally not included: it needs ``torch`` at
+    # import time, the JS suite does not consume it, and an environment-dependent
+    # entry makes ``npm run vectors`` produce a different fixture depending on
+    # whether torch happens to be installed (CI asserts the regenerated file is
+    # byte-identical to the committed one).
     out["recovery_codes"] = rc
     out["fernet"] = {
         "key": key.decode(),
@@ -293,12 +299,10 @@ except ImportError as e:  # pragma: no cover - laila not importable
             if k in prev:
                 out[k] = prev[k]
 
-out["meta"] = {
-    "python": sys.version.split()[0],
-    "pickle_protocol": pickle.DEFAULT_PROTOCOL,
-    "msgpack": ".".join(map(str, msgpack.version)),
-    "numpy": np.__version__,
-}
+# Only interpreter-independent facts go here: CI regenerates the fixture and
+# requires it to be byte-identical to the committed copy, so recording the
+# Python / numpy / msgpack versions of whoever last ran this would break that.
+out["meta"] = {"pickle_protocol": PICKLE_PROTOCOL}
 
 with open(OUT, "w") as fh:
     json.dump(out, fh, indent=1, sort_keys=True)

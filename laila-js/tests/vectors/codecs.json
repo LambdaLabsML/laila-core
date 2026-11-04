@@ -485,10 +485,7 @@
   }
  },
  "meta": {
-  "msgpack": "1.1.2",
-  "numpy": "2.3.5",
-  "pickle_protocol": 5,
-  "python": "3.14.4"
+  "pickle_protocol": 5
  },
  "recovery_codes": {
   "base64": "def backward(inp):\n    import base64\n    kwargs = {}\n    if isinstance(inp, memoryview):\n        inp = inp.tobytes()\n    return base64.b64decode(inp, **kwargs)\n",
