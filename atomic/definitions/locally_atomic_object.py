@@ -169,7 +169,7 @@ class _LAILA_LOCALLY_ATOMIC_OBJECT(_LAILA_OBJECT):
         lock will still be held by the time it acts -- prefer the
         :meth:`atomic` context manager for synchronisation.
         """
-        return self._ensure_local_lock().locked()
+        return _rlock_locked(self._ensure_local_lock())
 
     # ------------------------------------------------------------------
     # copy / pickle support
@@ -236,6 +236,25 @@ class _LAILA_LOCALLY_ATOMIC_OBJECT(_LAILA_OBJECT):
 _LOCK_FACTORIES = {"rlock": threading.RLock, "lock": threading.Lock}
 _LOCK_NAMES = {type(threading.RLock()): "rlock", type(threading.Lock()): "lock"}
 _LOCK_TYPES = tuple(_LOCK_NAMES)
+
+
+def _rlock_locked(lock: threading.RLock) -> bool:
+    """Portable ``RLock.locked()``.
+
+    ``threading.RLock.locked`` only exists on Python >= 3.14. On older
+    interpreters fall back to the private ``_is_owned`` check (present on
+    both the C and pure-Python RLock implementations) for the current
+    thread, and a non-blocking acquire to probe for other owners.
+    """
+    locked = getattr(lock, "locked", None)
+    if locked is not None:
+        return locked()
+    if lock._is_owned():
+        return True
+    if lock.acquire(blocking=False):
+        lock.release()
+        return False
+    return True
 
 
 def _split_locks(mapping: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:

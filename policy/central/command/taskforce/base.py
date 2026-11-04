@@ -44,7 +44,13 @@ from .....macros.strings import _TASK_FORCE_SCOPE
 from ..schema.future.future import Future
 from .status import TaskForceStatus
 
-_LIVE_TASKFORCES: set[Any] = set()
+# Keyed by ``id(tf)`` rather than being a plain ``set``: identifiable
+# objects hash / compare by ``global_id``, so two *distinct* task-force
+# instances sharing a uuid would collapse into one entry and the second
+# one's worker threads would escape the :func:`laila.terminate` sweep.
+# The value keeps a strong reference so the ``id`` cannot be recycled
+# while the entry is live.
+_LIVE_TASKFORCES: dict[int, Any] = {}
 _LIVE_TASKFORCES_LOCK = threading.Lock()
 
 
@@ -60,7 +66,7 @@ def _register_live_taskforce(tf: Any) -> None:
     Thread-safe via :data:`_LIVE_TASKFORCES_LOCK`.
     """
     with _LIVE_TASKFORCES_LOCK:
-        _LIVE_TASKFORCES.add(tf)
+        _LIVE_TASKFORCES[id(tf)] = tf
 
 
 def _unregister_live_taskforce(tf: Any) -> None:
@@ -69,7 +75,7 @@ def _unregister_live_taskforce(tf: Any) -> None:
     Called during :meth:`_LAILA_IDENTIFIABLE_TASK_FORCE.shutdown`.
     """
     with _LIVE_TASKFORCES_LOCK:
-        _LIVE_TASKFORCES.discard(tf)
+        _LIVE_TASKFORCES.pop(id(tf), None)
 
 
 def _live_taskforces_snapshot() -> list[Any]:
@@ -80,7 +86,7 @@ def _live_taskforces_snapshot() -> list[Any]:
     concurrent mutation.
     """
     with _LIVE_TASKFORCES_LOCK:
-        return list(_LIVE_TASKFORCES)
+        return list(_LIVE_TASKFORCES.values())
 
 
 class _LAILA_IDENTIFIABLE_TASK_FORCE(
