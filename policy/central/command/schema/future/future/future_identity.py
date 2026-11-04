@@ -195,7 +195,6 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         Return a dict with all identity fields.
         """
 
-
         def _gid(x: Any) -> Any:
             return getattr(x, "global_id", x)
 

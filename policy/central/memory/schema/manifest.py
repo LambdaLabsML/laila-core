@@ -856,7 +856,9 @@ class Manifest(Entry):
 
     @staticmethod
     def _write_fingerprint(conn: _LockedConnection, fingerprint: str) -> None:
-        conn.execute(f'CREATE TABLE IF NOT EXISTS "{_SQL_META_TABLE}" (key TEXT PRIMARY KEY, value TEXT)')
+        conn.execute(
+            f'CREATE TABLE IF NOT EXISTS "{_SQL_META_TABLE}" (key TEXT PRIMARY KEY, value TEXT)'
+        )
         conn.execute(
             f'INSERT OR REPLACE INTO "{_SQL_META_TABLE}" (key, value) VALUES (?, ?)',
             ("fingerprint", fingerprint),

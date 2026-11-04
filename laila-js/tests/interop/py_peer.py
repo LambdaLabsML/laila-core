@@ -29,9 +29,8 @@ import threading
 import time
 import uuid
 
-import numpy as np
-
 import laila
+import numpy as np
 from laila.entry.constitution.build_maps import build_by_scope
 from laila.macros.defaults import (
     DefaultPolicy,
@@ -119,7 +118,9 @@ def serve(transport: str) -> None:
     laila.memory.extend(pool=pool, pool_nickname="remote-store")
 
     entry = laila.constant(data=_reference_payload(), nickname="py-ref")
-    arr_entry = laila.constant(data=np.arange(12, dtype=np.float32).reshape(3, 4), nickname="py-arr")
+    arr_entry = laila.constant(
+        data=np.arange(12, dtype=np.float32).reshape(3, 4), nickname="py-arr"
+    )
     with laila.guarantee:
         laila.memorize(entries=[entry, arr_entry], pool_nickname="remote-store")
 
@@ -151,7 +152,9 @@ def client(uri: str, secret: str, remote_id: str, entry_id: str) -> None:
     laila.activate_policy(policy)
     laila.memory.extend(pool=DefaultPool(), pool_nickname="py-local")
     comm = policy.central.communication
-    comm.add_connection(_TRANSPORTS["tcpip" if uri.startswith("ws") else "tcp"](host="127.0.0.1", port=0))
+    comm.add_connection(
+        _TRANSPORTS["tcpip" if uri.startswith("ws") else "tcp"](host="127.0.0.1", port=0)
+    )
 
     rid = comm.add_peer(uri, secret)
     _json(check="peered", remote_id=rid, expected=remote_id, ok=rid == remote_id)
@@ -162,10 +165,17 @@ def client(uri: str, secret: str, remote_id: str, entry_id: str) -> None:
     _json(check="ping", ok=next(iter(comm.connections.values())).ping(rid))
 
     # remember from the JS peer: real data crosses the wire
-    res = laila.remember(entry_ids=entry_id, pool_nickname="remote-store", policy_id=rid, persist=False)
+    res = laila.remember(
+        entry_ids=entry_id, pool_nickname="remote-store", policy_id=rid, persist=False
+    )
     data = res.data
     rebuilt = res.wait()
-    _json(check="remember", data=data, gid=rebuilt.global_id, active_restored=laila.get_active_policy() is policy)
+    _json(
+        check="remember",
+        data=data,
+        gid=rebuilt.global_id,
+        active_restored=laila.get_active_policy() is policy,
+    )
 
     # memorize into the JS peer (dict + numpy array)
     e1 = laila.constant(data={"from": "python", "n": [1, 2, 3]}, nickname="py-push")
@@ -173,10 +183,16 @@ def client(uri: str, secret: str, remote_id: str, entry_id: str) -> None:
     f1 = laila.memorize(entries=e1, policy_id=rid, pool_nickname="remote-store")
     f2 = laila.memorize(entries=e2, policy_id=rid, pool_nickname="remote-store")
     _json(check="memorize", gids=[f1.data, f2.data], expected=[e1.global_id, e2.global_id])
-    _json(check="probe", pushed=proxy.probe_entry(e1.global_id), pushed_arr=proxy.probe_entry(e2.global_id))
+    _json(
+        check="probe",
+        pushed=proxy.probe_entry(e1.global_id),
+        pushed_arr=proxy.probe_entry(e2.global_id),
+    )
 
     # remember the numpy entry back from the JS side
-    back = laila.remember(entry_ids=e2.global_id, pool_nickname="remote-store", policy_id=rid, persist=False).wait()
+    back = laila.remember(
+        entry_ids=e2.global_id, pool_nickname="remote-store", policy_id=rid, persist=False
+    ).wait()
     arr = back.data
     _json(
         check="remember_array",

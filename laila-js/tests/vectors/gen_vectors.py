@@ -47,7 +47,7 @@ def add(name, obj, mp=True):
     if mp:
         try:
             cases[name]["msgpack"] = enc(msgpack.packb(obj, use_bin_type=True))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             cases[name]["msgpack_error"] = type(e).__name__
 
 
@@ -55,8 +55,32 @@ def add(name, obj, mp=True):
 add("none", None)
 add("true", True)
 add("false", False)
-for v in [0, 1, 255, 256, 65535, 65536, 2**31 - 1, -1, -128, -129, -32768, -32769, -(2**31), -(2**31) - 1,
-          2**31, 2**32 - 1, 2**32, 2**53, 2**63 - 1, -(2**63), 2**64 - 1, 2**64, 10**30, -(10**30)]:
+for v in [
+    0,
+    1,
+    255,
+    256,
+    65535,
+    65536,
+    2**31 - 1,
+    -1,
+    -128,
+    -129,
+    -32768,
+    -32769,
+    -(2**31),
+    -(2**31) - 1,
+    2**31,
+    2**32 - 1,
+    2**32,
+    2**53,
+    2**63 - 1,
+    -(2**63),
+    2**64 - 1,
+    2**64,
+    10**30,
+    -(10**30),
+]:
     add(f"int_{v}", v)
 add("float_3.5", 3.5)
 add("float_neg", -2.5e-10)
@@ -149,17 +173,29 @@ for name, arr in [
     ("npy_empty", np.array([], dtype="<f8")),
     ("npy_fortran", np.asfortranarray(np.array([[1, 2, 3], [4, 5, 6]], dtype="<i4"))),
     ("npy_big_shape", np.zeros((1,) * 30, dtype="u1")),
-    ("npy_f16", np.array([1.0, -1.0, 0.1, 65504.0, 6e-8, np.nan, np.inf, -np.inf, 0.0, -0.0, 1 / 3], dtype="<f2")),
+    (
+        "npy_f16",
+        np.array(
+            [1.0, -1.0, 0.1, 65504.0, 6e-8, np.nan, np.inf, -np.inf, 0.0, -0.0, 1 / 3], dtype="<f2"
+        ),
+    ),
     ("npy_f16_lin", np.linspace(-1, 1, 24, dtype="<f2").reshape(2, 3, 4)),
     ("npy_c8", np.array([1 + 2j, -3 + 4j, 0 - 1j], dtype="<c8")),
-    ("npy_c16", (np.linspace(-1, 1, 6) + 1j * np.linspace(0.5, -0.5, 6)).astype("<c16").reshape(2, 3)),
+    (
+        "npy_c16",
+        (np.linspace(-1, 1, 6) + 1j * np.linspace(0.5, -0.5, 6)).astype("<c16").reshape(2, 3),
+    ),
     ("npy_be_i4", np.arange(5).astype(">i4")),
     ("npy_be_f8", np.linspace(-1, 1, 6).astype(">f8")),
     ("npy_be_f8_fortran", np.asfortranarray(np.arange(6, dtype=">f8").reshape(2, 3))),
     ("npy_u8_max", np.array([0, 2**63, 2**64 - 1], dtype="<u8")),
     ("npy_i8_minmax", np.array([-(2**63), 0, 2**63 - 1], dtype="<i8")),
 ]:
-    cases[name] = {"npy": npy(arr), "pickle": enc(pickle.dumps(arr)), "pickle4": enc(pickle.dumps(arr, protocol=4))}
+    cases[name] = {
+        "npy": npy(arr),
+        "pickle": enc(pickle.dumps(arr)),
+        "pickle4": enc(pickle.dumps(arr, protocol=4)),
+    }
 
 out = {"cases": cases}
 
@@ -172,7 +208,9 @@ out["zlib"] = {
     "level1": base64.b64encode(zlib.compress(text, 1)).decode(),
     "level0_abc": base64.b64encode(zlib.compress(b"abc", 0)).decode(),
     "raw_wbits": base64.b64encode(zlib.compress(text, wbits=-15)).decode(),
-    "gzip_wbits": base64.b64encode(zlib.compress(text, wbits=31)).decode()[:0],  # gzip carries mtime; not byte-stable
+    "gzip_wbits": base64.b64encode(zlib.compress(text, wbits=31)).decode()[
+        :0
+    ],  # gzip carries mtime; not byte-stable
 }
 out["base64"] = {
     "alt_0_255": base64.b64encode(bytes(range(256)), altchars=b"-_").decode(),
@@ -183,10 +221,12 @@ out["base64"] = {
 try:
     import laila  # noqa: F401
     from cryptography.fernet import Fernet
-
     from laila.entry.compdata.transformation.base64.base64 import Base64
     from laila.entry.compdata.transformation.compression.zlib import Zlib
-    from laila.entry.compdata.transformation.encryption.encryption import FernetEncryption, key_fingerprint
+    from laila.entry.compdata.transformation.encryption.encryption import (
+        FernetEncryption,
+        key_fingerprint,
+    )
     from laila.entry.compdata.transformation.jsonstring.jsonstring import JsonString
     from laila.entry.compdata.transformation.serialization.msgpack import MsgpackSerializer
     from laila.entry.compdata.transformation.serialization.numpy import NumpySerializer
@@ -205,7 +245,9 @@ try:
         "msgpack_kw": MsgpackSerializer(backward_kwargs={"use_list": False}).backward_code,
         "numpy": NumpySerializer().backward_code,
         "pickle": PickleSerializer().backward_code,
-        "pickle_kw": PickleSerializer(backward_kwargs={"fix_imports": False, "encoding": "ASCII"}).backward_code,
+        "pickle_kw": PickleSerializer(
+            backward_kwargs={"fix_imports": False, "encoding": "ASCII"}
+        ).backward_code,
         "fernet": FernetEncryption(key=key).backward_code,
         "fernet_kw": FernetEncryption(key=key, backward_kwargs={"ttl": 60}).backward_code,
     }
@@ -222,9 +264,17 @@ try:
         "time": 1700000000,
         "iv_hex": iv.hex(),
         "tokens": {
-            "hello": [f._encrypt_from_parts("hello laila \U0001f600 world".encode(), 1700000000, iv).decode(), "hello laila \U0001f600 world"],
+            "hello": [
+                f._encrypt_from_parts(
+                    "hello laila \U0001f600 world".encode(), 1700000000, iv
+                ).decode(),
+                "hello laila \U0001f600 world",
+            ],
             "empty": [f._encrypt_from_parts(b"", 1700000000, iv).decode(), ""],
-            "block16": [f._encrypt_from_parts(b"0123456789abcdef", 1700000000, iv).decode(), "0123456789abcdef"],
+            "block16": [
+                f._encrypt_from_parts(b"0123456789abcdef", 1700000000, iv).decode(),
+                "0123456789abcdef",
+            ],
         },
     }
     out["transform_forward"] = {
@@ -233,7 +283,10 @@ try:
         "base64_alt": Base64(forward_kwargs={"altchars": b"-_"}).forward(bytes(range(256))),
     }
 except ImportError as e:  # pragma: no cover - laila not importable
-    print(f"warning: laila not importable ({e}); recovery-code vectors not regenerated", file=sys.stderr)
+    print(
+        f"warning: laila not importable ({e}); recovery-code vectors not regenerated",
+        file=sys.stderr,
+    )
     if os.path.exists(OUT):
         prev = json.load(open(OUT))
         for k in ("recovery_codes", "fernet", "transform_forward"):

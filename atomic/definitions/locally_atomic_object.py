@@ -197,7 +197,9 @@ class _LAILA_LOCALLY_ATOMIC_OBJECT(_LAILA_OBJECT):
         if private is None:
             object.__setattr__(m, "__pydantic_private__", None)
         else:
-            plain, locks = _split_locks({k: v for k, v in private.items() if v is not PydanticUndefined})
+            plain, locks = _split_locks(
+                {k: v for k, v in private.items() if v is not PydanticUndefined}
+            )
             new_private = copy.deepcopy(plain, memo)
             new_private.update({k: _LOCK_FACTORIES[name]() for k, name in locks.items()})
             object.__setattr__(m, "__pydantic_private__", new_private)
