@@ -1,0 +1,6 @@
+# py2rs override for tests/functional/policy/communication/unit_tests/test_backpressure.py
+# `_FakeCarrier(_CarrierRPCProtocol)` is a carrier with no wire; its Rust
+# twin is a static spec on the shared carrier base (`laila_tests::comm_fakes`).
+class_aliases:
+  _FakeCarrier: laila_tests::comm_fakes::_FakeCarrier
+  _BusyThenOk: laila_tests::comm_fakes::_FakeCarrier

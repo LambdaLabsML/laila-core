@@ -41,14 +41,44 @@ with a descriptive :class:`ValueError` instead of a bare
 """
 
 import hashlib
+import re
 import textwrap
 from typing import Any
 
-from pydantic import Field, field_validator
+from pydantic import Field, PrivateAttr, field_validator
 
-from ..base import _data_transformation  # renamed base
+from ..base import _SLOT_KWARGS, _SLOT_KWARGS_REPR, _data_transformation, _is_literal_dict
 
 _FINGERPRINT_HEX_LEN = 12
+_FINGERPRINT_SLOT = "0" * _FINGERPRINT_HEX_LEN
+_FINGERPRINT_RE = re.compile(rf"^[0-9a-f]{{{_FINGERPRINT_HEX_LEN}}}$")
+
+
+def _render_backward_code(fingerprint: str, backward_kwargs: dict) -> str:
+    """Standalone recovery code: no key material, only its fingerprint.
+
+    The reader resolves the key from its own ``laila.args``. Kept as a
+    module-level function so the recovery-code *template* (used by the
+    constitution trust gate) and the emitted code share one source.
+    """
+    return textwrap.dedent(f"""
+        def backward(inp):
+            from cryptography.fernet import Fernet, InvalidToken
+            from laila.entry.compdata.transformation.encryption.encryption import (
+                resolve_encryption_key,
+            )
+            if not isinstance(inp, str):
+                raise TypeError("Encryption.backward expects a Fernet token string (str)")
+            f = Fernet(resolve_encryption_key(expected_fingerprint={fingerprint!r}))
+            token = inp.encode("utf-8")
+            kwargs = {backward_kwargs!r}
+            ttl = kwargs.get("ttl", None)
+            try:
+                out = f.decrypt(token, ttl=ttl)
+            except InvalidToken as e:
+                raise ValueError("Invalid Fernet token or TTL expired") from e
+            return out.decode("utf-8")
+    """)
 
 
 def _coerce_key_bytes(v: Any) -> bytes:
@@ -116,6 +146,10 @@ class FernetEncryption(_data_transformation):
     name: str = "fernet"
     key: str | bytes | None = Field(default=None, exclude=True, repr=False)
     _fernet: Any = None
+    # ``True`` when the caller pinned a key; ``False`` means "follow
+    # ``laila.encryption_key``", re-resolved on every forward/backward so
+    # a rotation mid-run is honoured by pools built before it.
+    _explicit_key: bool = PrivateAttr(default=False)
 
     @field_validator("key")
     @classmethod
@@ -127,33 +161,45 @@ class FernetEncryption(_data_transformation):
 
     def model_post_init(self, __context: Any) -> None:
         """Initialise the Fernet encryptor and build backward recovery code."""
+        self._explicit_key = self.key is not None
+        if self.key is None:
+            # Fail fast when no key is configured at all.
+            self.key = resolve_encryption_key()
+        self._bind_key(self.key)
+
+    def _bind_key(self, key: bytes) -> None:
+        """Point the encryptor and the recovery code at *key*."""
         from cryptography.fernet import Fernet
 
-        if self.key is None:
-            self.key = resolve_encryption_key()
+        self.key = key
+        self._fernet = Fernet(key)
+        self.backward_code = _render_backward_code(key_fingerprint(key), self.backward_kwargs)
 
-        self._fernet = Fernet(self.key)
+    def _sync_key(self) -> None:
+        """Re-resolve ``laila.encryption_key`` unless a key was pinned."""
+        if self._explicit_key:
+            return
+        live = resolve_encryption_key()
+        if live != self.key:
+            self._bind_key(live)
 
-        # Standalone recovery code: no key material, only its fingerprint.
-        # The reader resolves the key from its own ``laila.args``.
-        self.backward_code = textwrap.dedent(f"""
-            def backward(inp):
-                from cryptography.fernet import Fernet, InvalidToken
-                from laila.entry.compdata.transformation.encryption.encryption import (
-                    resolve_encryption_key,
-                )
-                if not isinstance(inp, str):
-                    raise TypeError("Encryption.backward expects a Fernet token string (str)")
-                f = Fernet(resolve_encryption_key(expected_fingerprint={key_fingerprint(self.key)!r}))
-                token = inp.encode("utf-8")
-                kwargs = {self.backward_kwargs!r}
-                ttl = kwargs.get("ttl", None)
-                try:
-                    out = f.decrypt(token, ttl=ttl)
-                except InvalidToken as e:
-                    raise ValueError("Invalid Fernet token or TTL expired") from e
-                return out.decode("utf-8")
-        """)
+    # --- recovery-code template (constitution trust gate) ---
+    @classmethod
+    def _template_probe(cls) -> _data_transformation:
+        from cryptography.fernet import Fernet
+
+        probe = cls(key=Fernet.generate_key(), backward_kwargs=dict(_SLOT_KWARGS))
+        probe.backward_code = _render_backward_code(_FINGERPRINT_SLOT, dict(_SLOT_KWARGS))
+        return probe
+
+    @classmethod
+    def _template_slots(cls) -> list[tuple[str, Any]]:
+        # The fingerprint is rendered via ``!r`` inside quotes, so the slot
+        # text is the bare hex and the captured group must be hex too.
+        return [
+            (_FINGERPRINT_SLOT, lambda g: bool(_FINGERPRINT_RE.match(g))),
+            (_SLOT_KWARGS_REPR, _is_literal_dict),
+        ]
 
     def forward(self, data: str) -> str:
         """Encrypt a UTF-8 string and return the Fernet token as a string.
@@ -161,7 +207,9 @@ class FernetEncryption(_data_transformation):
         Parameters
         ----------
         data : str
-            Plain-text string to encrypt.
+            Plain-text string to encrypt (typically Base64 text; put a
+            :class:`Base64` step *before* Fernet, as the
+            ``transformation_encryption`` preset does).
 
         Returns
         -------
@@ -174,7 +222,11 @@ class FernetEncryption(_data_transformation):
             If *data* is not a ``str``.
         """
         if not isinstance(data, str):
-            raise TypeError("Encryption.forward expects a Base64 string (str)")
+            raise TypeError(
+                "Encryption.forward expects a str (e.g. Base64 text); place Base64() before "
+                "FernetEncryption() -- see the transformation_encryption preset"
+            )
+        self._sync_key()
         return self._fernet.encrypt(data.encode("utf-8")).decode("utf-8")
 
     def backward(self, data: str) -> str:
@@ -199,6 +251,7 @@ class FernetEncryption(_data_transformation):
         """
         if not isinstance(data, str):
             raise TypeError("Encryption.backward expects a Fernet token string (str)")
+        self._sync_key()
         ttl = self.backward_kwargs.get("ttl", None)
         from cryptography.fernet import InvalidToken
 

@@ -1,0 +1,7 @@
+# py2rs override for tests/functional/utils/unit_tests/test_guarantee_multiprocess.py
+# The suite spawns Python interpreter worker processes (`multiprocessing`,
+# `PythonProcessPoolTaskForce`) and pickles callables across them; the Rust
+# port keeps the process pool as a `NotImplementedError` scaffold (see
+# PARITY.md). The single-process `laila.guarantee` semantics are covered by
+# `tests/functional/policy/command/concurrent_package/unit_tests`.
+skip: multiprocessing / PythonProcessPoolTaskForce (subprocess interpreter workers) has no Rust twin

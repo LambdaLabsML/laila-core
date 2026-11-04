@@ -10,7 +10,7 @@ import subprocess
 import time
 from collections.abc import Iterable, Iterator
 from contextlib import suppress
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import ConfigDict, Field, PrivateAttr
 
@@ -44,6 +44,8 @@ class MongoPool(_LAILA_IDENTIFIABLE_POOL):
     _mongo_proc: subprocess.Popen | None = PrivateAttr(default=None)
     _owns_local_server: bool = PrivateAttr(default=False)
     _mongo_dir: str | None = PrivateAttr(default=None)
+
+    _persistent_storage: ClassVar[bool] = True
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

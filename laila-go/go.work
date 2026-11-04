@@ -1,0 +1,15 @@
+go 1.27.1
+
+use (
+	.
+	./drivers/azure
+	./drivers/duckdb
+	./drivers/gcs
+	./drivers/hdf5
+	./drivers/huggingface
+	./drivers/mongo
+	./drivers/postgres
+	./drivers/redis
+	./drivers/s3
+	./tests
+)

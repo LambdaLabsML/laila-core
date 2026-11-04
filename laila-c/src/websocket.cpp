@@ -47,12 +47,21 @@ bool looks_like_ws_upgrade(const std::vector<uint8_t>& first) {
 }
 
 bool WsSession::ensure(size_t n, int timeout_ms) {
-  if (conn_ == nullptr) return false;
+  if (conn_ == nullptr || closed_) return false;
   uint64_t deadline =
       hal::get().clock().now_ms() + (timeout_ms < 0 ? 0 : (uint64_t)timeout_ms);
   while (buf_.size() < n) {
     std::vector<uint8_t> chunk;
-    int slice = timeout_ms < 0 ? 1000 : (int)timeout_ms;
+    int slice = 1000;
+    if (timeout_ms >= 0) {
+      // Wait only for the time left on this call's budget, so a partial frame
+      // (header arrived, payload pending) cannot stretch the wait to 2x.
+      uint64_t now = hal::get().clock().now_ms();
+      if (now >= deadline) return false;
+      uint64_t left = deadline - now;
+      slice = left > 1000 ? 1000 : (int)left;
+      if (slice < 1) slice = 1;
+    }
     if (conn_->recv(chunk, slice) && !chunk.empty()) {
       buf_.insert(buf_.end(), chunk.begin(), chunk.end());
       continue;
@@ -183,8 +192,13 @@ bool WsSession::recv_text(std::string& out, int timeout_ms) {
     }
     buf_.erase(buf_.begin(), buf_.begin() + (header + len));
 
-    if (opcode == 0x8) {  // close
-      send_frame(0x8, nullptr, 0);
+    if (opcode == 0x8) {  // close: finish the closing handshake and drop TCP
+      if (!close_sent_) {
+        close_sent_ = true;
+        send_frame(0x8, nullptr, 0);
+      }
+      closed_ = true;
+      if (conn_) conn_->close();
       return false;
     }
     if (opcode == 0x9) {  // ping -> pong with same payload
@@ -199,7 +213,18 @@ bool WsSession::recv_text(std::string& out, int timeout_ms) {
 }
 
 void WsSession::close() {
-  if (conn_ && conn_->is_open()) send_frame(0x8, nullptr, 0);
+  if (conn_ == nullptr) {
+    closed_ = true;
+    return;
+  }
+  if (!close_sent_ && conn_->is_open()) {
+    close_sent_ = true;
+    send_frame(0x8, nullptr, 0);
+  }
+  if (!closed_) {
+    closed_ = true;
+    conn_->close();
+  }
 }
 
 }  // namespace ws

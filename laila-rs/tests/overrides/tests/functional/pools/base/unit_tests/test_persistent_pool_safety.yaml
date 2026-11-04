@@ -1,0 +1,6 @@
+# py2rs override for tests/functional/pools/base/unit_tests/test_persistent_pool_safety.py
+# `_HARD_KILL_CHILD` is Python source the durability test runs in a child
+# interpreter; its Rust twin (the same body, in `laila_tests::children`)
+# runs in a child of the test binary [P32].
+child_scripts:
+  _HARD_KILL_CHILD: laila_tests::children::hard_kill_child

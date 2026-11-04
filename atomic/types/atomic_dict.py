@@ -4,10 +4,12 @@
 mutation is guarded by an internal :class:`threading.RLock`. On top
 of the standard mapping API it adds:
 
-- *Insertion-ordered* iteration backed by a separate ``_order`` list
-  that is auto-synced whenever it diverges from the underlying dict
-  (:meth:`_ensure_order_synced`). Useful when callers need to act on
-  "the next item to come in" without scanning.
+- *Insertion-ordered* iteration: the backing ``data`` dict (itself
+  insertion-ordered) is the single order authority, so keyed deletes
+  are O(1) and iteration never goes stale after out-of-band edits of
+  ``data``. A positional index (``_order``) is rebuilt lazily only for
+  the positional accessors. Useful when callers need to act on "the
+  next item to come in" without scanning.
 - Positional accessors (:meth:`item_at`, :meth:`key_at`,
   :meth:`value_at`) and an in-place slice (:meth:`trim`) that work
   against the insertion order.
@@ -57,7 +59,7 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
 
     data: dict[K, V] = Field(default_factory=dict)
     _lock: RLock = PrivateAttr(default_factory=RLock)
-    _order: list[K] = PrivateAttr(default_factory=list)
+    _order: list[K] | None = PrivateAttr(default=None)
 
     # context-local "current" AtomicDict (thread- & async-task-safe)
     _current: ClassVar[ContextVar[AtomicDict[Any, Any] | None]] = ContextVar(
@@ -97,55 +99,47 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
         object.__setattr__(self, "__pydantic_private__", instance.__pydantic_private__)
         # ``model_construct`` skips ``_LAILA_OBJECT.__init__``; stamp here.
         self._creation_timestamp = _now_creation_timestamp()
-        with self._lock:
-            self._order = list(self.data.keys())
+        self._order = None
 
-    def _ensure_order_synced(self) -> None:
-        """Re-sync the order list with the data dict if they diverge.
+    def _positional(self) -> list[K]:
+        """Return the positional key index, rebuilding it from ``data`` when stale.
 
-        Every mutation path (:meth:`_set_nolock`, :meth:`_del_nolock`,
-        :meth:`pop_next`, :meth:`clear`, ...) keeps ``_order`` and
-        ``data`` in step, so divergence can only come from callers
-        mutating ``self.data`` directly. That is detected by the O(1)
-        length comparison. This method runs on *every* ``atomic()`` entry
-        and iteration -- the taskforce queue enters it once per submitted
-        task -- so it must not walk the keys: a full O(n) validation here
-        made every submit quadratic in the number of pending tasks. Use
-        :meth:`reindex` to force a rebuild after out-of-band edits.
-
-        Accessors that already walk the full order (``items``,
-        ``values``, ``__repr__``, ...) use :meth:`_ensure_order_valid`
-        instead, which also catches same-length key replacement.
+        ``data`` is the order authority; ``_order`` is only a cache for
+        the positional accessors (:meth:`item_at`, :meth:`key_at`,
+        :meth:`value_at`, :meth:`trim`). It is dropped (set to ``None``)
+        by every mutation and rebuilt here in O(n) on the next positional
+        access, so the mapping hot paths (``__setitem__``, ``pop``,
+        ``pop_next``, iteration) never pay for it.
         """
-        if len(self._order) != len(self.data):
-            self._order = list(self.data.keys())
-
-    def _ensure_order_valid(self) -> None:
-        """O(n) variant of :meth:`_ensure_order_synced` for O(n) accessors.
-
-        A same-length out-of-band edit (``del d.data["a"]; d.data["b"] = 2``)
-        slips past the length comparison and would make ``self.data[k]``
-        raise ``KeyError`` for a stale ``k``. Callers that are about to
-        walk ``_order`` anyway pay nothing extra for the membership scan.
-        """
-        if len(self._order) != len(self.data) or any(k not in self.data for k in self._order):
-            self._order = list(self.data.keys())
+        order = self._order
+        if order is None or len(order) != len(self.data):
+            order = list(self.data.keys())
+            self._order = order
+        return order
 
     def reindex(self) -> None:
-        """Rebuild the insertion-order index from the underlying dict."""
+        """Rebuild the positional index from the underlying dict.
+
+        Kept for callers that edit ``self.data`` out of band; iteration
+        and ``keys()`` read ``data`` directly and never need it.
+        """
         with self._lock:
             self._order = list(self.data.keys())
 
     def _set_nolock(self, key: K, value: V) -> None:
         """Insert or update *key* without acquiring the lock."""
         if key not in self.data:
-            self._order.append(key)
+            order = self._order
+            if order is not None and len(order) == len(self.data):
+                order.append(key)
+            else:
+                self._order = None
         self.data[key] = value
 
     def _del_nolock(self, key: K) -> None:
-        """Delete *key* without acquiring the lock."""
+        """Delete *key* without acquiring the lock (O(1))."""
         del self.data[key]
-        self._order.remove(key)
+        self._order = None
 
     def __getitem__(self, key: K) -> V:
         """Return the value for *key*, raising ``KeyError`` if missing."""
@@ -170,8 +164,7 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
     def __iter__(self) -> Iterator[K]:
         """Iterate over keys in insertion order (snapshot)."""
         with self._lock:
-            self._ensure_order_synced()
-            return iter(list(self._order))  # snapshot
+            return iter(list(self.data.keys()))  # snapshot
 
     def __contains__(self, key: object) -> bool:  # type: ignore[override]
         """Return ``True`` if *key* is present."""
@@ -181,9 +174,7 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
     def __repr__(self) -> str:
         """Return an ordered string representation."""
         with self._lock:
-            self._ensure_order_valid()
-            ordered = {k: self.data[k] for k in self._order}
-            return f"AtomicDict({ordered!r})"
+            return f"AtomicDict({dict(self.data)!r})"
 
     def get(self, key: K, default: V | None = None) -> V | None:  # type: ignore[override]
         """Return the value for *key*, or *default* if absent."""
@@ -212,39 +203,36 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
     def popitem(self) -> tuple[K, V]:
         """Remove and return the last inserted ``(key, value)`` pair."""
         with self._lock:
-            self._ensure_order_synced()
-            if not self._order:
+            if not self.data:
                 raise KeyError("AtomicDict is empty")
-            k = self._order.pop()
-            v = self.data.pop(k)
+            k, v = self.data.popitem()
+            order = self._order
+            if order is not None and order and order[-1] == k:
+                order.pop()
+            else:
+                self._order = None
             return k, v
 
     def pop_next(self) -> tuple[K, V]:
         """Remove and return the *first* inserted ``(key, value)`` pair.
 
         Hot path for queue-style consumers (the taskforce dispatcher pops
-        one item per task), so this deliberately avoids the O(n) Python
-        walk in :meth:`_ensure_order_synced`: the backing ``dict`` is
-        itself insertion-ordered and authoritative, so its first key *is*
-        the oldest entry. The ``_order`` index is patched in O(1) when it
-        agrees (the common case) and rebuilt otherwise.
+        one item per task): the backing ``dict`` is insertion-ordered and
+        authoritative, so its first key *is* the oldest entry. O(1).
         """
         with self._lock:
             if not self.data:
                 raise KeyError("AtomicDict is empty")
             k = next(iter(self.data))
             v = self.data.pop(k)
-            if self._order and self._order[0] == k:
-                del self._order[0]
-            else:
-                self._order = list(self.data.keys())
+            self._order = None
             return k, v
 
     def clear(self) -> None:
         """Remove all items."""
         with self._lock:
             self.data.clear()
-            self._order.clear()
+            self._order = None
 
     def update(
         self, other: Iterable[tuple[K, V]] | Mapping[K, V] | None = None, /, **kwargs: V
@@ -264,20 +252,17 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
     def keys(self) -> list[K]:  # type: ignore[override]
         """Return a snapshot list of keys in insertion order."""
         with self._lock:
-            self._ensure_order_synced()
-            return list(self._order)
+            return list(self.data.keys())
 
     def values(self) -> list[V]:  # type: ignore[override]
         """Return a snapshot list of values in insertion order."""
         with self._lock:
-            self._ensure_order_valid()
-            return [self.data[k] for k in self._order]
+            return list(self.data.values())
 
     def items(self) -> list[tuple[K, V]]:  # type: ignore[override]
         """Return a snapshot list of ``(key, value)`` pairs in insertion order."""
         with self._lock:
-            self._ensure_order_valid()
-            return [(k, self.data[k]) for k in self._order]
+            return list(self.data.items())
 
     def item_at(self, index: int) -> tuple[K, V]:
         """Return the ``(key, value)`` pair at positional *index*.
@@ -298,18 +283,16 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
             If *index* is out of range.
         """
         with self._lock:
-            self._ensure_order_synced()
-            n = len(self._order)
+            order = self._positional()
+            n = len(order)
             if index < 0:
                 index += n
             if index < 0 or index >= n:
                 raise IndexError("Index out of range")
-            k = self._order[index]
-            if k not in self.data:  # stale order after an out-of-band edit
-                self._ensure_order_valid()
-                if index >= len(self._order):
-                    raise IndexError("Index out of range")
-                k = self._order[index]
+            k = order[index]
+            if k not in self.data:  # same-length out-of-band edit of ``data``
+                order = self._order = list(self.data.keys())
+                k = order[index]
             return k, self.data[k]
 
     def key_at(self, index: int) -> K:
@@ -326,8 +309,8 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
     def trim(self, start: int | None = None, end: int | None = None) -> None:
         """Keep only items in [start:end) by insertion order (end exclusive)."""
         with self._lock:
-            self._ensure_order_synced()
-            n = len(self._order)
+            order = self._order = list(self.data.keys())
+            n = len(order)
 
             s = 0 if start is None else start
             e = n if end is None else end
@@ -340,15 +323,15 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
 
             if s >= e:
                 self.data.clear()
-                self._order.clear()
+                self._order = None
                 return
 
-            keep_keys = self._order[s:e]
+            keep_keys = order[s:e]
             keep_set = set(keep_keys)
-            for k in list(self.data.keys()):
+            for k in order:
                 if k not in keep_set:
                     del self.data[k]
-            self._order[:] = keep_keys
+            self._order = keep_keys
 
     def compute(self, key: K, fn: Callable[[V | None], V | None]) -> V | None:
         """Atomically compute a new value for *key*.
@@ -387,10 +370,9 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
     def pretty(self, indent: int = 2) -> str:
         """Return a human-readable, multi-line string representation."""
         with self._lock:
-            self._ensure_order_valid()
             lines = ["AtomicDict {"]
-            for k in self._order:
-                lines.append(" " * indent + f"{k!r}: {self.data[k]!r},")
+            for k, v in self.data.items():
+                lines.append(" " * indent + f"{k!r}: {v!r},")
             lines.append("}")
             return "\n".join(lines)
 
@@ -433,7 +415,6 @@ class AtomicDict(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel, MutableMapping[K, V], 
 
         def __enter__(self) -> AtomicDict._AtomicView:
             self._p._lock.acquire()
-            self._p._ensure_order_synced()
             # expose this instance as "current"
             self._token = AtomicDict._current.set(self._p)
             return AtomicDict._AtomicView(self._p)

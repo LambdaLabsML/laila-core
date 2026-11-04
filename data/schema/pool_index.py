@@ -11,19 +11,37 @@ A :class:`PoolIndex` answers, for one *base* global id
 
 Layout
 ------
-One **shard per base**. A shard is an evolvable :class:`Entry` with
-scope ``POOL_INDEX`` and the deterministic id
-``LAILA:POOL_INDEX:<uuid5("pool_index:<owner uuid>:<base>")>`` whose
-payload is::
+One **shard per base**. A shard is a *constant* :class:`Entry` with
+scope ``POOL_INDEX`` and the deterministic, stable storage key
+``LAILA:POOL_INDEX:<uuid5("pool_index:<index identity>:<base>")>``
+whose payload is::
 
     {"base": base, "evolutions": [0, 1, 2], "constant": False,
      "creation_timestamps": {"2026-...": 2, ...}}
 
 Shards live in ``owner.index_pool`` (default: the owner pool itself;
-point it at an in-memory pool for cheap index writes). Only the latest
-shard evolution is kept: after shard evolution N is written, N-1 is
-deleted. Rewriting a shard is O(size of that base's history), not
-O(size of the pool), and shards are loaded on demand.
+point it at an in-memory pool for cheap index writes). Because the key
+is constant, a shard is rewritten in place: no listing, no straggler
+cleanup, so maintaining a shard is O(size of that base's history) and
+independent of the size of the pool. Shards are loaded on demand.
+
+Index identity
+--------------
+Shard ids are derived from the pool's **index identity**, not from the
+transient ``uuid`` of the Python object: the identity is persisted in
+the owner pool under the reserved key
+``LAILA:POOL_INDEX:<uuid5("pool_index:identity")>`` the first time the
+index is used, and adopted by every later pool instance that opens the
+same backing store. Reopening a file therefore finds its shards again
+(no orphaned shards, no silent fall back to key scans). In-memory pools
+never persist anything and keep using their ``uuid``.
+
+Legacy layout
+-------------
+Earlier releases stored shards as *evolvable* entries
+(``<shard id>@evolution=N``). The first time an index touches a store
+it migrates such shards to the constant layout (one key listing per
+pool instance, performed lazily and only when a legacy shard may exist).
 
 Consistency model
 -----------------
@@ -45,10 +63,10 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from typing import Any
 
 from ...basics.definitions.identifiable_object import (
-    _LAILA_IDENTIFIABLE_OBJECT,
     EVOLUTION_ATTRIBUTE,
     split_global_id_attributes,
 )
@@ -57,14 +75,27 @@ from ...macros.strings import _POOL_INDEX_SCOPE, _TOPMOST_SCOPE
 _LOG = logging.getLogger(__name__)
 
 _INDEX_KEY_PREFIX = f"{_TOPMOST_SCOPE}:{_POOL_INDEX_SCOPE}:"
+_LAILA_KEY_PREFIX = f"{_TOPMOST_SCOPE}:"
 
 # Name of the search attribute keyed by an entry's creation stamp.
 CREATION_TIMESTAMP_ATTRIBUTE = "creation_timestamp"
 
+# Reserved (hidden) key under which a pool persists its index identity.
+# Derived from a fixed namespace so it does not depend on the active laila
+# namespace: the same file must find its identity whoever reopens it.
+INDEX_IDENTITY_KEY = (
+    f"{_INDEX_KEY_PREFIX}{uuid.uuid5(uuid.NAMESPACE_URL, 'laila:pool_index:identity')}"
+)
+
 
 def is_index_key(key: str) -> bool:
-    """``True`` for storage keys that belong to an index shard."""
+    """``True`` for storage keys that belong to an index shard (or the identity record)."""
     return isinstance(key, str) and key.startswith(_INDEX_KEY_PREFIX)
+
+
+def is_laila_key(key: str) -> bool:
+    """``True`` for keys central memory manages (``LAILA:...``); raw user keys are not indexed."""
+    return isinstance(key, str) and key.startswith(_LAILA_KEY_PREFIX)
 
 
 def _record_creation_timestamp(raw: Any) -> str | None:
@@ -127,6 +158,8 @@ class PoolIndex:
         self._shards: dict[str, dict[str, Any]] = {}
         self._entries: dict[str, Any] = {}  # base -> live shard Entry
         self._missing: set[str] = set()  # bases known to have no shard
+        self._identity: str | None = None
+        self._migrated: bool = False
 
     # ------------------------------------------------------------------
     # Identity helpers
@@ -136,11 +169,49 @@ class PoolIndex:
         """Pool that stores the shards (``owner.index_pool`` or the owner)."""
         return self._owner.index_pool or self._owner
 
+    @property
+    def identity(self) -> str:
+        """Stable identity shard ids are derived from.
+
+        Persistent pools (``_persistent_storage = True``) store it in the
+        owner under :data:`INDEX_IDENTITY_KEY` on first use and adopt the
+        stored value on reopen, so a fresh pool instance finds the shards
+        an earlier instance wrote. In-process pools use their ``uuid`` and
+        persist nothing.
+        """
+        if self._identity is not None:
+            return self._identity
+        with self._owner.atomic():
+            if self._identity is not None:
+                return self._identity
+            identity = str(self._owner.uuid)
+            if getattr(self._owner, "_persistent_index_identity", True):
+                try:
+                    stored = self._owner._read(INDEX_IDENTITY_KEY)
+                    if isinstance(stored, (bytes, bytearray)):
+                        stored = stored.decode()
+                    if isinstance(stored, str):
+                        stored = json.loads(stored)
+                    if isinstance(stored, dict) and isinstance(stored.get("identity"), str):
+                        identity = stored["identity"]
+                    else:
+                        self._owner._write(INDEX_IDENTITY_KEY, {"identity": identity})
+                except Exception as exc:  # the index is a cache: never break the caller
+                    _LOG.debug("pool index: could not persist identity: %s", exc)
+            self._identity = identity
+            return identity
+
     def shard_id(self, base: str) -> str:
-        """Deterministic base id of the shard for *base* (no evolution attribute)."""
-        return _LAILA_IDENTIFIABLE_OBJECT.to_global_id(
-            nickname=f"pool_index:{self._owner.uuid}:{base}", scopes=[_POOL_INDEX_SCOPE]
-        )
+        """Deterministic, constant storage key of the shard for *base*."""
+        return f"{_INDEX_KEY_PREFIX}{self._shard_uuid(base)}"
+
+    def _shard_uuid(self, base: str) -> str:
+        """``uuid5(identity, base)``: stable across processes and laila namespaces."""
+        try:
+            namespace = uuid.UUID(self.identity)
+        except ValueError:  # non-UUID identity (custom pools): hash it first
+            namespace = uuid.uuid5(uuid.NAMESPACE_URL, f"laila:pool_index:{self.identity}")
+        return str(uuid.uuid5(namespace, base))
 
     # ------------------------------------------------------------------
     # Queries
@@ -202,8 +273,13 @@ class PoolIndex:
     # Maintenance (write-through)
     # ------------------------------------------------------------------
     def record(self, key: str, value: Any) -> None:
-        """Index a key that was just written with record *value*, then persist the shard."""
-        if is_index_key(key):
+        """Index a key that was just written with record *value*, then persist the shard.
+
+        Only ``LAILA:`` keys are indexed: raw user keys (``pool["k0"]``)
+        carry no lineage and skipping them keeps a plain write at one
+        backend write instead of two.
+        """
+        if is_index_key(key) or not is_laila_key(key):
             return
         base, _ = split_global_id_attributes(key)
         evolution = _key_evolution(key)
@@ -229,7 +305,7 @@ class PoolIndex:
 
     def remove(self, key: str) -> None:
         """Un-index a key that was just deleted, then persist (or drop) the shard."""
-        if is_index_key(key):
+        if is_index_key(key) or not is_laila_key(key):
             return
         base, _ = split_global_id_attributes(key)
         evolution = _key_evolution(key)
@@ -273,7 +349,9 @@ class PoolIndex:
         """
         with self._owner.atomic():
             bases = {
-                split_global_id_attributes(k)[0] for k in self._owner._keys() if not is_index_key(k)
+                split_global_id_attributes(k)[0]
+                for k in self._owner._keys()
+                if is_laila_key(k) and not is_index_key(k)
             }
             for base in bases:
                 self._drop_shard(base)
@@ -289,7 +367,7 @@ class PoolIndex:
         with self._owner.atomic():
             by_base: dict[str, list[str]] = {}
             for key in self._owner._keys():
-                if is_index_key(key):
+                if is_index_key(key) or not is_laila_key(key):
                     continue
                 by_base.setdefault(split_global_id_attributes(key)[0], []).append(key)
             for base, keys in by_base.items():
@@ -336,45 +414,78 @@ class PoolIndex:
             self._shards[base] = shard
             return shard
 
-    def _load(self, base: str) -> dict[str, Any] | None:
-        """Load the latest persisted shard of *base*; delete straggler evolutions."""
+    def _shard_from_raw(self, base: str, raw: Any) -> dict[str, Any] | None:
+        """Rebuild the in-memory shard (and cache its live Entry) from a stored record."""
         from ...policy.central.memory.record.record import Record
 
+        entry = Record._build_sync(raw)["entry"]
+        data = entry.data
+        if not isinstance(data, dict):
+            return None
+        shard = self._new_shard(base)
+        shard["evolutions"] = sorted(int(e) for e in data.get("evolutions", []))
+        shard["constant"] = bool(data.get("constant", False))
+        shard["creation_timestamps"] = {
+            str(ts): (None if evo is None else int(evo))
+            for ts, evo in dict(data.get("creation_timestamps", {})).items()
+        }
+        self._shards[base] = shard
+        self._entries[base] = entry
+        return shard
+
+    def _load(self, base: str) -> dict[str, Any] | None:
+        """Load the persisted shard of *base* from its constant key (one read, no listing)."""
         sid = self.shard_id(base)
         try:
             pool = self.index_pool
-            keys = sorted(pool._candidate_keys(sid), key=lambda k: _rank(_key_evolution(k)))
-            if not keys:
-                return None
-            latest = keys[-1]
-            raw = pool._read(latest)
+            raw = pool._read(sid)
             if raw is None:
+                # A persistent store written by an earlier release may still
+                # hold legacy (evolvable) shards: clean them up once.
+                self._ensure_migrated()
                 return None
-            entry = Record._build_sync(raw)["entry"]
-            data = entry.data
-            if not isinstance(data, dict):
-                return None
-            shard = self._new_shard(base)
-            shard["evolutions"] = sorted(int(e) for e in data.get("evolutions", []))
-            shard["constant"] = bool(data.get("constant", False))
-            shard["creation_timestamps"] = {
-                str(ts): (None if evo is None else int(evo))
-                for ts, evo in dict(data.get("creation_timestamps", {})).items()
-            }
-            self._shards[base] = shard
-            self._entries[base] = entry
-            for straggler in keys[:-1]:
-                try:
-                    pool._delete(straggler)
-                except Exception:  # pragma: no cover - best effort cleanup
-                    pass
-            return shard
+            return self._shard_from_raw(base, raw)
         except Exception as exc:  # index is a cache: never let it break the caller
             _LOG.warning("pool index: could not load shard for %s: %s", base, exc)
             return None
 
+    def _ensure_migrated(self) -> None:
+        """Run :meth:`_migrate_legacy_shards` once, and only for persistent index pools."""
+        if self._migrated:
+            return
+        if not getattr(self.index_pool, "_persistent_storage", True):
+            self._migrated = True  # in-process storage cannot hold legacy shards
+            return
+        self._migrate_legacy_shards()
+
+    def _migrate_legacy_shards(self) -> None:
+        """One-time purge of legacy ``<shard>@evolution=N`` shards.
+
+        Earlier releases derived shard ids from the transient uuid of
+        the pool *instance* that wrote them (and the active laila
+        namespace), so shards found in a reopened store can never be
+        attributed to the identity now in use: they are dead weight and
+        are deleted. The index pool is listed once per
+        :class:`PoolIndex` instance and only when a shard read misses.
+        Lineage information is rebuilt lazily by the write-through
+        maintenance, or eagerly with :meth:`rebuild`.
+        """
+        self._migrated = True
+        pool = self.index_pool
+        try:
+            legacy = [k for k in pool._keys() if is_index_key(k) and "@" in k]
+            for key in legacy:
+                try:
+                    pool._delete(key)
+                except Exception:  # pragma: no cover - best effort cleanup
+                    pass
+            if legacy:
+                _LOG.info("pool index: removed %d legacy index shard(s)", len(legacy))
+        except Exception as exc:  # pragma: no cover - best effort
+            _LOG.warning("pool index: legacy shard cleanup failed: %s", exc)
+
     def _flush(self, base: str) -> None:
-        """Persist the in-memory shard of *base* as the next shard evolution."""
+        """Persist the in-memory shard of *base* in place under its constant key."""
         from ...entry.entry import Entry
         from ...entry.entry_state import EntryState
         from ...policy.central.memory.record.record import Record
@@ -384,8 +495,8 @@ class PoolIndex:
             return
         pool = self.index_pool
         try:
-            # Copy so an in-memory index pool (which stores a snapshot sharing
-            # the payload object) never aliases the live shard dict.
+            # Fresh container objects: the in-memory pool stores a snapshot,
+            # and the live shard dict must never alias what is stored.
             payload = {
                 "base": shard["base"],
                 "evolutions": list(shard["evolutions"]),
@@ -394,39 +505,30 @@ class PoolIndex:
             }
             entry = self._entries.get(base)
             if entry is None:
-                # First shard evolution: constructed with its payload so it is
-                # not "locally modified" and lands as ``@evolution=0``.
                 entry = Entry.contingent(
-                    uuid=_LAILA_IDENTIFIABLE_OBJECT.generate_uuid_from_nickname(
-                        f"pool_index:{self._owner.uuid}:{base}"
-                    ),
+                    uuid=self._shard_uuid(base),
                     scopes=[_POOL_INDEX_SCOPE],
-                    evolution=0,
+                    evolution=None,  # constant: one stable key per base
                     data=payload,
                     state=EntryState.READY,
                 )
                 self._entries[base] = entry
-                previous_key = None
             else:
-                previous_key = entry.global_id
                 entry.data = payload
-            entry.bump_evolution_if_locally_modified()
             record = Record(entry=entry)
             blob = record.serialize(transformations=pool.transformations)
-            pool._write(entry.global_id, blob)
+            pool._write(self.shard_id(base), blob)
             entry.mark_memorized()
-            if previous_key is not None and previous_key != entry.global_id:
-                pool._delete(previous_key)
         except Exception as exc:
             _LOG.warning("pool index: could not persist shard for %s: %s", base, exc)
             self.invalidate(base)
 
     def _drop_shard(self, base: str) -> None:
-        """Delete every persisted evolution of the shard for *base* and forget it."""
+        """Delete the persisted shard for *base* and forget it."""
         pool = self.index_pool
         try:
-            for key in pool._candidate_keys(self.shard_id(base)):
-                pool._delete(key)
+            self._ensure_migrated()
+            pool._delete(self.shard_id(base))
         except Exception as exc:
             _LOG.warning("pool index: could not drop shard for %s: %s", base, exc)
         self._shards.pop(base, None)

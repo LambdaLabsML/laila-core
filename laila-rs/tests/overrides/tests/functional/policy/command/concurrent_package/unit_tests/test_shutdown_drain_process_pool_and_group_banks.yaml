@@ -1,0 +1,9 @@
+# py2rs override for tests/functional/policy/command/concurrent_package/unit_tests/test_shutdown_drain_process_pool_and_group_banks.py
+# `TestProcessPoolViaCommand` drives `PythonProcessPoolTaskForce`, whose
+# workers are Python interpreter subprocesses; the Rust port keeps that class
+# as a `NotImplementedError` scaffold (see PARITY.md).
+skip_tests:
+  test_command_submit_reaches_worker: PythonProcessPoolTaskForce (subprocess interpreter workers) has no Rust twin
+  test_build_on_process_pool: PythonProcessPoolTaskForce (subprocess interpreter workers) has no Rust twin
+  test_broken_pool_recovers: PythonProcessPoolTaskForce (subprocess interpreter workers) has no Rust twin
+  test_idle_sync_threads_are_reaped: thread-count burst assertion is timing-dependent (Rust bodies finish before the next submit); the executor recycle is covered by `cargo test -p laila-core --test command_tier1`

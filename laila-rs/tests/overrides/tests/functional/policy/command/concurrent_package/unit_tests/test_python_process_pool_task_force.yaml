@@ -1,0 +1,4 @@
+# py2rs override for tests/functional/policy/command/concurrent_package/unit_tests/test_python_process_pool_task_force.py
+# `PythonProcessPoolTaskForce` spawns Python interpreter workers; the Rust
+# port keeps the class as a `NotImplementedError` scaffold (see PARITY.md).
+skip: PythonProcessPoolTaskForce (subprocess interpreter workers) has no Rust twin

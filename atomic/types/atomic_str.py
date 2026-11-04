@@ -40,10 +40,22 @@ class AtomicStr(_LAILA_LOCALLY_ATOMIC_OBJECT, BaseModel):
             return self.value
 
     def append(self, suffix: str) -> str:
-        """Append *suffix* and return the resulting string."""
+        """Append *suffix* and return the resulting string.
+
+        Amortised O(len(suffix)): the current value is popped out of the
+        instance dict so the local name holds the *only* reference, which
+        lets CPython extend the string in place instead of copying it
+        (``self.value += suffix`` through the attribute always copied the
+        whole string, making a build-up loop quadratic). A caller that
+        keeps the returned string alive across appends simply pays one
+        copy on the next call.
+        """
         with self._lock:
-            self.value += str(suffix)
-            return self.value
+            d = self.__dict__
+            v = d.pop("value", "")
+            v += str(suffix)
+            d["value"] = v
+            return v
 
     def clear(self) -> None:
         """Reset the string to empty."""

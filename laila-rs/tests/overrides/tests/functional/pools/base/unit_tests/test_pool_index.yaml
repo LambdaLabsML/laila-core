@@ -1,0 +1,7 @@
+# py2rs override for tests/functional/pools/base/unit_tests/test_pool_index.py
+# The skips need either class-level monkeypatching of a Rust type or central
+# memory's reference resolution (`remember("ENTRY:<nickname>@evolution=-1")`,
+# Phase 4).
+skip_tests:
+  test_flush_failure_degrades_without_failing_memorize: monkeypatches `type(pool)._write` on the class (a Rust backend hook cannot be swapped at runtime) and remembers by nickname (Phase 4)
+  test_shard_reloads_from_storage_in_fresh_pool_object: `remember("ENTRY:persist-nick@evolution=-1")` needs central memory's `_resolve_entry_key_async` (Phase 4) and monkeypatches `second._keys`

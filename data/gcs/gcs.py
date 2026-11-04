@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import functools
 import json
+import types
 from collections.abc import Iterable, Iterator
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import quote, unquote
 
 from pydantic import ConfigDict, Field, PrivateAttr
@@ -13,14 +15,28 @@ from ...entry import transformation_base64
 from ...entry.compdata.transformation import TransformationSequence
 from ..schema.base import _LAILA_IDENTIFIABLE_POOL
 
-try:
-    from google.api_core.exceptions import NotFound
-    from google.cloud import storage
-    from google.oauth2 import service_account
-except ImportError:
-    storage = None  # type: ignore
-    service_account = None  # type: ignore
-    NotFound = Exception  # type: ignore
+
+@functools.lru_cache(maxsize=1)
+def _sdk() -> types.SimpleNamespace:
+    """Import ``google-cloud-storage`` on first use and cache the handles.
+
+    The SDK is deliberately *not* imported at module load: ``laila.data``
+    imports every backend eagerly, and google-cloud-storage is both slow to
+    import and noisy (``google.api_core`` / ``google.auth`` emit import-time
+    ``FutureWarning``s about the installed grpcio). Deferring it keeps
+    ``import laila`` clean for users who never touch :class:`GCSPool`.
+    """
+    try:
+        from google.api_core.exceptions import NotFound
+        from google.cloud import storage
+        from google.oauth2 import service_account
+    except ImportError as exc:
+        raise ImportError("google-cloud-storage is required for GCSPool") from exc
+    return types.SimpleNamespace(
+        NotFound=NotFound,
+        storage=storage,
+        service_account=service_account,
+    )
 
 
 class GCSPool(_LAILA_IDENTIFIABLE_POOL):
@@ -38,18 +54,19 @@ class GCSPool(_LAILA_IDENTIFIABLE_POOL):
     _client: Any = PrivateAttr(default=None)
     _bucket: Any = PrivateAttr(default=None)
 
+    _persistent_storage: ClassVar[bool] = True
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def _get_client(self):
         """Return the GCS ``storage.Client``, creating it on first call."""
         if self._client is not None:
             return self._client
-        if storage is None or service_account is None:
-            raise ImportError("google-cloud-storage is required for GCSPool")
+        sdk = _sdk()
 
         kwargs: dict[str, Any] = {}
         if self.service_account_info is not None:
-            credentials = service_account.Credentials.from_service_account_info(
+            credentials = sdk.service_account.Credentials.from_service_account_info(
                 self.service_account_info
             )
             kwargs["credentials"] = credentials
@@ -59,7 +76,7 @@ class GCSPool(_LAILA_IDENTIFIABLE_POOL):
         if self.project_id is not None:
             kwargs["project"] = self.project_id
 
-        self._client = storage.Client(**kwargs)
+        self._client = sdk.storage.Client(**kwargs)
         return self._client
 
     def _get_bucket(self):
@@ -86,7 +103,7 @@ class GCSPool(_LAILA_IDENTIFIABLE_POOL):
         blob = self._get_bucket().blob(self._object_key(key))
         try:
             raw = blob.download_as_text()
-        except NotFound:
+        except _sdk().NotFound:
             return None
         return json.loads(raw)
 
@@ -106,7 +123,7 @@ class GCSPool(_LAILA_IDENTIFIABLE_POOL):
         blob = self._get_bucket().blob(self._object_key(key))
         try:
             blob.delete()
-        except NotFound:
+        except _sdk().NotFound:
             return
 
     def _empty(self) -> None:

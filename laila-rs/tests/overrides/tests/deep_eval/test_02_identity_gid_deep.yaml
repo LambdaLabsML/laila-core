@@ -1,0 +1,9 @@
+# py2rs override for tests/deep_eval/test_02_identity_gid_deep.py
+skip_tests:
+  test_namespace_switch_changes_uuid: restores `laila._active_namespace` by assigning the private module global (no Rust twin; `set_active_namespace` is covered by the runtime suite)
+  test_nested_construction_restores_pending: a test-local `_LAILA_IDENTIFIABLE_OBJECT` subclass overriding `model_post_init` with `super()` (no Rust twin)
+import_twins:
+  parse_global_id_attributes: laila_tests::deep_eval_helpers::gid::parse_global_id_attributes
+  format_global_id_attributes: laila_tests::deep_eval_helpers::gid::format_global_id_attributes
+  split_global_id_attributes: laila_tests::deep_eval_helpers::gid::split_global_id_attributes
+  GLOBAL_ID_REGEX_PATTERN: laila_tests::deep_eval_helpers::gid::GLOBAL_ID_REGEX_PATTERN

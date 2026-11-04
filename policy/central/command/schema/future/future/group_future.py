@@ -7,10 +7,11 @@ manifest-level helpers, etc.). It owns no execution itself; instead it
 references the children by ``global_id`` and delegates ``status``,
 ``result``, ``wait``, and ``__await__`` to them.
 
-Children are looked up through the active local policy's future bank
-on every access; this means the group keeps working even if the local
-references to the children are dropped, as long as they remain in the
-bank.
+Children are looked up through the future banks on every access --
+the owning policy's bank first (``policy_id``), then every other local
+policy's; this means the group keeps working even if the local
+references to the children are dropped, as long as they remain in a
+bank, and regardless of which policy is currently active.
 """
 
 from __future__ import annotations
@@ -28,11 +29,38 @@ from .future import Future
 from .future_status import FutureStatus
 
 
-def _get_future_bank():
-    """Return the active local policy's future bank mapping."""
-    from ....... import _get_active_local_policy
+def _iter_future_banks(policy_id: Any):
+    """Yield candidate future banks: the owning policy's first, then every other local one.
 
-    return _get_active_local_policy().future_bank
+    A group handle must keep resolving its children after the user
+    activates another policy, so lookups are not tied to the *active*
+    policy (the same rule :meth:`Future.release` and ``runtime.wait``
+    follow).
+    """
+    from ....... import (
+        _future_bank_policies,
+        _get_active_local_policy,
+        _live_policies,
+        _local_policies,
+    )
+
+    pid = policy_id.global_id if hasattr(policy_id, "global_id") else policy_id
+    owner = None
+    if isinstance(pid, str):
+        owner = _local_policies.get(pid) or _live_policies.get(pid)
+    seen: set[int] = set()
+    if owner is not None:
+        seen.add(id(owner))
+        yield owner.future_bank
+    for policy in _future_bank_policies():
+        if id(policy) in seen:
+            continue
+        seen.add(id(policy))
+        yield policy.future_bank
+    if not seen:
+        # No local policy registered yet: fall back to (lazily creating)
+        # the default one, as every other bank accessor does.
+        yield _get_active_local_policy().future_bank
 
 
 class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
@@ -55,11 +83,16 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
     future_ids: list[str] = Field(default_factory=list)
 
     def model_post_init(self, __context: Any) -> None:
-        """Register this group future with the active local policy's future bank."""
-        super().model_post_init(__context)
-        from ....... import _get_active_local_policy
+        """Register this group future with its owning local policy's future bank.
 
-        policy = _get_active_local_policy()
+        The owner is the local policy named by ``policy_id`` when there
+        is one, else the active local policy (see
+        :func:`laila._owning_local_policy`).
+        """
+        super().model_post_init(__context)
+        from ....... import _owning_local_policy
+
+        policy = _owning_local_policy(self.policy_id)
         policy.central.command._register_future_with_active_guarantees(self)
         policy.future_bank[self.global_id] = self
         try:
@@ -77,10 +110,18 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
         used by the introspection paths (``status``, ``what``, ``repr``)
         which must stay safe to call after :meth:`release`.
         """
-        bank = _get_future_bank()
-        if strict:
-            return [bank[fid] for fid in self.future_ids]
-        return [bank[fid] for fid in self.future_ids if fid in bank]
+        banks = list(_iter_future_banks(self.policy_id))
+        children: list[Future] = []
+        for fid in self.future_ids:
+            for bank in banks:
+                child = bank.get(fid)
+                if child is not None:
+                    children.append(child)
+                    break
+            else:
+                if strict:
+                    raise KeyError(fid)
+        return children
 
     def release(self, *, children: bool = True) -> None:
         """Release this group -- and by default every child -- from the future bank.
@@ -92,11 +133,11 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
         children that are already gone are skipped. Nothing calls this
         automatically -- the holder of the group handle must.
         """
-        from ....... import _local_policies
+        from ....... import _future_bank_policies
 
         if children:
             for fid in list(self.future_ids):
-                for policy in _local_policies.values():
+                for policy in _future_bank_policies():
                     child = policy.future_bank.get(fid)
                     if child is not None:
                         release = getattr(child, "release", None)
@@ -106,7 +147,7 @@ class GroupFuture(_LAILA_IDENTIFIABLE_OBJECT):
                             policy.future_bank.pop(fid, None)
                         break
         gid = self.global_id
-        for policy in _local_policies.values():
+        for policy in _future_bank_policies():
             if policy.future_bank.get(gid) is self:
                 policy.future_bank.pop(gid, None)
                 return

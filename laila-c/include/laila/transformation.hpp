@@ -31,7 +31,7 @@ inline constexpr const char* PY_BASE64 =
 inline constexpr const char* PY_MSGPACK =
     "\ndef backward(inp):\n"
     "    import msgpack\n"
-    "    kwargs = {\"raw\": False, **{}}\n"
+    "    kwargs = {\"raw\": False, \"strict_map_key\": False, **{}}\n"
     "    return msgpack.unpackb(inp, **kwargs)\n";
 inline constexpr const char* PY_PICKLE =
     "\ndef backward(inp):\n"

@@ -1,0 +1,7 @@
+# py2rs override for tests/deep_eval/test_07_pool_index_deep.py
+# The key helpers of `pool_index` are typed in Rust (`&str`, `Option<i64>`);
+# the tests call them with Python values.
+import_twins:
+  _key_evolution: laila_tests::deep_eval_helpers::pool_index::_key_evolution
+  _evolution_key: laila_tests::deep_eval_helpers::pool_index::_evolution_key
+  _rank: laila_tests::deep_eval_helpers::pool_index::_rank

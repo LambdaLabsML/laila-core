@@ -48,7 +48,7 @@ so that hot reads never leave the in-memory tier.
 
 import asyncio
 from collections.abc import Iterable, Iterator
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import ConfigDict, Field, PrivateAttr
 
@@ -112,6 +112,35 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_IDENTIFIABLE_DATA_CONTAINER):
     index_pool: Any | None = CLIExempt(default=None)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    def model_post_init(self, __context: Any) -> None:
+        """Validate the configuration of pools backed by external storage.
+
+        A persistent backend serialises records to JSON / bytes, so it
+        needs a transformation sequence to turn an :class:`Entry` into
+        a storable blob; ``transformations=None`` there would make every
+        ``memorize`` fail later with an opaque serialisation error. It
+        is rejected up front instead. In-memory pools may use ``None``.
+        """
+        super().model_post_init(__context)
+        if self._persistent_storage and self.transformations is None:
+            raise ValueError(
+                f"{type(self).__name__} is backed by persistent storage and requires a "
+                "transformation sequence (got transformations=None); use e.g. "
+                "laila.transformations.transformation_base64"
+            )
+
+    # ``True`` for backends whose storage outlives the Python process (every
+    # built-in file / database / object-store pool sets it). It gates the
+    # ``transformations=None`` rejection above and the persistence of the
+    # pool-index identity (see ``pool_index.py``). Custom backends opt in by
+    # setting it on their class; in-process pools leave it ``False``.
+    _persistent_storage: ClassVar[bool] = False
+
+    @property
+    def _persistent_index_identity(self) -> bool:
+        """Whether the :class:`PoolIndex` persists its identity in this pool (see F-03)."""
+        return self._persistent_storage
 
     @property
     def pool_id(self) -> str:
@@ -203,7 +232,7 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_IDENTIFIABLE_DATA_CONTAINER):
     @proxy.setter
     def proxy(self, pool):
         if pool is not None:
-            pool._proxy_to = self
+            self._link_proxy(cache=pool, origin=self)
 
     @property
     def proxy_to(self):
@@ -212,7 +241,43 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_IDENTIFIABLE_DATA_CONTAINER):
 
     @proxy_to.setter
     def proxy_to(self, pool):
-        self._proxy_to = pool
+        if pool is None:
+            self._proxy_to = None
+        else:
+            self._link_proxy(cache=self, origin=pool)
+
+    @staticmethod
+    def _link_proxy(cache, origin) -> None:
+        """Set ``cache._proxy_to = origin`` after checking the chain stays acyclic.
+
+        Raises
+        ------
+        ValueError
+            When *cache* is *origin*, or *origin*'s upstream chain
+            already leads back to *cache* (``a << b`` then ``b << a``).
+        """
+        if cache is origin:
+            raise ValueError(f"A pool cannot proxy itself ({cache.global_id})")
+        seen: set[int] = set()
+        cur = origin
+        while cur is not None and id(cur) not in seen:
+            if cur is cache:
+                raise ValueError(
+                    f"Proxy cycle: {origin.global_id} already reaches {cache.global_id} "
+                    "through its proxy chain"
+                )
+            seen.add(id(cur))
+            cur = getattr(cur, "_proxy_to", None)
+        cache._proxy_to = origin
+
+    def _upstream_tiers(self):
+        """Upstream pools of this one, nearest first; stops at a repeated pool (defensive)."""
+        seen = {id(self)}
+        cur = self._proxy_to
+        while cur is not None and id(cur) not in seen:
+            seen.add(id(cur))
+            yield cur
+            cur = getattr(cur, "_proxy_to", None)
 
     def __lshift__(self, other):
         """``cache << origin``: install ``cache`` as a proxy for ``origin``.
@@ -390,11 +455,16 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_IDENTIFIABLE_DATA_CONTAINER):
         if value is not None:
             return value
 
-        if self._proxy_to is not None:
-            value = await self._proxy_to._read_through_async(key)
+        # Walk the chain iteratively (cycle-safe) and write the hit back
+        # into every tier in front of the one that held it.
+        missed = [self]
+        for tier in self._upstream_tiers():
+            value = await tier._read_async(key)
             if value is not None:
-                await self.write_async(key, value)
+                for front in reversed(missed):
+                    await front.write_async(key, value)
                 return value
+            missed.append(tier)
 
         return None
 
@@ -424,11 +494,14 @@ class _LAILA_IDENTIFIABLE_POOL(_LAILA_IDENTIFIABLE_DATA_CONTAINER):
         if value is not None:
             return value
 
-        if self._proxy_to is not None:
-            value = self._proxy_to[key]
+        missed = [self]
+        for tier in self._upstream_tiers():
+            value = tier._read(key)
             if value is not None:
-                self.write(key, value)
+                for front in reversed(missed):
+                    front.write(key, value)
                 return value
+            missed.append(tier)
 
         return None
 

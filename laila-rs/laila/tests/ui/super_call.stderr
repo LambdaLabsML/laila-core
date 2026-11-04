@@ -1,0 +1,5 @@
+error: laila::python: `super().m(..)` is lowered by py2rs to the class-qualified base method `self.<Base>__m(..)` (rule P12d)
+  --> tests/ui/super_call.rs:10:18
+   |
+10 |             super().setUp();
+   |                  ^^

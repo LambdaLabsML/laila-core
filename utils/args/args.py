@@ -8,19 +8,25 @@ them into a single attribute-accessible mapping (defaulting to
 - ``.json`` -- JSON object at the top level (:meth:`from_json`).
 - ``.toml`` -- TOML table at the top level (:meth:`from_toml`).
 - ``.env`` -- ``KEY=VALUE`` lines, ``#`` comments allowed
-  (:meth:`from_env`).
+  (:meth:`from_env`). A file literally named ``.env`` works too.
 - ``.xml`` -- one level of nesting allowed; siblings become nested
   dicts (:meth:`from_xml`).
-- ``terminal`` -- ``key=value`` tokens parsed from ``sys.argv``
+- ``terminal`` -- ``key=value``, ``--key=value``, ``--key value`` and
+  bare ``--flag`` (-> ``True``) tokens parsed from ``sys.argv``
   (:meth:`from_terminal`).
 - ``load(source)`` -- auto-detects format from the file suffix.
 
 Values are coerced from strings to the most specific Python scalar
 they fit (bool, None, int, float, JSON-shaped collection, quoted
 string, fall-back raw string) by :meth:`_coerce_scalar`. Nested
-dicts in JSON / TOML files are flattened *one level* with
-underscore-joined keys -- deeper nesting should be expressed via
-explicit dotted keys instead.
+dicts in JSON / TOML files are applied twice: flattened *one level*
+with underscore-joined keys (``s3_bucket_name``) for the flat,
+shell-style surface, **and** deep-merged into the nested tree
+(``laila.args.s3.bucket_name``) so a config file can drive the
+CLI-capable defaults that live under ``laila.args.policy...`` /
+``laila.args.logger``. Merging never replaces an existing nested
+mapping wholesale: keys set earlier (by code or another file) survive
+unless the new file sets the same leaf.
 """
 
 from __future__ import annotations
@@ -31,6 +37,15 @@ import xml.etree.ElementTree as ET
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
+
+
+def _looks_numeric(token: str) -> bool:
+    """``True`` for tokens such as ``-3`` / ``-0.5`` (values, not flags)."""
+    try:
+        float(token)
+    except ValueError:
+        return False
+    return True
 
 
 class ArgReader:
@@ -128,12 +143,82 @@ class ArgReader:
                 out[key] = cls._coerce_scalar(value)
         return out
 
+    @classmethod
+    def _coerce_tree(cls, value: Any) -> Any:
+        """Coerce scalars recursively inside nested dicts / lists."""
+        if isinstance(value, dict):
+            return {k: cls._coerce_tree(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [cls._coerce_tree(v) for v in value]
+        return cls._coerce_scalar(value)
+
+    @staticmethod
+    def _deep_merge(target: Any, key: str, value: dict[str, Any]) -> None:
+        """Merge the nested dict *value* into ``target[key]`` leaf by leaf.
+
+        An existing mapping under *key* (a ``DotMap`` or ``dict``) is
+        updated in place; missing branches are created; non-mapping
+        values at either side are replaced by the incoming leaf.
+        """
+        from dotmap import DotMap
+
+        def _lookup(container: Any, k: str) -> Any:
+            # ``AtomicDotMap`` has no ``get``/``__getitem__`` and answers
+            # every unknown attribute (including ``get``) with ``None``,
+            # so resolve through the *type* before trusting a callable.
+            getter = getattr(type(container), "get", None)
+            if callable(getter):
+                try:
+                    return container.get(k)
+                except Exception:
+                    return None
+            try:
+                return getattr(container, k)
+            except AttributeError:
+                return None
+
+        def _store(container: Any, k: str, v: Any) -> None:
+            if isinstance(container, DotMap):
+                setattr(container, k, DotMap(v) if isinstance(v, dict) else v)
+            elif isinstance(container, dict):
+                container[k] = v
+            else:
+                setattr(container, k, v)
+
+        existing = _lookup(target, key)
+        mapping_like = isinstance(existing, (dict, DotMap)) or (
+            existing is not None and callable(getattr(type(existing), "__setitem__", None))
+        )
+        if not mapping_like:
+            # ``DotMap(dict)`` converts nested dicts recursively so the
+            # branch stays attribute-accessible all the way down.
+            _store(target, key, value)
+            return
+        for sub_key, sub_value in value.items():
+            if isinstance(sub_value, dict):
+                ArgReader._deep_merge(existing, sub_key, sub_value)
+            else:
+                existing[sub_key] = sub_value
+
     def _apply(self, payload: dict[str, Any]) -> None:
-        """Flatten and set each key/value pair on the target."""
+        """Apply *payload* to the target: flat ``a_b`` keys plus the nested tree.
+
+        Top-level scalars are set as-is. A dict-valued top-level key is
+        set both ways: its first nesting level flattened with ``_``
+        (``policy_central``) **and** deep-merged under the original key
+        (``args.policy.central...``), which is where CLI-capable classes
+        resolve their defaults from. The ``environment`` key is applied
+        last so an environment load (which calls ``terminate`` and
+        rebuilds the policy graph) sees every other key already in place.
+        """
         flat = self._flatten_one_level(payload)
         target = self._target_map()
         for key, value in flat.items():
             setattr(target, key, value)
+        nested = [(k, v) for k, v in payload.items() if isinstance(v, dict)]
+        nested.sort(key=lambda kv: kv[0] == "environment")
+        for key, value in nested:
+            self._deep_merge(target, key, self._coerce_tree(value))
 
     def clear(self) -> None:
         """Remove all keys from the target mapping."""
@@ -218,7 +303,15 @@ class ArgReader:
         self._apply(parsed)
 
     def from_terminal(self, args: Iterable[str] | None = None) -> None:
-        """Load arguments from ``key=value`` command-line tokens.
+        """Load arguments from command-line tokens.
+
+        Accepted forms (dashes are stripped from the key):
+
+        - ``key=value`` / ``--key=value`` / ``-key=value``
+        - ``--key value`` (the next token, unless it is itself a flag)
+        - ``--flag`` (no value) -> ``True``
+
+        Bare tokens without ``=`` or a leading dash are ignored.
 
         Parameters
         ----------
@@ -227,14 +320,30 @@ class ArgReader:
         """
         tokens = list(sys.argv[1:] if args is None else args)
         parsed: dict[str, Any] = {}
-        for token in tokens:
-            if "=" not in token:
+        i = 0
+        while i < len(tokens):
+            token = tokens[i]
+            i += 1
+            dashed = token.startswith("-") and not _looks_numeric(token)
+            if "=" in token:
+                k, v = token.split("=", 1)
+                key = k.strip().lstrip("-") if dashed else k.strip()
+                if not key:
+                    continue
+                parsed[key] = self._coerce_scalar(v.strip())
                 continue
-            k, v = token.split("=", 1)
-            key = k.strip()
+            if not dashed:
+                continue
+            key = token.strip().lstrip("-")
             if not key:
                 continue
-            parsed[key] = self._coerce_scalar(v.strip())
+            if i < len(tokens):
+                nxt = tokens[i]
+                if "=" not in nxt and not (nxt.startswith("-") and not _looks_numeric(nxt)):
+                    parsed[key] = self._coerce_scalar(nxt.strip())
+                    i += 1
+                    continue
+            parsed[key] = True
         self._apply(parsed)
 
     def load(self, source: str | Path, *, terminal_args: Iterable[str] | None = None) -> None:
@@ -254,6 +363,8 @@ class ArgReader:
         """
         p = Path(source)
         suffix = p.suffix.lower()
+        if not suffix and p.name.lower() == ".env":
+            suffix = ".env"  # ``Path(".env").suffix`` is ``""``
         if suffix == ".json":
             self.from_json(p)
             return

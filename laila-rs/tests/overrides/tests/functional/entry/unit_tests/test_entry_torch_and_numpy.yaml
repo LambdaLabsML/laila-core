@@ -1,0 +1,14 @@
+# py2rs override for tests/functional/entry/unit_tests/test_entry_torch_and_numpy.py
+# The torch cases are `@unittest.skipUnless(HAVE_TORCH, ..)` in Python and
+# torch is never importable here (`cd_torch._HAVE_TORCH` is false): their
+# bodies have no Rust twin. The numpy cases run against the ndarray port.
+skip_tests:
+  test_008_numpy_strided_slice_int64: multi-axis slice indexing (`a[:, :, ::2]`) is not supported by py2rs / the ndarray port
+  test_009_torch_b64_int64_2d_cpu: torch payloads (PyTorch is not importable in laila-rs)
+  test_010_torch_b64_zlib_float32_2d_cpu: torch payloads (PyTorch is not importable in laila-rs)
+  test_011_torch_b64_zlib_fernet_float64_3d_noncontig_cpu: torch payloads (PyTorch is not importable in laila-rs)
+  test_012_torch_empty_float32_cpu: torch payloads (PyTorch is not importable in laila-rs)
+  test_013_torch_dtype_shape_uint8_cpu: torch payloads (PyTorch is not importable in laila-rs)
+  test_014_torch_strided_slice_int32_cpu: torch payloads (PyTorch is not importable in laila-rs)
+  test_016_torch_all_presets_smoke_cpu: torch payloads (PyTorch is not importable in laila-rs)
+  _assert_torch_equal: torch payloads (PyTorch is not importable in laila-rs)

@@ -25,9 +25,10 @@ Available presets
   pipeline that compresses, encrypts (Fernet), then base64-encodes. Use
   when stored bytes must be both compact and confidential.
 - :data:`transformation_encryption` -- factory:
-  ``transformation_encryption(key=None)`` returns a Fernet-only pipeline.
-  Suitable when the destination pool already handles its own binary
-  framing (e.g. a SQL ``BYTEA`` column).
+  ``transformation_encryption(key=None)`` returns a base64-then-Fernet
+  pipeline (no compression). Fernet is text-in/text-out, so the Base64
+  step turns the serialised payload bytes into the text it encrypts;
+  the result is a Fernet token string, safe for any text-only backend.
 
 With ``key=None`` the Fernet step reads the process-wide key from
 ``laila.args.encryption.key`` (alias ``laila.encryption_key``); the
@@ -54,6 +55,7 @@ transformation_base64_compression_encryption = lambda key=None: TransformationSe
 
 transformation_encryption = lambda key=None: TransformationSequence(
     transformations=[
+        Base64(),
         FernetEncryption(key=key),
     ]
 )

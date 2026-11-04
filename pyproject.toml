@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "laila-core"
-version = "1.0.12"
+version = "1.0.14"
 description = "Lambda's Interdisciplinary Large Atlas"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -35,7 +35,11 @@ classifiers = [
 s3 = ["boto3>=1.34,<2", "aioboto3>=12.3,<14"]
 cloudflare = ["boto3>=1.34,<2", "aioboto3>=12.3,<14"]
 backblaze = ["boto3>=1.34,<2", "aioboto3>=12.3,<14"]
-gcs = ["google-cloud-storage>=2.14,<4"]
+# grpcio is pulled in next to google-cloud-storage so an older grpcio already
+# present in the environment gets upgraded: google-api-core / google-auth emit
+# a FutureWarning on import for grpcio < 1.83 (no Post-Quantum Cryptography)
+# and will hard-require >= 1.83 from April 2027.
+gcs = ["google-cloud-storage>=2.14,<4", "grpcio>=1.83,<2"]
 azure = ["azure-storage-blob>=12.19,<13"]
 postgres = ["psycopg[binary]>=3.1,<4"]
 mongo = ["pymongo>=4.6,<5"]
@@ -43,6 +47,10 @@ redis = ["redis>=5.0,<6"]
 duckdb = ["duckdb>=0.10,<2"]
 hdf5 = ["h5py>=3.10,<4"]
 huggingface = ["huggingface_hub>=0.20,<1"]
+# huggingface_hub imports ``tqdm.auto``, which warns ("IProgress not found")
+# inside a Jupyter kernel unless ipywidgets is installed. Install this extra
+# when using laila from notebooks (e.g. the bundled tutorials).
+notebook = ["ipywidgets>=8,<9"]
 crypto = ["cryptography>=42.0,<46"]
 # --- communication transport drivers (optional, lazy-imported) ---
 serial = ["pyserial>=3.5,<4"]
@@ -54,7 +62,7 @@ zmq = ["pyzmq>=25.1,<27"]
 modbus = ["pymodbus>=3.6,<4"]
 opcua = ["asyncua>=1.1,<2"]
 xmpp = ["slixmpp>=1.8,<2"]
-grpc = ["grpcio>=1.60,<2"]
+grpc = ["grpcio>=1.83,<2"]
 quic = ["aioquic>=1.0,<2"]
 http = ["aiohttp>=3.9,<4"]
 ble = ["bleak>=0.21,<1"]
@@ -83,6 +91,12 @@ transports-verifiable = [
   "smbus2>=0.4,<1",
 ]
 torch = ["torch>=2.1,<3", "pillow>=10.0,<12"]
+# `laila.addons.torch` (Dataset / DataLoader / Module / Optimizer wrappers) and
+# the bundled agent skills (`laila.addons.skills`: data-loading,
+# model-checkpoint) ship in every wheel; this extra pulls in what they need
+# to run. After `pip install "laila-core[torch-skills]"`, run
+# `laila-skills install` to copy the skills into `./.cursor/skills/`.
+torch-skills = ["torch>=2.1,<3", "pillow>=10.0,<12"]
 imaging = ["imageio>=2.34,<3", "pillow>=10.0,<12"]
 docs = [
   "mkdocs-material>=9.5,<10",
@@ -105,6 +119,7 @@ all = [
   "boto3>=1.34,<2",
   "aioboto3>=12.3,<14",
   "google-cloud-storage>=2.14,<4",
+  "grpcio>=1.83,<2",
   "azure-storage-blob>=12.19,<13",
   "psycopg[binary]>=3.1,<4",
   "pymongo>=4.6,<5",
@@ -112,6 +127,7 @@ all = [
   "duckdb>=0.10,<2",
   "h5py>=3.10,<4",
   "huggingface_hub>=0.20,<1",
+  "ipywidgets>=8,<9",
   "cryptography>=42.0,<46",
   "torch>=2.1,<3",
   "pillow>=10.0,<12",
@@ -128,7 +144,7 @@ transports-all = [
   "pymodbus>=3.6,<4",
   "asyncua>=1.1,<2",
   "slixmpp>=1.8,<2",
-  "grpcio>=1.60,<2",
+  "grpcio>=1.83,<2",
   "aioquic>=1.0,<2",
   "aiohttp>=3.9,<4",
   "bleak>=0.21,<1",
@@ -142,10 +158,16 @@ transports-all = [
 Homepage = "https://github.com/LambdaLabsML/laila-core"
 Repository = "https://github.com/LambdaLabsML/laila-core"
 
+[project.scripts]
+laila-skills = "laila.addons.skills.__main__:main"
+
 [tool.setuptools]
 include-package-data = true
 packages = [
   "laila",
+  "laila.addons",
+  "laila.addons.skills",
+  "laila.addons.torch",
   "laila.atomic",
   "laila.atomic.definitions",
   "laila.atomic.types",
@@ -213,7 +235,13 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-"laila" = ["tutorials/**/*.ipynb", "tutorials/**/*.md"]
+"laila" = [
+  "tutorials/**/*.ipynb",
+  "tutorials/**/*.md",
+]
+# One directory per skill (SKILL.md + reference.md + helper scripts); these are
+# data, not importable modules -- `laila-skills install` copies them out.
+"laila.addons.skills" = ["*/**/*.md", "*/**/*.py"]
 
 [tool.setuptools.package-dir]
 laila = "."
@@ -233,6 +261,9 @@ extend-exclude = [
   "agentic",
   "tutorials",
   "examples",
+  # py2rs golden inputs are verbatim transpiler fixtures; their exact source
+  # (quote style, unused imports, ...) is the thing under test.
+  "laila-rs/tools/py2rs/tests/golden",
 ]
 
 [tool.ruff.lint]
@@ -332,6 +363,7 @@ markers = [
   "cloud: tests that require external cloud credentials (S3/GCS/Azure/etc.)",
   "slow: long-running tests (perf, large datasets)",
   "integration: cross-component integration tests",
+  "interop: cross-language peer interop matrix (tests/interop; skips languages not installed)",
 ]
 filterwarnings = [
   "error::pydantic.PydanticDeprecatedSince20",

@@ -9,10 +9,21 @@ returns a nested dict of ``Entry`` objects mirroring the blueprint. The
 fetch uses the memory's direct-await resolver (``_read_entries_async`` /
 ``_read_entries_direct``): one task for the whole batch rather than one
 future per child, released as soon as the entries have been collected.
+
+A :class:`ComplexManifest` (scope ``MANIFEST:COMPLEX``) is a manifest
+whose leaves may themselves be manifests -- a model checkpoint, an
+optimizer checkpoint, a dataset manifest and a config entry under one
+``"everything"`` nickname. It memorizes its members recursively and,
+when it is read back from a pool, undergoes *recursive blueprint
+resolution*: every leaf whose gid carries a ``MANIFEST`` scope is fetched
+and cast back into its typed manifest, so ``everything["model"]`` is a
+``ModuleManifest`` again. ``rebuild()`` then turns those typed manifests
+into the live objects they were made from.
 """
 
 from __future__ import annotations
 
+import abc
 import copy
 import hashlib
 import os
@@ -20,7 +31,7 @@ import re
 import sqlite3
 import threading
 import uuid as _uuid
-from collections.abc import Hashable, Iterable, Iterator
+from collections.abc import Callable, Hashable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
@@ -29,7 +40,7 @@ from pydantic import PrivateAttr
 from .....entry import Entry
 from .....entry.compdata import ComputationalData
 from .....entry.entry_state import EntryState
-from .....macros.strings import _MANIFEST_SCOPE
+from .....macros.strings import _COMPLEX_MANIFEST_SCOPE, _MANIFEST_SCOPE
 
 # ----------------------------------------------------------------------
 # Non-memorizing algorithmic help: SQL index
@@ -175,13 +186,19 @@ class Manifest(Entry):
     """
 
     _DEFAULT_SCOPES: ClassVar[list[str]] = [_MANIFEST_SCOPE]
+    # ``True`` on manifests whose leaves belong to them (a checkpoint's
+    # tensors): ``ComplexManifest.forget`` recurses into those; a plain
+    # manifest's leaves (a dataset) are shared and only dropped as entries.
+    _OWNS_CHILDREN: ClassVar[bool] = False
     _pending_entries: list | None = PrivateAttr(default=None)
+    _nickname: str | None = PrivateAttr(default=None)
     _sql_state: _SqlState | None = PrivateAttr(default=None)
     _sql_finalizer: Any = PrivateAttr(default=None)
 
     def __init__(self, **data: Any):
         raw_data = data.pop("data", None)
         blueprint_kwarg = data.pop("blueprint", None)
+        nickname = data.get("nickname")
 
         blueprint: dict | None = None
         pending = None
@@ -212,10 +229,59 @@ class Manifest(Entry):
 
         Entry.__init__(self, **entry_kwargs)
         self._pending_entries = pending
+        self._nickname = nickname if isinstance(nickname, str) else None
 
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
+
+    @property
+    def nickname(self) -> str | None:
+        """The nickname this manifest was created with (``None`` when read back from a pool)."""
+        return self._nickname
+
+    @staticmethod
+    def is_manifest_gid(gid: Any) -> bool:
+        """``True`` when *gid* names a manifest of any kind (``LAILA:MANIFEST[:...]:<uuid>``).
+
+        Decided from the string alone -- the scopes are part of the gid
+        -- so classifying a blueprint leaf costs no I/O.
+        """
+        if not isinstance(gid, str):
+            return False
+        from .....basics.definitions.identifiable_object import (
+            _LAILA_IDENTIFIABLE_OBJECT,
+            split_global_id_attributes,
+        )
+
+        try:
+            # Search attributes (``@evolution=-1``) are not part of the
+            # identity and would be rejected by ``process_global_id``.
+            head, _ = split_global_id_attributes(gid)
+            scopes = _LAILA_IDENTIFIABLE_OBJECT.process_global_id(head)["scopes"]
+        except Exception:
+            return False
+        return bool(scopes) and scopes[0] == _MANIFEST_SCOPE
+
+    @property
+    def data(self) -> Any | None:
+        """The blueprint payload (see :attr:`Entry.data`)."""
+        return Entry.data.fget(self)
+
+    @data.setter
+    def data(self, new_data: Any | None) -> None:
+        """Replace the blueprint and mark any SQL index stale.
+
+        ``sql()`` promises the index is reused *until the blueprint
+        mutates*; re-assigning ``manifest.data`` is such a mutation, so
+        the next query rebuilds from the new rows (same as ``extend`` /
+        ``+=``).
+        """
+        Entry.data.fset(self, new_data)
+        # ``from_dict`` builds via ``cls.__new__`` and sets ``data`` before
+        # private attributes exist.
+        if getattr(self, "__pydantic_private__", None) is not None:
+            self.invalidate_index()
 
     @property
     def blueprint(self) -> dict | None:
@@ -247,27 +313,76 @@ class Manifest(Entry):
         if bp is None:
             raise RuntimeError("No blueprint to resolve — manifest is empty.")
 
-        all_gids = list(self)
+        known = self._preresolved()
+        all_gids = [gid for gid in self if gid not in known]
         if not all_gids:
-            return Manifest._rebuild_with_entries(bp, {})
+            return Manifest._rebuild_with_entries(bp, known)
 
         memory = laila.get_active_policy().central.memory
-        # Direct-await resolver: one task on the internal taskforce reads
-        # every child concurrently, instead of one future per child.
-        ref = memory._read_entries_direct(all_gids)
-        try:
-            results = ref.wait(None).data
-        finally:
-            # The manifest owns this future; release it from the bank once
-            # consumed so a large realized() does not pin its children.
-            ref.release()
-        results = list(results)
+
+        def _read(pool):
+            # Direct-await resolver: one task on the internal taskforce reads
+            # every child concurrently, instead of one future per child.
+            ref = memory._read_entries_direct(all_gids, pool=pool)
+            try:
+                return list(ref.wait(None).data)
+            finally:
+                # The manifest owns this future; release it from the bank
+                # once consumed so a large realized() does not pin its
+                # children.
+                ref.release()
+
+        results = None
+        last_exc = None
+        for pool in self._candidate_pools(memory):
+            try:
+                results = _read(pool)
+                break
+            except KeyError as exc:
+                last_exc = exc
+        if results is None:
+            raise KeyError(
+                "Manifest.realized: one or more referenced entries failed to resolve."
+            ) from last_exc
 
         if len(results) != len(all_gids) or any(r is None for r in results):
             raise KeyError("Manifest.realized: one or more referenced entries failed to resolve.")
 
-        resolved_map = dict(zip(all_gids, results))
+        resolved_map = dict(known)
+        resolved_map.update(zip(all_gids, results))
         return Manifest._rebuild_with_entries(bp, resolved_map)
+
+    def _preresolved(self) -> dict[str, Any]:
+        """``{gid: object}`` for leaves that are already in hand (never re-fetched).
+
+        A plain manifest holds nothing; a :class:`ComplexManifest`
+        contributes its resolved / assigned members.
+        """
+        return {}
+
+    def _candidate_pools(self, memory) -> list:
+        """Pools to look for referenced entries in, most likely first.
+
+        1. the pool this manifest was last read from / written to
+           (``_source_pool_gid``), when known;
+        2. the alpha pool (``None`` -- the historical behaviour);
+        3. every other registered pool, so a manifest whose children live
+           in a different named pool still resolves (bounded by the
+           number of pools).
+        """
+        hint = getattr(self, "_source_pool_gid", None)
+        router = getattr(memory, "pool_router", None)
+        known = list(getattr(router, "pools", {}).keys()) if router is not None else []
+        alpha = getattr(memory, "alpha_pool", None)
+        order: list = []
+        if hint is not None and hint in known:
+            order.append(hint)
+        if hint != alpha:
+            order.append(None)
+        for gid in known:
+            if gid != hint and gid != alpha:
+                order.append(gid)
+        return order
 
     @property
     def async_realized(self):
@@ -293,33 +408,49 @@ class Manifest(Entry):
             if bp is None:
                 raise RuntimeError("No blueprint to resolve — manifest is empty.")
 
-            all_gids = list(self)
+            known = self._preresolved()
+            all_gids = [gid for gid in self if gid not in known]
             if not all_gids:
-                return Manifest._rebuild_with_entries(bp, {})
+                return Manifest._rebuild_with_entries(bp, known)
 
             from ...command.schema.parking import _CURRENT_SLOT
 
             memory = laila.get_active_policy().central.memory
-            if _CURRENT_SLOT.get() is not None:
-                # Already running on a taskforce loop: await the pool
-                # directly -- zero futures for the whole batch.
-                results = await memory._read_entries_async(all_gids)
-            else:
+            on_loop = _CURRENT_SLOT.get() is not None
+
+            async def _read(pool):
+                if on_loop:
+                    # Already running on a taskforce loop: await the pool
+                    # directly -- zero futures for the whole batch.
+                    return list(await memory._read_entries_async(all_gids, pool=pool))
                 # Foreign loop (user's asyncio.run): keep pool I/O on the
                 # taskforce loops via a single submitted task.
-                ref = memory._read_entries_direct(all_gids)
+                ref = memory._read_entries_direct(all_gids, pool=pool)
                 try:
-                    results = (await ref).data
+                    return list((await ref).data)
                 finally:
                     ref.release()
-            results = list(results)
+
+            results = None
+            last_exc = None
+            for pool in self._candidate_pools(memory):
+                try:
+                    results = await _read(pool)
+                    break
+                except KeyError as exc:
+                    last_exc = exc
+            if results is None:
+                raise KeyError(
+                    "Manifest.async_realized: one or more referenced entries failed to resolve."
+                ) from last_exc
 
             if len(results) != len(all_gids) or any(r is None for r in results):
                 raise KeyError(
                     "Manifest.async_realized: one or more referenced entries failed to resolve."
                 )
 
-            resolved_map = dict(zip(all_gids, results))
+            resolved_map = dict(known)
+            resolved_map.update(zip(all_gids, results))
             return Manifest._rebuild_with_entries(bp, resolved_map)
 
         return _resolve()
@@ -335,6 +466,7 @@ class Manifest(Entry):
         pool_nickname: str | None = None,
         pool_id: str | None = None,
         batch_size: int = 128,
+        context: dict | None = None,
     ):
         """Upload all referenced entries and store the manifest itself.
 
@@ -354,6 +486,12 @@ class Manifest(Entry):
             Back-compat aliases for *pool*.
         batch_size : int, default 128
             Number of pending entries per underlying ``laila.memorize`` call.
+        context : dict, optional
+            The sibling members of the :class:`ComplexManifest` this
+            manifest is being memorized from (``{key: live object}``).
+            Ignored by a plain manifest; typed manifests use it to
+            reference their siblings (an optimizer names the model whose
+            parameters it drives).
         """
         import laila
 
@@ -365,6 +503,13 @@ class Manifest(Entry):
         routed = Manifest._resolve_pool(pool, pool_nickname, pool_id)
         all_future_ids: list[str] = []
         policy = laila.get_active_policy()
+        try:
+            # Children and the manifest itself land in ``routed``: remember
+            # it so ``realized`` looks there first.
+            resolved = policy.central.memory._resolve_pool_ref(routed) if routed else None
+            self._source_pool_gid = resolved.global_id if resolved is not None else None
+        except Exception:
+            pass
 
         if self._pending_entries:
             for i in range(0, len(self._pending_entries), batch_size):
@@ -1141,6 +1286,87 @@ class Manifest(Entry):
             raise KeyError(key)
         return bp[key]
 
+    def __setitem__(self, key: str, value: Any) -> None:
+        """Assign a top-level blueprint key: ``manifest["config"] = entry``.
+
+        Accepted values are blueprint fragments -- a ``global_id`` string,
+        a list of them, a nested dict of them -- or :class:`Entry` objects
+        (anywhere inside a list / dict too), which are converted to their
+        gid and queued for the next :meth:`memorize`. A manifest or a
+        :class:`ManifestBacked` object is rejected here: a manifest that
+        holds other manifests is a :class:`ComplexManifest`
+        (``laila.complex_manifest(...)``), which is the only kind the read
+        path resolves recursively.
+
+        Re-assigning an existing key replaces it. The blueprint changed,
+        so the manifest is marked locally modified and any SQL index is
+        invalidated (same bookkeeping as :meth:`extend`).
+        """
+        if not isinstance(key, str):
+            raise TypeError(f"Manifest keys must be strings, got {type(key).__name__}")
+        leaf, pending = self._coerce_value(key, value)
+        with self.atomic():
+            bp = dict(self.data) if self.data is not None else {}
+            bp[key] = leaf
+            self._set_blueprint(bp)
+            if pending:
+                if self._pending_entries is None:
+                    self._pending_entries = list(pending)
+                else:
+                    self._pending_entries.extend(pending)
+
+    def __delitem__(self, key: str) -> None:
+        """Remove a top-level blueprint key (its entries are not forgotten)."""
+        bp = self.data
+        if bp is None or key not in bp:
+            raise KeyError(key)
+        with self.atomic():
+            new_bp = dict(bp)
+            del new_bp[key]
+            self._set_blueprint(new_bp)
+
+    def _set_blueprint(self, blueprint: dict) -> None:
+        """Replace the blueprint in place (``__setitem__`` / ``__delitem__``)."""
+        self.data = blueprint
+        if self.state is not EntryState.READY:
+            self.state = EntryState.READY
+
+    def _coerce_value(self, key: str, value: Any) -> tuple[Any, list]:
+        """``(blueprint fragment, pending entries)`` for ``self[key] = value``."""
+        if isinstance(value, (Manifest, ManifestBacked)):
+            raise TypeError(
+                f"Manifest[{key!r}]: a {type(value).__name__} cannot be a member of a plain "
+                "manifest; create the container with laila.complex_manifest(...) so the "
+                "nested manifest is memorized and resolved recursively"
+            )
+        if isinstance(value, Entry):
+            return value.global_id, [value]
+        if isinstance(value, str):
+            return value, []
+        if isinstance(value, (list, dict)):
+            fragment = {key: value}
+            has_entries, has_strings = Manifest._classify_data(fragment)
+            if has_entries and has_strings:
+                raise ValueError(
+                    f"Manifest[{key!r}]: a fragment must hold either Entry objects or "
+                    "global_id strings, not a mix of both"
+                )
+            if has_entries:
+                for entry in Manifest._iter_entries(fragment):
+                    if isinstance(entry, Manifest):
+                        raise TypeError(
+                            f"Manifest[{key!r}]: nested manifests need laila.complex_manifest(...)"
+                        )
+                return Manifest._extract_blueprint(fragment)[key], list(
+                    Manifest._iter_entries(fragment)
+                )
+            Manifest._validate_blueprint(fragment)
+            return copy.deepcopy(value), []
+        raise TypeError(
+            f"Manifest[{key!r}]: expected a global_id, a list / dict of them or an Entry, "
+            f"got {type(value).__name__}"
+        )
+
     def __len__(self) -> int:
         """Number of top-level keys in the blueprint."""
         bp = self.data
@@ -1204,7 +1430,7 @@ class Manifest(Entry):
 
     def __repr__(self) -> str:
         n = sum(1 for _ in self)
-        return f"Manifest({self.global_id}, entries={n})"
+        return f"{type(self).__name__}({self.global_id}, entries={n})"
 
     # ------------------------------------------------------------------
     # Static / class helpers
@@ -1361,10 +1587,569 @@ class Manifest(Entry):
         return result
 
 
+class ManifestBacked(abc.ABC):
+    """Marker for objects that are *backed by* a :class:`Manifest`.
+
+    Some objects cannot subclass :class:`Manifest` (it is a pydantic model
+    with a validating ``__setattr__``) but still want
+    ``laila.memorize(obj)`` / ``laila.remember(obj)`` / ``laila.forget(obj)``
+    to mean "turn me into my manifest and run its bulk operation" --
+    ``laila.addons.torch.Module`` (a ``torch.nn.Module``) and
+    ``laila.addons.torch.Optimizer`` (a ``torch.optim.Optimizer``) are
+    the canonical examples. The top-level shims treat a bare
+    ``ManifestBacked`` exactly like a bare ``Manifest``: they call
+    ``obj.memorize(pool=...)``, ``obj.remember(pool=..., persist=...)``
+    or ``obj.forget(pool=...)`` and return whatever that returns.
+
+    Subclasses provide :attr:`manifest` (a fresh :class:`Manifest`
+    describing their current state), :attr:`global_id` (the manifest's
+    identity, derived from a nickname) and the three bulk operations,
+    which normally delegate to a :class:`Manifest` subclass that
+    implements the type-specific ``remember``. Plain ABC on purpose: it
+    carries no state and composes with any base class.
+    """
+
+    @property
+    @abc.abstractmethod
+    def manifest(self) -> Manifest:
+        """A fresh manifest snapshot of this object's current state."""
+
+    @property
+    @abc.abstractmethod
+    def global_id(self) -> str:
+        """The ``global_id`` of the manifest this object is stored under."""
+
+    @abc.abstractmethod
+    def memorize(self, *, pool=None, **kwargs):
+        """Store the manifest (and its entries); returns a future-like."""
+
+    @abc.abstractmethod
+    def remember(self, *, pool=None, persist: bool = False, **kwargs):
+        """Load the stored manifest back into this object; returns a future-like."""
+
+    @abc.abstractmethod
+    def forget(self, *, pool=None, **kwargs):
+        """Delete the manifest and its entries from *pool*; returns a future-like."""
+
+
+class ComplexManifest(Manifest):
+    """A manifest whose members may be manifests themselves.
+
+    Scope ``MANIFEST:COMPLEX`` -- the gid itself announces that there are
+    manifests underneath, so the read path only ever walks complex
+    manifests; a plain :class:`Manifest` (a dataset with a million
+    leaves) is never scanned.
+
+    Write side::
+
+        everything = laila.complex_manifest(nickname="everything")
+        everything["model"] = model            # laila.addons.torch.Module (or a bare nn.Module)
+        everything["optimizer"] = optimizer    # laila.addons.torch.Optimizer (or a bare one)
+        everything["dataset"] = dataset.manifest
+        everything["config"] = laila.constant(data={...})
+        laila.memorize(everything, dst_pool="ckpt")
+
+    ``memorize`` is recursive: every member that is a :class:`Manifest`
+    or :class:`ManifestBacked` runs its *own* ``memorize`` into the same
+    pool (receiving the sibling members as ``context``), plain entries
+    are batched as usual, and the complex manifest's blueprint is
+    ``{key: member gid}``.
+
+    Read side -- *recursive blueprint resolution*::
+
+        everything = laila.remember("MANIFEST:COMPLEX:everything", dst_pool="ckpt").wait()
+        everything["model"]        # a ModuleManifest (typed through its scope)
+        everything["dataset"]      # the dataset Manifest (one record, never walked)
+        everything["config"]       # still a gid: plain entries are not fetched here
+        live = everything.rebuild()    # {"model": Module, "optimizer": Optimizer, "config": Entry, ...}
+        everything["model"]        # now the rebuilt Module
+
+    When a complex manifest arrives from a pool, every top-level leaf
+    whose gid carries the ``MANIFEST`` scope is fetched from the same
+    pool, hydrated into its typed class through the scope builder and
+    attached as a member; a nested complex manifest is resolved
+    recursively in turn. Leaves that are not manifests stay gids.
+    ``rebuild()`` then asks each typed member to reconstruct its live
+    object (``ModuleManifest`` -> ``Module``, ``OptimizerManifest`` ->
+    ``Optimizer`` bound to the rebuilt model's parameters, ...), fetches
+    plain entries and returns ``{key: object}`` in blueprint order.
+
+    Members are top-level keys only; nested dict / list fragments behave
+    exactly as in a plain manifest (gids, realized to entries).
+    """
+
+    _DEFAULT_SCOPES: ClassVar[list[str]] = [_MANIFEST_SCOPE, _COMPLEX_MANIFEST_SCOPE]
+    _OWNS_CHILDREN: ClassVar[bool] = True
+    # ``(type, factory)`` pairs; ``factory(value, key, container_nickname)``
+    # returns the ``ManifestBacked`` / ``Manifest`` standing in for *value*.
+    _ADAPTERS: ClassVar[list[tuple[type, Callable[[Any, str, str | None], Any]]]] = []
+
+    # ``{key: object}`` -- what ``self[key]`` currently is: the assigned
+    # object (write side), the typed manifest (after resolution) or the
+    # live object (after rebuild).
+    _members: dict = PrivateAttr(default_factory=dict)
+    # ``{key: ManifestBacked}`` for members that were adapted from a bare
+    # object (``everything["model"] = nn.Module``): the wrapper that
+    # memorizes / forgets on the bare object's behalf.
+    _adapted: dict = PrivateAttr(default_factory=dict)
+    _resolved: bool = PrivateAttr(default=False)
+
+    def __init__(self, **data: Any) -> None:
+        raw_data = data.pop("data", None)
+        blueprint_kwarg = data.pop("blueprint", None)
+        source = raw_data if raw_data is not None else blueprint_kwarg
+        super().__init__(**data)
+        if source is not None:
+            if not isinstance(source, dict):
+                raise ValueError("ComplexManifest data must be a dict.")
+            if not source:
+                self._set_blueprint({})
+            for key, value in source.items():
+                self[key] = value
+
+    # ------------------------------------------------------------------
+    # adapters
+    # ------------------------------------------------------------------
+    @classmethod
+    def register_adapter(cls, type_: type, factory: Callable[[Any, str, str | None], Any]) -> None:
+        """Teach ``everything[key] = value`` how to wrap a bare *type_*.
+
+        *factory(value, key, container_nickname)* must return a
+        :class:`ManifestBacked` (or :class:`Manifest`) standing in for
+        *value*; ``laila.addons.torch`` registers ``torch.nn.Module`` and
+        ``torch.optim.Optimizer`` this way. The most recently registered
+        matching type wins.
+        """
+        cls._ADAPTERS.insert(0, (type_, factory))
+
+    @classmethod
+    def _adapt(cls, value: Any, key: str, nickname: str | None) -> Any | None:
+        for type_, factory in cls._ADAPTERS:
+            if isinstance(value, type_):
+                return factory(value, key, nickname)
+        return None
+
+    # ------------------------------------------------------------------
+    # mapping surface
+    # ------------------------------------------------------------------
+    def _coerce_value(self, key: str, value: Any) -> tuple[Any, list]:
+        self._adapted.pop(key, None)
+        self._members.pop(key, None)
+        if isinstance(value, (Manifest, ManifestBacked)):
+            self._members[key] = value
+            return value.global_id, []
+        adapted = self._adapt(value, key, self._nickname)
+        if adapted is not None:
+            self._members[key] = value
+            self._adapted[key] = adapted
+            return adapted.global_id, []
+        if isinstance(value, Entry):
+            self._members[key] = value
+        return super()._coerce_value(key, value)
+
+    def __getitem__(self, key: str) -> Any:
+        """The member under *key* when there is one, else the blueprint value.
+
+        After assignment this is the object that was assigned; after a
+        read from a pool it is the typed manifest the leaf resolved to;
+        after :meth:`rebuild` it is the live object. ``blueprint[key]``
+        is always the raw gid / fragment.
+        """
+        if key in self._members:
+            return self._members[key]
+        return super().__getitem__(key)
+
+    def __delitem__(self, key: str) -> None:
+        super().__delitem__(key)
+        self._members.pop(key, None)
+        self._adapted.pop(key, None)
+
+    @property
+    def members(self) -> dict[str, Any]:
+        """Read-only view of the current members (``{key: object}``)."""
+        return dict(self._members)
+
+    def _snapshot(self) -> Entry:
+        # The stored copy (in-memory pools) must not share the live
+        # members: a later read resolves them from the pool like any
+        # other pool would.
+        clone = super()._snapshot()
+        clone._members = {}
+        clone._adapted = {}
+        clone._resolved = False
+        return clone
+
+    def _preresolved(self) -> dict[str, Any]:
+        bp = self.data or {}
+        return {
+            bp[key]: member
+            for key, member in self._members.items()
+            if isinstance(bp.get(key), str) and isinstance(member, Entry)
+        }
+
+    def _handle(self, key: str) -> Any:
+        """The memorizable stand-in for member *key* (the adapter wrapper when there is one)."""
+        return self._adapted.get(key, self._members.get(key))
+
+    def _manifest_members(self, *, recursive: bool = True) -> list:
+        """Members that are manifests (typed or plain), nested complex ones expanded."""
+        out: list = []
+        for key in self._members:
+            handle = self._handle(key)
+            if isinstance(handle, Manifest):
+                out.append(handle)
+                if recursive and isinstance(handle, ComplexManifest):
+                    out.extend(handle._manifest_members(recursive=True))
+        return out
+
+    # ------------------------------------------------------------------
+    # memorize (recursive)
+    # ------------------------------------------------------------------
+    def memorize(
+        self,
+        *,
+        pool=None,
+        pool_nickname: str | None = None,
+        pool_id: str | None = None,
+        batch_size: int = 128,
+        context: dict | None = None,
+    ):
+        """Memorize every member into *pool*, then the complex manifest itself.
+
+        Members that are manifests / manifest-backed objects run their
+        own ``memorize(pool=..., context=<sibling handles>)`` first (so a
+        typed manifest can reference a sibling), plain pending entries
+        are batched, and finally the blueprint ``{key: member gid}`` is
+        stored under this manifest's gid. One :class:`GroupFuture`
+        covering every write is returned.
+        """
+        import laila
+
+        from ...command.schema.future.future.group_future import GroupFuture
+
+        if self.data is None:
+            raise RuntimeError("Nothing to memorize — manifest has no blueprint.")
+
+        routed = Manifest._resolve_pool(pool, pool_nickname, pool_id)
+        policy = laila.get_active_policy()
+        all_future_ids: list[str] = []
+        handles = {key: self._handle(key) for key in self.data if key in self._members}
+
+        for key in list(self.data):
+            handle = handles.get(key)
+            if isinstance(handle, (Manifest, ManifestBacked)):
+                ref = handle.memorize(pool=routed, batch_size=batch_size, context=handles)
+                all_future_ids.extend(Manifest._collect_future_ids(ref))
+
+        self_ref = Manifest.memorize(self, pool=routed, batch_size=batch_size)
+        all_future_ids.extend(Manifest._collect_future_ids(self_ref))
+        return GroupFuture(
+            taskforce_id=policy.central.command.internal_taskforce,
+            policy_id=policy.global_id,
+            future_ids=all_future_ids,
+        )
+
+    # ------------------------------------------------------------------
+    # recursive blueprint resolution
+    # ------------------------------------------------------------------
+    def _unresolved_manifest_leaves(self) -> list[tuple[str, str]]:
+        """``(key, gid)`` of top-level manifest-scoped leaves without a member."""
+        bp = self.data or {}
+        return [
+            (key, value)
+            for key, value in bp.items()
+            if key not in self._members
+            and isinstance(value, str)
+            and Manifest.is_manifest_gid(value)
+        ]
+
+    async def async_resolve(
+        self,
+        *,
+        pool=None,
+        pool_nickname: str | None = None,
+        pool_id: str | None = None,
+        persist: bool = False,
+    ) -> ComplexManifest:
+        """Recursive blueprint resolution (awaitable form, see :meth:`resolve`)."""
+        import laila
+
+        if self._resolved or self.data is None:
+            return self
+        memory = laila.get_active_policy().central.memory
+        leaves = self._unresolved_manifest_leaves()
+        if leaves:
+            gids = [gid for _, gid in leaves]
+            results = await self._read_manifests_async(
+                memory, gids, Manifest._resolve_pool(pool, pool_nickname, pool_id), persist
+            )
+            for (key, gid), entry in zip(leaves, results):
+                if not isinstance(entry, Manifest):
+                    raise KeyError(
+                        f"{type(self).__name__}[{key!r}]: {gid} did not resolve to a manifest "
+                        f"(got {type(entry).__name__})"
+                    )
+                self._members[key] = entry
+        for member in self._members.values():
+            if isinstance(member, ComplexManifest) and not member._resolved:
+                await member.async_resolve(
+                    pool=pool, pool_nickname=pool_nickname, pool_id=pool_id, persist=persist
+                )
+        self._resolved = True
+        return self
+
+    async def _read_manifests_async(self, memory, gids: list[str], pool, persist: bool) -> list:
+        """Fetch *gids* trying *pool* first, then this manifest's candidate pools."""
+        from ...command.schema.parking import _CURRENT_SLOT
+
+        on_loop = _CURRENT_SLOT.get() is not None
+        candidates: list = []
+        if pool is not None:
+            candidates.append(pool)
+        for candidate in self._candidate_pools(memory):
+            if candidate not in candidates:
+                candidates.append(candidate)
+
+        last_exc: Exception | None = None
+        for candidate in candidates:
+            try:
+                if on_loop:
+                    return list(
+                        await memory._read_entries_async(gids, pool=candidate, persist=persist)
+                    )
+                ref = memory._read_entries_direct(gids, pool=candidate, persist=persist)
+                try:
+                    return list((await ref).data)
+                finally:
+                    ref.release()
+            except KeyError as exc:
+                last_exc = exc
+        raise KeyError(
+            f"{type(self).__name__}: nested manifest(s) {gids} not found in any pool"
+        ) from last_exc
+
+    def resolve(
+        self,
+        *,
+        pool=None,
+        pool_nickname: str | None = None,
+        pool_id: str | None = None,
+        persist: bool = False,
+    ) -> ComplexManifest:
+        """Recursive blueprint resolution: cast manifest-scoped leaves into members.
+
+        Walks the top-level blueprint; every leaf whose gid carries the
+        ``MANIFEST`` scope (decided from the string, no I/O) is fetched --
+        from *pool* first, then from the pool this manifest came from,
+        the alpha pool and every other registered pool -- hydrated into
+        its typed class (``Manifest``, ``ComplexManifest``,
+        ``ModuleManifest``, ...) and stored as the member under that key.
+        Nested complex manifests are resolved recursively. Leaves that
+        are not manifests are left as gids. Idempotent; returns ``self``.
+
+        This runs automatically when a complex manifest is read through
+        ``laila.remember`` (pass ``resolve=False`` there to opt out).
+        """
+        import laila
+
+        if (
+            self._resolved
+            or self.data is None
+            or (
+                not self._unresolved_manifest_leaves()
+                and not any(
+                    isinstance(m, ComplexManifest) and not m._resolved
+                    for m in self._members.values()
+                )
+            )
+        ):
+            self._resolved = True
+            return self
+
+        async def _task():
+            await self.async_resolve(
+                pool=pool, pool_nickname=pool_nickname, pool_id=pool_id, persist=persist
+            )
+
+        ref = laila.command.submit([_task])
+        try:
+            ref.wait()
+            ref.result  # re-raises the task's exception, if any
+        finally:
+            ref.release()
+        return self
+
+    # ------------------------------------------------------------------
+    # rebuild
+    # ------------------------------------------------------------------
+    def rebuild(
+        self,
+        *,
+        pool=None,
+        pool_nickname: str | None = None,
+        pool_id: str | None = None,
+        device: Any = None,
+        context: dict | None = None,
+        persist: bool = False,
+    ) -> dict[str, Any]:
+        """Turn every member back into the live object it was made from.
+
+        Resolves first when needed, then walks the blueprint in insertion
+        order: a typed manifest exposing ``rebuild`` (a model, an
+        optimizer, a nested complex manifest) is rebuilt with the shared
+        *context* (``{gid: rebuilt object}``, so an optimizer finds the
+        model whose parameters it drives); a plain manifest (a dataset)
+        is returned as is; a plain entry leaf is fetched; nested dict /
+        list fragments are realized to entries. Objects assigned locally
+        are returned untouched. Results replace the members, so
+        ``self[key]`` is the live object afterwards and a later
+        ``memorize`` re-snapshots it.
+
+        Parameters
+        ----------
+        pool, pool_nickname, pool_id
+            Where to read from; defaults to the pool this manifest came
+            from (then the alpha pool, then every registered pool).
+        device : optional
+            Forwarded to members that take one (``ModuleManifest``:
+            where the rebuilt model lives; ``None`` = CPU).
+        context : dict, optional
+            ``{gid: live object}`` seed, extended as members are rebuilt.
+        persist : bool, default False
+            Cache fetched entries into the alpha pool.
+        """
+        if self.data is None:
+            raise RuntimeError("No blueprint to rebuild — manifest is empty.")
+        routed = Manifest._resolve_pool(pool, pool_nickname, pool_id)
+        self.resolve(pool=routed, persist=persist)
+        context = {} if context is None else context
+
+        realized = self.realized
+        out: dict[str, Any] = {}
+        for key, value in self.data.items():
+            member = self._members.get(key)
+            if member is None:
+                built = realized[key]
+            elif isinstance(member, ComplexManifest):
+                # Rebuilt in place: the nested complex manifest stays the
+                # member (same type as assigned), its own members go live.
+                member.rebuild(pool=routed, device=device, context=context, persist=persist)
+                built = member
+            elif isinstance(member, Manifest) and hasattr(member, "rebuild"):
+                built = member.rebuild(pool=routed, device=device, context=context, persist=persist)
+            else:
+                built = member
+            if isinstance(value, str):
+                context.setdefault(value, built)
+                if isinstance(member, Manifest) and not isinstance(
+                    built, (Manifest, ManifestBacked)
+                ):
+                    # A bare object came back: keep a manifest-backed
+                    # handle on it so memorize / forget still work.
+                    handle = getattr(member, "handle", None)
+                    if handle is not None:
+                        self._adapted[key] = handle
+                self._members[key] = built
+            out[key] = built
+        return out
+
+    @property
+    def rebuilt(self) -> dict[str, Any]:
+        """``rebuild()`` with defaults."""
+        return self.rebuild()
+
+    # ------------------------------------------------------------------
+    # forget (owner-aware)
+    # ------------------------------------------------------------------
+    def forget(
+        self,
+        *,
+        pool=None,
+        pool_nickname: str | None = None,
+        pool_id: str | None = None,
+        batch_size: int = 128,
+    ):
+        """Delete the complex manifest and the members it owns from *pool*.
+
+        Members that own their leaves (typed checkpoints, nested complex
+        manifests -- ``_OWNS_CHILDREN``) are forgotten through their own
+        ``forget`` (leaves included); a plain manifest member (a dataset)
+        is only dropped as a record, its entries are left alone; plain
+        entry leaves are forgotten. Typed members are resolved first so
+        their kind is known.
+        """
+        import laila
+
+        from ...command.schema.future.future.group_future import GroupFuture
+
+        if self.data is None:
+            raise RuntimeError("No blueprint — nothing to forget.")
+        routed = Manifest._resolve_pool(pool, pool_nickname, pool_id)
+        try:
+            self.resolve(pool=routed)
+        except KeyError:
+            pass  # already gone: fall through to a plain delete of the leaves
+        policy = laila.get_active_policy()
+        all_future_ids: list[str] = []
+        plain: list[str] = []
+
+        for key, value in self.data.items():
+            handle = self._handle(key)
+            if isinstance(handle, ManifestBacked) or (
+                isinstance(handle, Manifest) and handle._OWNS_CHILDREN
+            ):
+                ref = handle.forget(pool=routed, batch_size=batch_size)
+                all_future_ids.extend(Manifest._collect_future_ids(ref))
+            elif isinstance(value, str):
+                plain.append(value)
+            elif isinstance(value, (list, dict)):
+                plain.extend(Manifest._iter_global_ids({key: value}))
+
+        for i in range(0, len(plain), batch_size):
+            ref = laila.forget(plain[i : i + batch_size], pool=routed)
+            all_future_ids.extend(Manifest._collect_future_ids(ref))
+        self_ref = laila.forget(self.global_id, pool=routed)
+        all_future_ids.extend(Manifest._collect_future_ids(self_ref))
+        return GroupFuture(
+            taskforce_id=policy.central.command.internal_taskforce,
+            policy_id=policy.global_id,
+            future_ids=all_future_ids,
+        )
+
+
+class _RealizedManifest(Manifest):
+    """A :class:`Manifest` whose referenced entries are already in hand.
+
+    Used inside process-pool workers running a constitution body
+    (``laila.build(entry, taskforce_id=<process pool>)``): the parent
+    realizes the manifest and ships the entries along, so ``realized`` /
+    ``async_realized`` return the pre-built nested dict instead of
+    reading pools through a policy (there is none in the worker).
+    """
+
+    _prebuilt: dict = PrivateAttr(default_factory=dict)
+
+    @property
+    def realized(self):
+        return self._prebuilt
+
+    @property
+    def async_realized(self):
+        async def _resolve():
+            return self._prebuilt
+
+        return _resolve()
+
+
 from .....entry.constitution.build_maps import register_builder
 
 register_builder(
     _MANIFEST_SCOPE,
     Manifest._build_from_dict_sync,
     Manifest._build_from_dict_async,
+)
+register_builder(
+    f"{_MANIFEST_SCOPE}:{_COMPLEX_MANIFEST_SCOPE}",
+    ComplexManifest._build_from_dict_sync,
+    ComplexManifest._build_from_dict_async,
 )

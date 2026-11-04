@@ -121,7 +121,7 @@ class _BrokerRPCProtocol(_CarrierRPCProtocol):
         stop_loop_thread(self, _shutdown)
         self._shutdown_lanes()
         self._handshake_pending.clear()
-        self._pending_rpcs.clear()
+        self._fail_pending("transport stopped")
         self._shutdown_executor()
         self._started = False
 
@@ -226,7 +226,7 @@ class _BrokerRPCProtocol(_CarrierRPCProtocol):
         peer_inbox = self._connections.get(peer_id)
         if peer_inbox is None:
             raise ConnectionError(f"No connection to peer {peer_id}")
-        request_id, slot = self._register_pending()
+        request_id, slot = self._register_pending(peer_id)
         req = self._make_rpc_request(path, args, kwargs, request_id)
         req["reply_to"] = self._inbox
         try:

@@ -32,17 +32,29 @@ This module also exposes :func:`build_environment` and
 :func:`laila.environment_to_s3` to snapshot a live policy graph,
 ship it elsewhere, and reconstruct the same hierarchy on the
 receiving side. The mirror lives at
-``laila.args.environment.policies[<gid>]`` and is refreshed on
-every successful CLI-capable construction via
-:func:`_refresh_args_environment` (see :class:`model_validator`
-hook in :class:`_LAILA_CLI_CAPABLE_CLASS`).
+``laila.args.environment.policies[<gid>]`` and is kept current
+*lazily*: every successful CLI-capable construction marks its owning
+policy dirty (:func:`_mark_environment_dirty`, O(1)) and the dump is
+produced by :func:`_flush_environment_mirror` the next time
+``laila.args.environment`` is read (``laila.args.environment``,
+``laila.args.get("environment")``, ``items()`` / ``toDict()``) or by
+an explicit :func:`_refresh_args_environment`. Building N pools is
+therefore O(N) instead of O(N^2). The logger branch of the mirror
+stays eager (one small dump, no owning policy).
 """
 
 from __future__ import annotations
 
+import functools
+import threading
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, model_validator
+
+# Owning-policy gids whose mirror entry is stale (see module docstring).
+_DIRTY_POLICY_GIDS: set[str] = set()
+_DIRTY_LOCK = threading.Lock()
+_FLUSH_STATE = threading.local()
 
 
 def CLIExempt(*args: Any, **kwargs: Any) -> Any:
@@ -166,8 +178,9 @@ def _resolve_path_for_class(cls: type, data: dict) -> str | None:
     return path_template
 
 
+@functools.cache
 def _eligible_model_fields(cls: type) -> list[str]:
-    """Return public, non-exempt Pydantic Field names for *cls*."""
+    """Return public, non-exempt Pydantic Field names for *cls* (memoised per class)."""
     names = []
     for name, field_info in cls.model_fields.items():
         if name.startswith("_"):
@@ -178,8 +191,9 @@ def _eligible_model_fields(cls: type) -> list[str]:
     return names
 
 
+@functools.cache
 def _eligible_property_setters(cls: type) -> list[str]:
-    """Return names of public property descriptors that have a setter."""
+    """Return names of public property descriptors that have a setter (memoised per class)."""
     names = []
     for name in dir(cls):
         if name.startswith("_"):
@@ -353,9 +367,11 @@ class _LAILA_CLI_CAPABLE_CLASS(BaseModel):
       of :data:`laila.args` (see module docstring for the exact
       resolution order).
     - Auto-refresh of the corresponding entry under
-      ``laila.args.environment.policies[<gid>]`` after every successful
-      construction, so the live policy graph and the CLI mirror stay
-      in sync.
+      ``laila.args.environment.policies[<gid>]``: every successful
+      construction marks the owning policy dirty and the dump is
+      produced on the next read of ``laila.args.environment``, so the
+      live policy graph and the CLI mirror stay in sync without a full
+      re-dump per construction.
     - Mandatory-field enforcement via :attr:`_cli_required_fields` --
       fields named here that remain ``None`` after the four-tier
       resolution raise :class:`RuntimeError`.
@@ -458,13 +474,17 @@ class _LAILA_CLI_CAPABLE_CLASS(BaseModel):
 
     @model_validator(mode="after")
     def _refresh_environment_mirror(self):
-        """Update ``laila.args.environment.policies[<gid>]`` for this instance's owning policy.
+        """Mark this instance's owning policy dirty in the environment mirror.
 
-        Best-effort: silently no-ops if ``laila`` is mid-import, if no
-        owning policy can be resolved, or if anything else goes wrong.
+        The actual dump under ``laila.args.environment.policies[<gid>]``
+        happens lazily on the next read of ``laila.args.environment``
+        (:func:`_flush_environment_mirror`); the logger branch is written
+        eagerly. Best-effort: silently no-ops if ``laila`` is mid-import,
+        if no owning policy can be resolved, or if anything else goes
+        wrong.
         """
         try:
-            _refresh_args_environment(self)
+            _mark_environment_dirty(self)
         except Exception:
             pass
         return self
@@ -899,53 +919,115 @@ def _build_policy_from_dump(
     return policy
 
 
+def _mark_environment_dirty(instance: Any) -> None:
+    """Record that *instance*'s owning policy needs a fresh mirror entry.
+
+    O(1): resolves the owning policy and remembers its gid; the dump is
+    deferred to :func:`_flush_environment_mirror`. The logger branch has
+    no owning policy and is written immediately (one small dump).
+    """
+    if _scope_for_class(type(instance)) == "LOGGER":
+        _refresh_args_environment(instance)
+        return
+    if getattr(_FLUSH_STATE, "active", False):
+        return
+    policy = _find_owning_policy(instance)
+    if policy is None:
+        return
+    with _DIRTY_LOCK:
+        _DIRTY_POLICY_GIDS.add(str(policy.global_id))
+
+
+def _flush_environment_mirror() -> None:
+    """Write the mirror entry of every dirty policy (at most once each).
+
+    Called on reads of ``laila.args.environment``. Re-entrant reads
+    from inside the flush (``_refresh_args_environment`` itself reads
+    ``args.get("environment")``) are no-ops thanks to the thread-local
+    ``active`` flag; the dirty set is drained *before* dumping so a
+    construction that happens during the dump is picked up next time.
+    """
+    if getattr(_FLUSH_STATE, "active", False):
+        return
+    with _DIRTY_LOCK:
+        if not _DIRTY_POLICY_GIDS:
+            return
+        gids = list(_DIRTY_POLICY_GIDS)
+        _DIRTY_POLICY_GIDS.clear()
+    import laila
+
+    _FLUSH_STATE.active = True
+    try:
+        for gid in gids:
+            policy = laila._local_policies.get(gid)
+            if policy is None:
+                policy = laila._live_policies.get(gid)
+            if policy is None:
+                continue
+            try:
+                _refresh_args_environment(policy)
+            except Exception:
+                pass
+    finally:
+        _FLUSH_STATE.active = False
+
+
+def _clear_environment_dirty() -> None:
+    """Forget every pending mirror update (``terminate``)."""
+    with _DIRTY_LOCK:
+        _DIRTY_POLICY_GIDS.clear()
+
+
 def _refresh_args_environment(instance: Any) -> None:
     """Write the owning policy's ``build_environment`` dump under
-    ``laila.args.environment.policies[<gid>]``.
+    ``laila.args.environment.policies[<gid>]`` *now*.
 
     For a top-level singleton like the :class:`laila.logger.Logger`, which
     has no owning policy, the dump is written under
     ``laila.args.environment.logger`` instead.
+
+    The mirror ``environment`` / ``policies`` maps are mutated in place
+    (never re-assigned once they exist) so the write cannot trip the
+    environment-load hook on ``laila.args``.
     """
     from dotmap import DotMap
 
     import laila
 
-    if _scope_for_class(type(instance)) == "LOGGER":
-        args = laila.args
+    args = laila.args
+    was_active = getattr(_FLUSH_STATE, "active", False)
+    _FLUSH_STATE.active = True
+    try:
         env = args.get("environment") if hasattr(args, "get") else None
         if not isinstance(env, DotMap):
             env = DotMap()
             args.environment = env
 
-        dump: dict[str, Any] = {"class_token": type(instance).__name__}
-        for name in _eligible_model_fields(type(instance)):
-            try:
-                dump[name] = getattr(instance, name, None)
-            except Exception:
-                pass
-        for name in _eligible_property_setters(type(instance)):
-            try:
-                dump[name] = getattr(instance, name, None)
-            except Exception:
-                pass
-        env.logger = DotMap(dump)
-        return
+        if _scope_for_class(type(instance)) == "LOGGER":
+            dump: dict[str, Any] = {"class_token": type(instance).__name__}
+            for name in _eligible_model_fields(type(instance)):
+                try:
+                    dump[name] = getattr(instance, name, None)
+                except Exception:
+                    pass
+            for name in _eligible_property_setters(type(instance)):
+                try:
+                    dump[name] = getattr(instance, name, None)
+                except Exception:
+                    pass
+            env.logger = DotMap(dump)
+            return
 
-    policy = _find_owning_policy(instance)
-    if policy is None:
-        return
+        policy = _find_owning_policy(instance)
+        if policy is None:
+            return
 
-    args = laila.args
-    env = args.get("environment") if hasattr(args, "get") else None
-    if not isinstance(env, DotMap):
-        env = DotMap()
-        args.environment = env
+        policies = env.get("policies") if hasattr(env, "get") else None
+        if not isinstance(policies, DotMap):
+            policies = DotMap()
+            env.policies = policies
 
-    policies = env.get("policies") if hasattr(env, "get") else None
-    if not isinstance(policies, DotMap):
-        policies = DotMap()
-        env.policies = policies
-
-    dump = build_environment(policy)
-    policies[str(policy.global_id)] = DotMap(dump["policy"])
+        dump = build_environment(policy)
+        policies[str(policy.global_id)] = DotMap(dump["policy"])
+    finally:
+        _FLUSH_STATE.active = was_active

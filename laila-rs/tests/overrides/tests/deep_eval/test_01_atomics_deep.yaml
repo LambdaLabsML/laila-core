@@ -1,0 +1,3 @@
+# py2rs override for tests/deep_eval/test_01_atomics_deep.py
+skip_tests:
+  test_atomic_scope_rejects_unknown: introspects `a.atomic.__code__.co_varnames` to decide whether to call at all (no function-object introspection in Rust; `atomic(scope=..)` is covered by the runtime suite)

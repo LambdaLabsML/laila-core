@@ -39,6 +39,25 @@ down -- while CPU parallelism stays capped at a sane level. The executor
 is also installed as each loop's default executor so ``asyncio.to_thread``
 inside user coroutines lands on it (without a permit).
 
+Because ``ThreadPoolExecutor`` never reaps idle workers, the executor is
+*recycled*: once the taskforce has been completely idle (nothing queued,
+in flight or parked) for :data:`_EXECUTOR_IDLE_RECYCLE_S` seconds, the
+dispatcher swaps in a fresh executor and shuts the old one down without
+waiting, so the threads a burst of sync work spawned exit instead of
+lingering for the life of the policy. A body still running on the old
+executor finishes normally.
+
+Shutdown
+--------
+``shutdown(wait=True)`` (the default, also what ``laila.terminate`` uses)
+is a graceful stop with the stdlib ``ThreadPoolExecutor.shutdown(wait=True)``
+contract: every task already queued is still dispatched and run to
+completion before the threads are joined. ``cancel_pending=True`` drops
+queued tasks (their futures end ``CANCELLED``) and cancels in-flight
+coroutines. Calling ``shutdown(wait=True)`` from a task running on the
+taskforce itself cannot drain (the caller would wait for itself) and
+falls back to cancelling queued tasks with a warning.
+
 Each :class:`_LoopThread` registers its OS thread id with
 ``_ASYNC_LOOP_THREAD_IDS`` while running so the future ``wait()`` guard
 can detect (and reject) blocking waits called from inside a loop thread.
@@ -54,8 +73,10 @@ import asyncio
 import contextvars
 import functools
 import inspect
+import logging
 import os
 import threading
+import time
 from collections import deque
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
@@ -83,6 +104,12 @@ from ..thread_pool_executor.future import ConcurrentPackageFuture
 
 _CHAIN_KW = "_laila_resolve_chain"
 _EXECUTOR_MAX_WORKERS = 1_000_000
+# Seconds of complete idleness (nothing queued, in flight or parked)
+# after which the sync executor is swapped for a fresh one so the
+# threads it spawned can exit.
+_EXECUTOR_IDLE_RECYCLE_S = 1.0
+
+_log = logging.getLogger(__name__)
 
 
 class _LoopThread:
@@ -207,8 +234,8 @@ class _LoopThread:
     def submit_coro(self, coro):
         return asyncio.run_coroutine_threadsafe(coro, self.loop)
 
-    def stop(self, timeout: float | None = None, *, drain: bool = False) -> None:
-        """Stop the loop and join its thread.
+    def request_stop(self, *, drain: bool = False) -> None:
+        """Ask the loop to stop without joining its thread.
 
         With ``drain=True`` the loop keeps running until every task
         currently scheduled on it (runners, parked re-acquires, pending
@@ -238,7 +265,17 @@ class _LoopThread:
                 self.loop.call_soon_threadsafe(self.loop.stop)
             except RuntimeError:
                 pass
+
+    def join(self, timeout: float | None = None) -> None:
+        """Join the loop thread (no-op when called from that very thread)."""
+        if self.thread is threading.current_thread():
+            return
         self.thread.join(timeout=timeout)
+
+    def stop(self, timeout: float | None = None, *, drain: bool = False) -> None:
+        """:meth:`request_stop` followed by :meth:`join`."""
+        self.request_stop(drain=drain)
+        self.join(timeout=timeout)
 
 
 class PythonAsyncThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
@@ -283,8 +320,13 @@ class PythonAsyncThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
     _capacity_cv: threading.Condition | None = PrivateAttr(default=None)
     _stop: threading.Event | None = PrivateAttr(default=None)
     _dispatcher: threading.Thread | None = PrivateAttr(default=None)
+    _dispatching: bool = PrivateAttr(default=False)
     _loops: list[_LoopThread] = PrivateAttr(default_factory=list)
     _executor: ThreadPoolExecutor | None = PrivateAttr(default=None)
+    _executor_lock: threading.Lock | None = PrivateAttr(default=None)
+    _executor_generation: int = PrivateAttr(default=0)
+    _executor_used: int = PrivateAttr(default=0)
+    _idle_since: float | None = PrivateAttr(default=None)
     _compute_permits: threading.Semaphore | None = PrivateAttr(default=None)
 
     def _on_start(self) -> None:
@@ -300,9 +342,10 @@ class PythonAsyncThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
         self._cv = threading.Condition()
         self._capacity_cv = threading.Condition()
         self._stop = threading.Event()
-        self._executor = ThreadPoolExecutor(
-            max_workers=_EXECUTOR_MAX_WORKERS, thread_name_prefix=f"AsyncTF-{tag}-Sync"
-        )
+        self._executor_lock = threading.Lock()
+        self._executor = self._new_executor()
+        self._executor_used = 0
+        self._idle_since = None
         self._compute_permits = threading.Semaphore(self.sync_workers)
         self._loops = [
             _LoopThread(name=f"AsyncTF-{tag}-Loop-{i}", cap=self.max_async_per_thread)
@@ -315,19 +358,60 @@ class PythonAsyncThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
         )
         self._dispatcher.start()
 
+    def _new_executor(self) -> ThreadPoolExecutor:
+        tag = self.global_id[-8:]
+        self._executor_generation += 1
+        return ThreadPoolExecutor(
+            max_workers=_EXECUTOR_MAX_WORKERS,
+            thread_name_prefix=f"AsyncTF-{tag}-Sync{self._executor_generation}",
+        )
+
     def _on_pause(self) -> None:
         # Safe no-op (see the base-class contract): the status flips to
         # ``PAUSED`` so ``_queue_submit`` rejects new work; in-flight tasks
         # keep running and ``start()`` resumes without re-spawning threads.
         return
 
+    def _is_own_worker_thread(self) -> bool:
+        """``True`` when called from one of this taskforce's loop or body threads."""
+        ident = threading.get_ident()
+        if any(lt._thread_ident == ident for lt in self._loops):
+            return True
+        slot = _CURRENT_SLOT.get()
+        return slot is not None and getattr(slot, "tf", None) is self
+
     def _on_shutdown(self, *, wait: bool = True, cancel_pending: bool = True) -> None:
-        # ``wait=True`` on its own is a graceful stop: in-flight tasks run
-        # to completion (loops drain) before the threads are joined.
+        # ``wait=True`` on its own is a graceful stop: every task already
+        # queued is still dispatched and run to completion (queue drains,
+        # then loops drain) before the threads are joined -- the same
+        # contract as ``ThreadPoolExecutor.shutdown(wait=True)``.
         # ``cancel_pending=True`` is an explicit request to drop work, so
-        # in-flight coroutines are cancelled as before (``wait`` then only
-        # governs whether we join the threads).
+        # queued tasks are cancelled and in-flight coroutines are cancelled
+        # as before (``wait`` then only governs whether we join the threads).
         drain = wait and not cancel_pending
+        self_call = self._is_own_worker_thread()
+        if drain and self_call:
+            # The caller occupies a slot / body thread of this very
+            # taskforce: draining would wait for the caller itself.
+            _log.warning(
+                "shutdown(wait=True) called from a task running on taskforce %s; "
+                "queued tasks are cancelled instead of drained.",
+                self.global_id,
+            )
+            drain = False
+
+        if drain:
+            # 1. Keep the dispatcher alive until it has placed every queued
+            #    task on a loop.
+            self._drain_queue()
+            # 2. Let every loop finish what it holds. Nested submissions
+            #    made meanwhile are still dispatched (the dispatcher is
+            #    alive) onto loops that have not stopped yet.
+            for lt in self._loops:
+                lt.request_stop(drain=True)
+            for lt in self._loops:
+                lt.join()
+
         if self._stop is not None:
             self._stop.set()
         if self._cv is not None:
@@ -340,25 +424,50 @@ class PythonAsyncThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
         # Always let the dispatcher exit (it polls every 0.1 s and re-queues
         # an item it popped but could not place) *before* the cancel pass,
         # so that pass sees every undispatched task.
-        if self._dispatcher is not None:
+        if self._dispatcher is not None and self._dispatcher is not threading.current_thread():
             self._dispatcher.join(timeout=None if wait else 1.0)
 
-        if cancel_pending:
-            with self._q.atomic("cancel"):
-                for _, (_, _, kwargs) in self._q.items():
-                    fut = kwargs.get("fut")
-                    if fut is None:
-                        continue
-                    fut.exception = RuntimeError("Task canceled before dispatch.")
-                    fut.status = FutureStatus.CANCELLED
-                    fut.result = None
-                self._q.clear()
+        # ``cancel_pending``: explicit drop. After a drain the queue is
+        # normally empty; anything left (a nested submit that raced the
+        # loop stop) is failed rather than abandoned in ``NOT_STARTED``.
+        if cancel_pending or drain:
+            self._cancel_queued("Task canceled before dispatch.")
 
-        for lt in self._loops:
-            lt.stop(timeout=None if wait else 0.0, drain=drain)
+        if not drain:
+            for lt in self._loops:
+                lt.stop(timeout=None if wait else 0.0, drain=False)
 
-        if self._executor is not None:
-            self._executor.shutdown(wait=wait, cancel_futures=cancel_pending)
+        lock = self._executor_lock
+        if lock is not None:
+            with lock:
+                executor = self._executor
+        else:
+            executor = self._executor
+        if executor is not None:
+            executor.shutdown(wait=wait and not self_call, cancel_futures=cancel_pending)
+
+    def _drain_queue(self) -> None:
+        """Block until the dispatcher has placed every queued task on a loop."""
+        dispatcher = self._dispatcher
+        if dispatcher is None or not dispatcher.is_alive():
+            return
+        while dispatcher.is_alive() and (len(self._q) > 0 or self._dispatching):
+            if self._stop is not None and self._stop.is_set():
+                return
+            with self._cv:
+                self._cv.notify_all()
+            dispatcher.join(timeout=0.05)
+
+    def _cancel_queued(self, reason: str) -> None:
+        with self._q.atomic("cancel"):
+            for _, (_, _, kwargs) in self._q.items():
+                fut = kwargs.get("fut")
+                if fut is None:
+                    continue
+                fut.exception = RuntimeError(reason)
+                fut.result = None
+                fut.status = FutureStatus.CANCELLED
+            self._q.clear()
 
     # =========================================================
     # Sync offload
@@ -372,9 +481,9 @@ class PythonAsyncThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
         the body can park its slot -- and release its permit -- when it
         blocks on laila futures. Returns an awaitable ``asyncio.Future``.
         """
-        executor = self._executor
         permits = self._compute_permits
-        if executor is None or permits is None:
+        lock = self._executor_lock
+        if self._executor is None or permits is None or lock is None:
             raise RuntimeError("TaskForce must be running before offloading sync work.")
         loop = asyncio.get_running_loop()
         ctx = contextvars.copy_context()
@@ -388,7 +497,59 @@ class PythonAsyncThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
             finally:
                 permit.release()
 
-        return loop.run_in_executor(executor, functools.partial(ctx.run, _body))
+        # Read and submit under the lock so an idle recycle (see
+        # ``_maybe_recycle_executor``) can never shut the executor down
+        # between the two.
+        with lock:
+            executor = self._executor
+            if executor is None:
+                raise RuntimeError("TaskForce must be running before offloading sync work.")
+            self._executor_used += 1
+            return loop.run_in_executor(executor, functools.partial(ctx.run, _body))
+
+    def _maybe_recycle_executor(self) -> None:
+        """Retire idle sync threads.
+
+        ``ThreadPoolExecutor`` never reaps its workers, so every burst of
+        concurrent sync bodies would leave that many idle threads alive
+        for the life of the taskforce. The dispatcher calls this on each
+        idle poll: once nothing is in flight, parked or queued for
+        :data:`_EXECUTOR_IDLE_RECYCLE_S`, and the current executor has
+        actually run something, a fresh (empty) executor is swapped in
+        under the same lock :meth:`run_sync` takes and the old one is
+        shut down without waiting -- its idle threads exit on the
+        sentinel, a body still running (a parked ``wait()`` inside a sync
+        builder) finishes normally and its thread exits afterwards.
+        """
+        lock = self._executor_lock
+        if lock is None:
+            return
+        busy = len(self._q) > 0 or self.inflight > 0 or self.parked > 0
+        now = time.monotonic()
+        if busy:
+            self._idle_since = None
+            return
+        if self._idle_since is None:
+            self._idle_since = now
+            return
+        if now - self._idle_since < _EXECUTOR_IDLE_RECYCLE_S:
+            return
+        with lock:
+            if self._executor_used == 0:
+                self._idle_since = now
+                return
+            old = self._executor
+            fresh = self._new_executor()
+            self._executor = fresh
+            self._executor_used = 0
+            self._idle_since = now
+        for lt in self._loops:
+            try:
+                lt.loop.call_soon_threadsafe(lt.loop.set_default_executor, fresh)
+            except RuntimeError:
+                pass
+        if old is not None:
+            old.shutdown(wait=False)
 
     # =========================================================
     # Observability
@@ -456,7 +617,12 @@ class PythonAsyncThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
         if len(futures) == 1:
             single = futures[0]
             if wait:
-                return single.wait(None)
+                # ``wait=True`` returns a bare value and no handle, so the
+                # future would otherwise stay in the bank forever.
+                try:
+                    return single.wait(None)
+                finally:
+                    single.release()
             # Return the concrete future (an identity-compatible object)
             # rather than a fresh identity handle; accessors resolve
             # directly instead of scanning every local policy's bank.
@@ -473,7 +639,10 @@ class PythonAsyncThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
 
         if not wait:
             return gf
-        return gf.wait(None)
+        try:
+            return gf.wait(None)
+        finally:
+            gf.release()
 
     # =========================================================
     # Dispatcher
@@ -501,40 +670,47 @@ class PythonAsyncThreadPoolTaskForce(_LAILA_IDENTIFIABLE_TASK_FORCE):
         while not stop.is_set():
             with cv:
                 while not stop.is_set() and len(self._q) == 0:
-                    cv.wait(timeout=0.1)
+                    if not cv.wait(timeout=0.1):
+                        self._maybe_recycle_executor()
                 if stop.is_set():
                     break
+                self._dispatching = True
                 _, item = self._q.pop_next()
                 _, args, kwargs = item
 
-            picked: _LoopThread | None = None
-            while not stop.is_set() and picked is None:
-                picked = self._pick_loop()
-                if picked is not None:
-                    break
-                with cap_cv:
-                    cap_cv.wait(timeout=0.1)
-
-            if stop.is_set():
-                with self._q.atomic():
-                    self._q[kwargs["fut"].global_id] = (None, args, kwargs)
-                break
-
-            task = kwargs["task"]
-            fut = kwargs["fut"]
-            chain = kwargs.get(_CHAIN_KW, ())
-            user_kwargs = {k: v for k, v in kwargs.items() if k not in {"task", "fut", _CHAIN_KW}}
-
             try:
-                coro = self._make_runner_coro(task, args, user_kwargs, fut, picked, chain)
-                picked.submit_coro(coro)
-            except Exception as exc:
-                if picked.release_slot():
+                picked: _LoopThread | None = None
+                while not stop.is_set() and picked is None:
+                    picked = self._pick_loop()
+                    if picked is not None:
+                        break
                     with cap_cv:
-                        cap_cv.notify()
-                fut.exception = exc
-                fut.result = None
-                fut.status = FutureStatus.ERROR
+                        cap_cv.wait(timeout=0.1)
+
+                if stop.is_set():
+                    with self._q.atomic():
+                        self._q[kwargs["fut"].global_id] = (None, args, kwargs)
+                    break
+
+                task = kwargs["task"]
+                fut = kwargs["fut"]
+                chain = kwargs.get(_CHAIN_KW, ())
+                user_kwargs = {
+                    k: v for k, v in kwargs.items() if k not in {"task", "fut", _CHAIN_KW}
+                }
+
+                try:
+                    coro = self._make_runner_coro(task, args, user_kwargs, fut, picked, chain)
+                    picked.submit_coro(coro)
+                except Exception as exc:
+                    if picked.release_slot():
+                        with cap_cv:
+                            cap_cv.notify()
+                    fut.exception = exc
+                    fut.result = None
+                    fut.status = FutureStatus.ERROR
+            finally:
+                self._dispatching = False
 
     def _make_runner_coro(self, task, args, kwargs, fut, lt: _LoopThread, chain=()):
         cap_cv = self._capacity_cv

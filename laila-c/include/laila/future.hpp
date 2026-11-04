@@ -44,10 +44,16 @@ public:
   void set_result_entry(const EntryPtr& e);
   void set_result_value(const LailaValue& v);  // auto-wrap via Entry::constant
   Status exception() const { return exception_; }
+  // Message recorded alongside `exception()` (empty while no error occurred).
+  const std::string& exception_message() const { return exception_msg_; }
   void set_exception(Status code, const std::string& msg);
 
   void add_status_callback(FutureStatus s, std::function<void(Future&)> fn);
 
+  // Block until the future completes. Python parity: like laila's
+  // ``Future.wait()`` this re-raises the recorded exception when the work
+  // failed (and again on every later call), so ``f->wait()`` either returns on
+  // success or throws; callers that only want the status use ``error()``.
   virtual void wait(int64_t timeout_ms = -1) = 0;
 
   bool finished() const { return status_ == FutureStatus::FINISHED; }
@@ -74,7 +80,8 @@ public:
 
 // Proxies a future/result that lives on a peer policy. For the in-process peer
 // path the fetch runs locally against the peer's memory; the same class is the
-// seam where a real socket-RPC backend plugs in.
+// seam where a real socket-RPC backend plugs in. A failed fetch is recorded
+// (`error()`, `exception()`, `exception_message()`) and rethrown by `wait()`.
 class RemoteFuture : public Future {
 public:
   explicit RemoteFuture(std::function<EntryPtr()> fetch) : fetch_(std::move(fetch)) {}
@@ -84,7 +91,9 @@ private:
   std::function<EntryPtr()> fetch_;
 };
 
-// Aggregates child futures; returned when memorizing many entries.
+// Aggregates child futures; returned when memorizing many entries. `wait()`
+// waits for every child, then rethrows the first failed child's exception
+// (status ERROR); on success the result is the last child's result.
 class GroupFuture : public Future {
 public:
   GroupFuture() { scopes_ = {scope::GROUP_FUTURE}; }

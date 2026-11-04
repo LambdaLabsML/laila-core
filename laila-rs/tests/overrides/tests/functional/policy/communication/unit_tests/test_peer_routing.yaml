@@ -1,0 +1,6 @@
+# py2rs override for tests/functional/policy/communication/unit_tests/test_peer_routing.py
+# `TestPeerRoutingSubprocess` spawns a *Python* interpreter running laila as
+# the peer: that is the Rust<->Python interop suite (`tests/interop`), not a
+# unit test of the port.
+skip_functions:
+  TestPeerRoutingSubprocess: a Python-interpreter peer is the interop suite (tests/interop)

@@ -1,0 +1,9 @@
+# py2rs override for tests/functional/policy/command/concurrent_package/unit_tests/test_parking.py
+# `_CURRENT_SLOT` / `_RESOLVE_CHAIN` are typed Rust `ContextVar`s
+# (`Option<Arc<_SlotCtx>>`, `Arc<Vec<String>>`), not Python values: the
+# three tests that poke them directly are covered by `laila-core`'s own
+# tests of `schema::parking` (`cargo test -p laila-core parking`).
+skip_tests:
+  test_013_slot_context_visible_inside_sync_body: reads the typed `_CURRENT_SLOT` ContextVar (covered in laila-core)
+  test_023_remember_on_active_chain_raises: sets the typed `_RESOLVE_CHAIN` ContextVar (covered in laila-core)
+  test_024_chain_propagates_into_child_root_tasks: reads the typed `_RESOLVE_CHAIN` ContextVar (covered in laila-core)

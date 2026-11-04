@@ -24,7 +24,7 @@ import os
 import subprocess
 from collections.abc import Iterable, Iterator
 from contextlib import suppress
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import quote, unquote
 
 from pydantic import ConfigDict, Field, PrivateAttr
@@ -65,6 +65,8 @@ class FilesystemPool(_LAILA_IDENTIFIABLE_POOL):
     _mount_dir: str = PrivateAttr()
     _image_path: str = PrivateAttr()
     _image_size_bytes: int = PrivateAttr(default=64 * 1024 * 1024)
+
+    _persistent_storage: ClassVar[bool] = True
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

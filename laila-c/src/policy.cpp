@@ -4,6 +4,7 @@
 
 #include "laila/framing.hpp"
 #include "laila/hal/hal.hpp"
+#include "laila/logger.hpp"
 #include "laila/status.hpp"
 #include "laila/websocket.hpp"
 
@@ -234,23 +235,102 @@ EntryPtr CentralMemory::forget(const std::string& global_id, const std::string& 
 
 // ---------------- RemotePolicyProxy ----------------
 namespace {
+// JSON-RPC 2.0 error frame echoing the request id (when present).
+Json make_rpc_error(const Json& req, int code, const std::string& message) {
+  Json resp = Json::object();
+  resp["jsonrpc"] = std::string("2.0");
+  resp["id"] = req.is_object() && req.contains("id") ? req.at("id") : Json();
+  Json err = Json::object();
+  err["code"] = (int64_t)code;
+  err["message"] = message;
+  resp["error"] = err;
+  return resp;
+}
+
 // Send one JSON-RPC frame over a peer transport and return the parsed "result".
-// For the persistent WebSocket transport this rides the open session; for the
-// raw-TCP one-shot transport connect() opens a fresh frame exchange.
-Json peer_send_recv(const CommProtocolPtr& tr, const Json& req) {
+// Both carriers (WebSocket and the length-prefixed tcp:// stream) are
+// persistent, full-duplex links: while we wait for our reply the peer may send
+// *us* a request on the same link (laila servers probe liveness with an
+// ``rpc.call __comm_ping__`` before admitting a call, and say goodbye with a
+// ``peer.disconnect`` notification). So demultiplex by JSON-RPC ``id``: answer
+// inbound requests against the home policy, skip stray replies, and return only
+// the response whose ``id`` matches ours. `home` is the calling policy (may have
+// expired if the future outlived it; inbound requests are then refused).
+Json peer_send_recv(const std::weak_ptr<Policy>& home, const CommProtocolPtr& tr,
+                    const Json& req) {
   tr->connect();
-  tr->send_text(req.dump());
-  std::vector<uint8_t> resp;
-  bool got = tr->recv(resp, 5000);
-  // One-shot transports (raw TCP) get a fresh connection per request, matching
-  // the inbound one-frame-per-connection server; the persistent WS session stays
-  // open across requests.
-  if (!tr->persistent()) tr->close();
-  if (!got) raise(Status::Timeout, "peer RPC timed out");
-  Json r = Json::parse(std::string(resp.begin(), resp.end()));
-  if (r.contains("error") && !r.at("error").is_null())
-    raise(Status::Error, "peer RPC error: " + r.at("error").dump());
-  return r.at("result");
+  // A non-persistent carrier gets a fresh connection per request: close on
+  // every exit path (normal return or raise). Both shipped carriers are
+  // persistent, so this is a no-op for tcp:// and ws://.
+  struct OneShotClose {
+    const CommProtocolPtr& t;
+    ~OneShotClose() { if (!t->persistent()) t->close(); }
+  } one_shot{tr};
+  if (!tr->send_text(req.dump())) raise(Status::Error, "peer RPC send failed");
+  const Json want_id = req.contains("id") ? req.at("id") : Json();
+  const int64_t overall_ms = 5000;
+  uint64_t deadline = hal::get().clock().now_ms() + (uint64_t)overall_ms;
+  for (;;) {
+    uint64_t now = hal::get().clock().now_ms();
+    if (now >= deadline) raise(Status::Timeout, "peer RPC timed out");
+    std::vector<uint8_t> raw;
+    if (!tr->recv(raw, (int)(deadline - now))) {
+      if (!tr->is_open()) raise(Status::Error, "peer link closed during RPC");
+      raise(Status::Timeout, "peer RPC timed out");
+    }
+    Json frame;
+#if defined(LAILA_NO_EXCEPTIONS)
+    frame = Json::parse(std::string(raw.begin(), raw.end()));
+#else
+    try {
+      frame = Json::parse(std::string(raw.begin(), raw.end()));
+    } catch (const std::exception& e) {
+      raise(Status::Error, std::string("peer sent an unparseable frame: ") + e.what());
+    }
+#endif
+    if (!frame.is_object()) continue;  // not JSON-RPC at all: ignore
+
+    // Inbound request/notification on our link.
+    if (frame.contains("method") && frame.at("method").is_string()) {
+      const std::string method = frame.at("method").as_string();
+      if (method == "peer.disconnect") {
+        tr->close();
+        raise(Status::Error, "peer disconnected during RPC");
+      }
+      if (method == "rpc.call") {
+        Json reply;
+        PolicyPtr h = home.lock();
+#if defined(LAILA_NO_EXCEPTIONS)
+        reply = h ? h->communication().dispatch_inbound(frame)
+                  : make_rpc_error(frame, -32000, "home policy is gone");
+#else
+        try {
+          reply = h ? h->communication().dispatch_inbound(frame)
+                    : make_rpc_error(frame, -32000, "home policy is gone");
+        } catch (const LailaError& e) {
+          reply = make_rpc_error(frame, -32000, e.what());
+        } catch (const std::exception& e) {
+          reply = make_rpc_error(frame, -32000, e.what());
+        }
+#endif
+        // Notifications (no id) get no reply.
+        if (frame.contains("id") && !frame.at("id").is_null()) tr->send_text(reply.dump());
+      }
+      continue;  // unknown methods are ignored; keep waiting for our reply
+    }
+
+    // A response: ours only if the id matches (stale/duplicate replies skipped).
+    const Json got_id = frame.contains("id") ? frame.at("id") : Json();
+    if (got_id.dump() != want_id.dump()) {
+      Logger::get().info("peer_rpc.stray_reply",
+                         "got id " + got_id.dump() + ", want " + want_id.dump());
+      continue;
+    }
+    if (frame.contains("error") && !frame.at("error").is_null())
+      raise(Status::Error, "peer RPC error: " + frame.at("error").dump());
+    if (!frame.contains("result")) raise(Status::Error, "peer RPC reply carries no result");
+    return frame.at("result");
+  }
 }
 
 // JSON-RPC request frame, byte-compatible with laila's protocol.make_request
@@ -288,18 +368,6 @@ bool kw_bool(const Json& kwargs, const std::string& key, bool dflt) {
   return dflt;
 }
 
-// JSON-RPC 2.0 error frame echoing the request id (when present).
-Json make_rpc_error(const Json& req, int code, const std::string& message) {
-  Json resp = Json::object();
-  resp["jsonrpc"] = std::string("2.0");
-  resp["id"] = req.is_object() && req.contains("id") ? req.at("id") : Json();
-  Json err = Json::object();
-  err["code"] = (int64_t)code;
-  err["message"] = message;
-  resp["error"] = err;
-  return resp;
-}
-
 // laila's cross-the-wire entry form: serialize(transformation_base64) ->
 // {payload: base64(pickle/msgpack/npy bytes), constitution: {simple, codes:[...]}}.
 Json serialize_wire(const EntryPtr& e) {
@@ -310,15 +378,15 @@ Json serialize_wire(const EntryPtr& e) {
 // Run one RPC against a peer: in-process peers dispatch directly against the
 // peer policy (mirroring the wire), networked peers send a framed JSON-RPC frame.
 // Returns the parsed "result".
-Json do_proxy_call(const std::shared_ptr<Policy>& local, const CommProtocolPtr& transport,
-                   const Json& req) {
+Json do_proxy_call(const std::weak_ptr<Policy>& home, const std::shared_ptr<Policy>& local,
+                   const CommProtocolPtr& transport, const Json& req) {
   if (local) {
-    Json resp = dispatch_rpc(local.get(), req);
+    Json resp = local->communication().dispatch_inbound(req);
     if (resp.contains("error") && !resp.at("error").is_null())
       raise(Status::Error, "peer error: " + resp.at("error").dump());
     return resp.at("result");
   }
-  return peer_send_recv(transport, req);
+  return peer_send_recv(home, transport, req);
 }
 
 // Build a single-element list arg (Python passes [gid]/[blob] to _remote_*).
@@ -331,13 +399,14 @@ FuturePtr RemotePolicyProxy::request(const std::string& method, const Json& args
   std::shared_ptr<Policy> local = local_;
   CommProtocolPtr tr = transport_;
   Json req = make_rpc_call(method, args, kwargs);
-  auto fut = std::make_shared<RemoteFuture>([local, tr, req]() -> EntryPtr {
-    Json result = do_proxy_call(local, tr, req);
+  std::weak_ptr<Policy> whome = home;
+  auto fut = std::make_shared<RemoteFuture>([whome, local, tr, req]() -> EntryPtr {
+    Json result = do_proxy_call(whome, local, tr, req);
     // A laila NATIVE policy returns a future envelope for the bare verbs; resolve
     // it the way laila's RemoteFuture does (block via _wait_future -> result gid).
     if (result.is_object() && result.contains("__laila_future__")) {
       Json wargs = one_list(result.contains("global_id") ? result.at("global_id") : Json(std::string()));
-      Json gid = do_proxy_call(local, tr, make_rpc_call("_wait_future", wargs, Json::object()));
+      Json gid = do_proxy_call(whome, local, tr, make_rpc_call("_wait_future", wargs, Json::object()));
       return Entry::constant(LailaValue::from_json_payload(gid));
     }
     if (result.is_object() && result.contains("_uuid")) return Entry::build_from_dict(result);
@@ -358,8 +427,9 @@ FuturePtr RemotePolicyProxy::remember(const std::string& entry_id,
   Json kwargs = Json::object();
   if (!pool_nickname.empty()) kwargs["pool"] = pool_nickname;
   Json req = make_rpc_call("central.memory._remote_remember", one_list(one_list(Json(entry_id))), kwargs);
-  auto fut = std::make_shared<RemoteFuture>([local, tr, req]() -> EntryPtr {
-    Json result = do_proxy_call(local, tr, req);  // list of serialized blobs
+  std::weak_ptr<Policy> whome = home;
+  auto fut = std::make_shared<RemoteFuture>([whome, local, tr, req]() -> EntryPtr {
+    Json result = do_proxy_call(whome, local, tr, req);  // list of serialized blobs
     if (!result.is_array() || result.elements().empty())
       raise(Status::NotFound, "peer returned no entry");
     return Entry::build_from_dict(result.elements().at(0));
@@ -375,8 +445,9 @@ FuturePtr RemotePolicyProxy::forget(const std::string& entry_id, const std::stri
   Json kwargs = Json::object();
   if (!pool_nickname.empty()) kwargs["pool"] = pool_nickname;
   Json req = make_rpc_call("central.memory._remote_forget", one_list(one_list(Json(entry_id))), kwargs);
-  auto fut = std::make_shared<RemoteFuture>([local, tr, req]() -> EntryPtr {
-    do_proxy_call(local, tr, req);
+  std::weak_ptr<Policy> whome = home;
+  auto fut = std::make_shared<RemoteFuture>([whome, local, tr, req]() -> EntryPtr {
+    do_proxy_call(whome, local, tr, req);
     return Entry::constant(LailaValue::none());
   });
   { hal::Guard g; home->future_bank()[fut->global_id()] = fut; }
@@ -392,8 +463,9 @@ FuturePtr RemotePolicyProxy::memorize(const EntryPtr& entry, const std::string& 
   if (!pool_nickname.empty()) kwargs["pool"] = pool_nickname;
   Json req = make_rpc_call("central.memory._remote_memorize", one_list(one_list(blob)), kwargs);
   EntryPtr e = entry;
-  auto fut = std::make_shared<RemoteFuture>([local, tr, req, e]() -> EntryPtr {
-    do_proxy_call(local, tr, req);  // list of stored gids
+  std::weak_ptr<Policy> whome = home;
+  auto fut = std::make_shared<RemoteFuture>([whome, local, tr, req, e]() -> EntryPtr {
+    do_proxy_call(whome, local, tr, req);  // list of stored gids
     return e;
   });
   { hal::Guard g; home->future_bank()[fut->global_id()] = fut; }
@@ -482,8 +554,10 @@ void CentralCommunication::add_connection(const CommProtocolPtr& protocol) {
       protocol->set_bound_port(l->local_port());  // resolves OS-assigned port 0
       auto stop = std::make_shared<std::atomic<bool>>(false);
       std::string expected_secret = protocol->peer_secret_key();
-      std::thread t([this, l, expected_secret, stop]() {
-        serve_loop(l, expected_secret, stop);
+      int max_sessions = protocol->config().max_inbound_sessions;
+      if (max_sessions < 1) max_sessions = 1;
+      std::thread t([this, l, expected_secret, stop, max_sessions]() {
+        serve_loop(l, expected_secret, stop, max_sessions);
       });
       serving_.push_back(ServeRecord{protocol->global_id(), l, stop, std::move(t)});
     }
@@ -503,16 +577,94 @@ void CentralCommunication::remove_connection(const CommProtocolPtr& protocol) {
 }
 
 // ---- Inbound RPC server (internal; driven by add_connection) ----
+Json CentralCommunication::dispatch_inbound(const Json& request) {
+  std::lock_guard<std::recursive_mutex> lock(dispatch_mu_);
+  return dispatch_rpc(policy_, request);
+}
+
+namespace {
+// One accepted connection being served on its own thread. `done` lets the
+// accept loop reap finished sessions without blocking on a join.
+struct InboundSession {
+  std::thread thread;
+  std::shared_ptr<std::atomic<bool>> done;
+};
+}  // namespace
+
 void CentralCommunication::serve_loop(hal::Listener* l, std::string expected_secret,
-                                      std::shared_ptr<std::atomic<bool>> stop) {
+                                      std::shared_ptr<std::atomic<bool>> stop, int max_sessions) {
+  std::vector<InboundSession> sessions;
+  auto reap = [&sessions]() {
+    for (auto it = sessions.begin(); it != sessions.end();) {
+      if (it->done->load()) {
+        if (it->thread.joinable()) it->thread.join();
+        it = sessions.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  };
   while (!stop->load()) {
+    reap();
+    if ((int)sessions.size() >= max_sessions) {
+      // At the cap: leave further connections in the kernel backlog rather than
+      // accepting them into a queue we would serve late anyway.
+      hal::get().clock().sleep_ms(50);
+      continue;
+    }
     hal::Connection* c = l->accept(50);  // bounded so the stop flag is seen
     if (!c) continue;
-    std::unique_ptr<hal::Connection> conn(c);
-    std::vector<uint8_t> first;
-    if (conn->recv(first, 5000)) serve_connection(conn.get(), first, expected_secret, stop);
-    conn->close();
+    auto done = std::make_shared<std::atomic<bool>>(false);
+    auto session = [this, c, expected_secret, stop, done]() {
+      std::unique_ptr<hal::Connection> conn(c);
+      // First bytes classify the carrier (HTTP upgrade vs. length-prefixed
+      // stream); wait for them in short slices so a stop is honoured promptly.
+      std::vector<uint8_t> first;
+      uint64_t deadline = hal::get().clock().now_ms() + 5000;
+      while (!stop->load() && hal::get().clock().now_ms() < deadline) {
+        if (conn->recv(first, 200) && !first.empty()) break;
+        if (!conn->is_open()) break;
+      }
+      if (!first.empty() && !stop->load()) {
+#if defined(LAILA_NO_EXCEPTIONS)
+        serve_connection(conn.get(), first, expected_secret, stop);
+#else
+        // Nothing may escape a session thread: an uncaught exception would
+        // std::terminate the whole process (on a device: reboot). A frame we
+        // cannot buffer (std::bad_alloc on an MCU) or any other failure just
+        // ends this one session.
+        try {
+          serve_connection(conn.get(), first, expected_secret, stop);
+        } catch (const std::exception& e) {
+          Logger::get().error("serve.session_dropped", e.what());
+        } catch (...) {
+          Logger::get().error("serve.session_dropped", "unknown exception");
+        }
+#endif
+      }
+      conn->close();
+      done->store(true);
+    };
+    std::thread t;
+#if defined(LAILA_NO_EXCEPTIONS)
+    t = std::thread(session);
+#else
+    try {
+      t = std::thread(session);
+    } catch (const std::exception& e) {
+      // No resources for another thread (pthread_create fails on an MCU under
+      // memory pressure): serve this connection inline instead of dying. The
+      // listener is serial until the session ends, but the device stays up.
+      Logger::get().error("serve.session_inline", e.what());
+      session();
+      continue;
+    }
+#endif
+    sessions.push_back(InboundSession{std::move(t), done});
   }
+  // Sessions poll `stop` every 200 ms; join them before the listener goes away.
+  for (auto& s : sessions)
+    if (s.thread.joinable()) s.thread.join();
 }
 
 void CentralCommunication::serve_connection(hal::Connection* conn,
@@ -564,11 +716,11 @@ void CentralCommunication::serve_connection(hal::Connection* conn,
       Json call;
 #if defined(LAILA_NO_EXCEPTIONS)
       call = Json::parse(msg);
-      s.send_text(dispatch_rpc(policy_, call).dump());
+      s.send_text(dispatch_inbound(call).dump());
 #else
       try {
         call = Json::parse(msg);
-        s.send_text(dispatch_rpc(policy_, call).dump());
+        s.send_text(dispatch_inbound(call).dump());
       } catch (const LailaError& e) {
         s.send_text(make_rpc_error(call, -32000, e.what()).dump());
       } catch (...) {
@@ -576,7 +728,7 @@ void CentralCommunication::serve_connection(hal::Connection* conn,
       }
 #endif
     }
-    s.close();
+    s.close();  // idempotent: completes the handshake and closes TCP (RFC 6455)
     return;
   }
 
@@ -621,11 +773,11 @@ void CentralCommunication::serve_connection(hal::Connection* conn,
     Json call;
 #if defined(LAILA_NO_EXCEPTIONS)
     call = Json::parse(msg);
-    fr.send(dispatch_rpc(policy_, call).dump());
+    fr.send(dispatch_inbound(call).dump());
 #else
     try {
       call = Json::parse(msg);
-      fr.send(dispatch_rpc(policy_, call).dump());
+      fr.send(dispatch_inbound(call).dump());
     } catch (const LailaError& e) {
       fr.send(make_rpc_error(call, -32000, e.what()).dump());
     } catch (...) {

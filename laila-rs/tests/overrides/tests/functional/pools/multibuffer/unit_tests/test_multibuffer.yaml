@@ -1,0 +1,4 @@
+# py2rs override for tests/functional/pools/multibuffer/unit_tests/test_multibuffer.py
+skip_tests:
+  test_uses_setitem_and_getitem_overrides: `class Spy(MultiBuffer)` overriding `__setitem__` with `super()` (a py_class subclass of a model class)
+  test_write_bypasses_setitem: `class Spy(MultiBuffer)` overriding `__setitem__` with `super()` (a py_class subclass of a model class)

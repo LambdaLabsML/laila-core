@@ -1,0 +1,36 @@
+# py2rs override for tests/deep_eval/test_05_constitution_build_manifest_deep.py
+# `_exec_one_fn` in Python `exec`s arbitrary source and counts the callables
+# it defines; the Rust twin resolves laila's recovery-code templates
+# natively, so the exec-semantics tests (lambdas, `import math`, `class A`)
+# have no Rust twin.
+skip_tests:
+  test_registered: `_REGISTRY["simple"] is SimpleConstitution` compares class identity (the Rust registry maps kinds to `_from_dict` hooks)
+  TestExecOneFn.test_single_function: `exec` of hand-written Python source (the Rust `_exec_one_fn` resolves recovery-code templates)
+  TestExecOneFn.test_lambda_assignment: `exec` of hand-written Python source
+  TestExecOneFn.test_zero_functions_rejected: `exec` of hand-written Python source
+  TestExecOneFn.test_two_functions_rejected: `exec` of hand-written Python source
+  TestExecOneFn.test_module_import_not_counted: `exec` of hand-written Python source (`import math`)
+  TestExecOneFn.test_from_import_counts_as_callable: `exec` of hand-written Python source (`from math import sqrt`)
+  TestExecOneFn.test_class_definition_counts_as_callable: `exec` of hand-written Python source (`class A`)
+  TestExecOneFn.test_syntax_error_propagates: `SyntaxError` from `exec` of Python source
+  TestExecOneFn.test_dunder_names_ignored: `exec` of hand-written Python source
+import_twins:
+  Constitution: laila_tests::deep_eval_helpers::constitution::Constitution
+  register_builder: laila_tests::deep_eval_helpers::constitution::register_builder
+# Constitution source literals -> native builders (rule P31b): the
+# serialized `code` stays byte-identical, the body runs natively.
+builder_tokens:
+  "def f(x): return x * 2": laila_tests::builders::x_times_two
+  "def f(x): return [x]": laila_tests::builders::x_in_list
+  "def f(x): return x is None": laila_tests::builders::x_is_none
+  "def f(x): return None": laila_tests::builders::always_none
+  "def f(x): return 1": laila_tests::builders::always_one
+  "def f(x): return x + 1": laila_tests::builders::x_plus_one
+  "def a(x): return x + 1": laila_tests::builders::x_plus_one
+  "def b(x): return x * 10": laila_tests::builders::x_times_ten
+  "def f(x): raise KeyError('k')": laila_tests::builders::raise_key_error_k
+  "def f(m):\n    d = m.realized\n    return d['x'].data * d['y'].data\n": laila_tests::builders::realized_x_times_y
+  "def f(m):\n    return m.realized['x'].data\n": laila_tests::builders::realized_x
+  "def f(m):\n    return m.realized['x'].data + m.realized['y'].data\n": laila_tests::builders::realized_x_plus_y
+  "def f(m):\n    raise ValueError('boom')\n": laila_tests::builders::raise_value_error_boom
+  "def f(m):\n    return m.realized['x'].data + 1\n": laila_tests::builders::realized_x_plus_one

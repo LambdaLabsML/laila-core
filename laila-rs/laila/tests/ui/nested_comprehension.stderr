@@ -1,0 +1,5 @@
+error: laila::python: nested comprehensions are not supported
+ --> tests/ui/nested_comprehension.rs:7:16
+  |
+7 |         return [y for x in [[1, 2], [3]] for y in x];
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

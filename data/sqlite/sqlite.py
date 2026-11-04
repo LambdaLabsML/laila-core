@@ -6,7 +6,7 @@ import json
 import os
 import sqlite3
 from collections.abc import Iterable, Iterator
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import ConfigDict, Field, PrivateAttr
 
@@ -22,6 +22,8 @@ class SQLitePool(_LAILA_IDENTIFIABLE_POOL):
     transformations: TransformationSequence | None = Field(default=transformation_base64)
 
     _conn: sqlite3.Connection | None = PrivateAttr(default=None)
+
+    _persistent_storage: ClassVar[bool] = True
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -63,10 +65,16 @@ class SQLitePool(_LAILA_IDENTIFIABLE_POOL):
         return self._conn
 
     def close(self) -> None:
-        """Close the SQLite connection."""
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        """Close the SQLite connection.
+
+        Runs under the pool lock so an in-flight write finishes before
+        the connection goes away; later callers hit the documented
+        ``RuntimeError("... is closed")`` from ``_connection()``.
+        """
+        with self.atomic():
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
 
     def _read(self, key: str) -> Any | None:
         """Retrieve the JSON value for *key*, or ``None`` if absent."""

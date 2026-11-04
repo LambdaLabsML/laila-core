@@ -149,11 +149,11 @@ class ComplexFuture(Future):
 
         Lookups go through the active policy's future bank.
         """
-        from ....... import _local_policies
+        from ....... import _future_bank_policies
 
         out: list[Future] = []
         for fid in self.stage_future_ids:
-            for policy in _local_policies.values():
+            for policy in _future_bank_policies():
                 if fid in policy.future_bank:
                     out.append(policy.future_bank[fid])
                     break
@@ -177,10 +177,10 @@ class ComplexFuture(Future):
         if isinstance(value, GroupFuture):
             return value
         if isinstance(value, _LAILA_IDENTIFIABLE_FUTURE):
-            from ....... import _local_policies
+            from ....... import _future_bank_policies
 
             gid = value.global_id
-            for policy in _local_policies.values():
+            for policy in _future_bank_policies():
                 if gid in policy.future_bank:
                     return policy.future_bank[gid]
             raise KeyError(f"Future {gid} not found in any local policy bank")

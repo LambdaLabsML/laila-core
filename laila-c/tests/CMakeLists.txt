@@ -17,7 +17,7 @@ target_compile_definitions(laila_tests PRIVATE
 add_test(NAME laila_tests_all COMMAND laila_tests)
 set_tests_properties(laila_tests_all PROPERTIES LABELS "laila;platform_${LAILA_PLATFORM}")
 
-set(LAILA_TEST_SUITES json identity value transform constitution entry pool future policy peers comm xlang compdata interop platform stress manifest async)
+set(LAILA_TEST_SUITES json identity value transform constitution entry pool future policy peers comm wire xlang compdata interop platform stress manifest async)
 foreach(s ${LAILA_TEST_SUITES})
   add_test(NAME laila_suite_${s} COMMAND laila_tests --suite ${s})
   set_tests_properties(laila_suite_${s} PROPERTIES LABELS "laila;suite_${s};platform_${LAILA_PLATFORM}")

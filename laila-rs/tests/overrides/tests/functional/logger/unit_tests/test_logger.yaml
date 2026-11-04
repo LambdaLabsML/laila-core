@@ -1,0 +1,9 @@
+# py2rs override for tests/functional/logger/unit_tests/test_logger.py
+# `_CapturingHandler(logging.Handler)` is a stdlib handler subclass that only
+# stores the records it receives; the Rust `logging` shim ships the same
+# thing as `CapturingHandler`. `_RecordingPool` subclasses a Rust pool to
+# spy on `_write` and is never instantiated by a test.
+class_aliases:
+  _CapturingHandler: laila::python::stdlib::logging::CapturingHandler
+skip_functions:
+  _RecordingPool: unused `_write` spy on a Rust pool backend (no test instantiates it)

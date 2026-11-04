@@ -1,0 +1,2 @@
+# py2rs override for tests/functional/policy/communication/streaming/unit_tests/test_uart_teardown.py
+handwritten: the asyncio probes (loop exception handler, selector map, pipe transport, recv task) have no Rust twin; the carrier runs on plain threads and the same release contract is checked on the serial fds and the link

@@ -18,9 +18,9 @@ Every public helper accepts any of:
 - ``str`` -- a raw ``global_id``, also resolved against the local
   policy banks.
 
-When resolution is needed, the helpers walk every local policy in
-:data:`laila._local_policies` and return the first hit. Missing ids
-raise :class:`KeyError`.
+When resolution is needed, the helpers walk every live local policy
+(:func:`laila._future_bank_policies`) and return the first hit. Missing
+ids raise :class:`KeyError`.
 """
 
 from __future__ import annotations
@@ -60,18 +60,18 @@ def _resolve_future(future_ref: Any) -> Any:
         return future_ref
 
     if isinstance(future_ref, str):
-        from .. import _local_policies
+        from .. import _future_bank_policies
 
-        for policy in _local_policies.values():
+        for policy in _future_bank_policies():
             if future_ref in policy.future_bank:
                 return policy.future_bank[future_ref]
         raise KeyError(f"Future {future_ref} not found in any local policy bank")
 
     if isinstance(future_ref, _LAILA_IDENTIFIABLE_FUTURE):
-        from .. import _local_policies
+        from .. import _future_bank_policies
 
         gid = future_ref.global_id
-        for policy in _local_policies.values():
+        for policy in _future_bank_policies():
             if gid in policy.future_bank:
                 return policy.future_bank[gid]
         raise KeyError(f"Future {gid} not found in any local policy bank")

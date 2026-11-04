@@ -921,6 +921,17 @@ export class StreamReader {
   }
   async _wait_for_data() {
     if (this._exc) throw this._exc;
+    // Waiting for data while paused would deadlock (CPython streams.py does
+    // the same here): ``readexactly(n)`` with ``n > 2 * limit`` pauses the
+    // transport before the whole frame is buffered and only ``_take`` resumes.
+    if (this._paused && this._transport && typeof this._transport.resume_reading === "function") {
+      this._paused = false;
+      try {
+        this._transport.resume_reading();
+      } catch {
+        /* closed */
+      }
+    }
     await _cancellable(this, new Promise((res) => this._waiters.push(res)));
     if (this._exc) throw this._exc;
   }

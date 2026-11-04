@@ -355,7 +355,9 @@ std::string now_creation_timestamp() {
   const int64_t sod = secs - days * 86400;
   int y; unsigned mo, d;
   civil_from_days(days, y, mo, d);
-  char buf[40];
+  // Real output is 29 chars; the buffer covers the worst case GCC derives from
+  // the argument types (-Wformat-truncation under -Werror on ESP-IDF).
+  char buf[128];
   std::snprintf(buf, sizeof(buf), "%04d-%02u-%02uT%02lld:%02lld:%02lld.%03u+00:00", y, mo, d,
                 static_cast<long long>(sod / 3600), static_cast<long long>((sod % 3600) / 60),
                 static_cast<long long>(sod % 60), milli);

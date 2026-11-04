@@ -97,8 +97,17 @@ void ConcurrentPackageFuture::wait(int64_t timeout_ms) {
   }
 }
 
+namespace {
+// Re-raise a future's recorded failure (Python parity: Future.wait() and
+// Future.result() both re-raise the stored exception, on every call).
+[[noreturn]] void rethrow_recorded(Status code, const std::string& msg) {
+  raise(code == Status::Ok ? Status::Error : code, msg.empty() ? "future failed" : msg);
+}
+}  // namespace
+
 void RemoteFuture::wait(int64_t /*timeout_ms*/) {
-  if (status_ == FutureStatus::FINISHED || status_ == FutureStatus::ERROR) return;
+  if (status_ == FutureStatus::FINISHED) return;
+  if (status_ == FutureStatus::ERROR) rethrow_recorded(exception_, exception_msg_);
   set_status(FutureStatus::RUNNING);
 #if defined(LAILA_NO_EXCEPTIONS)
   set_result_entry(fetch_());
@@ -110,17 +119,58 @@ void RemoteFuture::wait(int64_t /*timeout_ms*/) {
   } catch (const LailaError& e) {
     set_exception(e.code(), e.what());
     set_status(FutureStatus::ERROR);
+    throw;
+  } catch (const std::exception& e) {
+    // Garbled wire data (json parse / .at() on a missing key) is a transport
+    // error, not something that may escape wait() untyped.
+    set_exception(Status::Error, e.what());
+    set_status(FutureStatus::ERROR);
+    rethrow_recorded(Status::Error, e.what());
   }
 #endif
 }
 
 void GroupFuture::wait(int64_t timeout_ms) {
-  bool all_ok = true;
+  if (status_ == FutureStatus::FINISHED) return;
+  if (status_ == FutureStatus::ERROR) rethrow_recorded(exception_, exception_msg_);
+  set_status(FutureStatus::RUNNING);
+  // Wait for every child (so none is left half-done), remembering the first
+  // failure; a child's own wait() may throw, which is the same failure.
+  bool failed = false;
   for (auto& c : children_) {
+#if defined(LAILA_NO_EXCEPTIONS)
     c->wait(timeout_ms);
-    if (!c->finished()) all_ok = false;
+#else
+    try {
+      c->wait(timeout_ms);
+    } catch (const LailaError& e) {
+      if (!failed) set_exception(e.code(), e.what());
+      failed = true;
+      continue;
+    }
+#endif
+    if (!c->finished()) {
+      if (!failed) {
+        set_exception(c->exception() == Status::Ok ? Status::Error : c->exception(),
+                      c->exception_message().empty()
+                          ? std::string("child future ") + future_status_name(c->status())
+                          : c->exception_message());
+      }
+      failed = true;
+    }
   }
-  set_status(all_ok ? FutureStatus::FINISHED : FutureStatus::ERROR);
+  if (failed) {
+    set_status(FutureStatus::ERROR);
+    rethrow_recorded(exception_, exception_msg_);
+  }
+  if (!children_.empty()) {
+    // The group's result is the last child's (what laila's GroupFuture.result
+    // resolves to for a homogeneous batch).
+    hal::Guard g;
+    return_value_ = children_.back()->finished() ? children_.back()->result() : nullptr;
+    result_global_id_ = return_value_ ? return_value_->global_id() : "";
+  }
+  set_status(FutureStatus::FINISHED);
 }
 
 }  // namespace laila_c

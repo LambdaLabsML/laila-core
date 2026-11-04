@@ -1,0 +1,8 @@
+# py2rs override for tests/functional/compdata/transformation/unit_tests/test_transformations.py
+# `test_backward_code_is_executable` (Base64 / Zlib / FernetEncryption)
+# `exec`s the transformation's Python `backward_code` and calls the resulting
+# function: executing Python source has no Rust twin. The same codes are
+# exercised natively through `SimpleConstitution.build` (recovery-code
+# templates) in `test_compdata*.py` and `tests/vectors/constitution.rs`.
+skip_tests:
+  test_backward_code_is_executable: "`exec(self.op.backward_code, ...)` runs Python source; the code is built natively via SimpleConstitution instead"

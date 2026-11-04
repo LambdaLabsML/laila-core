@@ -47,6 +47,7 @@ fetches).
 
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any, ClassVar
 
@@ -55,7 +56,7 @@ from pydantic import ConfigDict, PrivateAttr
 from ..atomic.definitions.locally_atomic_identifiable_object import (
     _LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT,
 )
-from ..basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT
+from ..basics.definitions.identifiable_object import _LAILA_IDENTIFIABLE_OBJECT, _UUID_RE
 from ..basics.definitions.laila_object import _now_creation_timestamp
 from ..macros.strings import _ENTRY_SCOPE, _POOL_INDEX_SCOPE
 from ..utils.decorators.synchronized import synchronized
@@ -124,6 +125,13 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
     # the end of construction / deserialization / build so that only
     # *user* mutations count. Never serialized.
     _locally_modified: bool = PrivateAttr(default=False)
+    # Process-local hint: the ``global_id`` of the pool this entry was last
+    # read from or written to. ``Manifest.realized`` and constitution
+    # builds use it to look for referenced entries in the same pool
+    # before falling back to the alpha pool and the rest of the router,
+    # so a manifest memorized into a named pool can be realized. Never
+    # serialized.
+    _source_pool_gid: str | None = PrivateAttr(default=None)
 
     def __init__(self, **data: dict):
         """Initialise an Entry from keyword arguments.
@@ -523,18 +531,35 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         Raises
         ------
         RuntimeError
-            If the entry is already built (``state == READY``) or has
-            no constitution attached.
+            If the entry is not built and has no constitution attached.
+
+        Notes
+        -----
+        Building is idempotent: an entry that is already ``READY`` is
+        returned as-is, so "ensure built" on a dependency shared by
+        several builders never races.
         """
         if self._state == EntryState.READY:
-            raise RuntimeError("Entry is already built.")
+            return self
         if self._constitution is None:
             raise RuntimeError("Entry has no constitution attached.")
         self._build_inplace()
         return self
 
-    async def _build_async(self):
+    async def _build_async(self, *, _process_taskforce_id: str | None = None):
         """Asynchronously materialize this entry by running its constitution.
+
+        ``_process_taskforce_id`` (internal, set by :func:`laila.build`
+        when the caller targets a :class:`PythonProcessPoolTaskForce`)
+        routes the *constitution body* of a complex constitution to that
+        process pool: the manifest is resolved and realized here, in the
+        parent, and shipped to the worker as a self-contained, picklable
+        package (see :class:`_ProcessConstitutionJob`); the worker
+        rebuilds a :class:`Manifest` whose ``realized`` is the pre-resolved
+        entries and runs the body. The result is posted back into this
+        entry. Builders that need a live policy inside the worker
+        (``laila.remember``, nested ``laila.build``) are not supported on
+        process pools.
 
         Two paths:
 
@@ -573,11 +598,16 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         Raises
         ------
         RuntimeError
-            If the entry is already built, has no constitution, or
+            If the entry is not built and has no constitution, or
             (for complex constitutions) cannot resolve its manifest.
+
+        Notes
+        -----
+        Idempotent: an entry that is already ``READY`` resolves to
+        itself without running anything.
         """
         if self._state == EntryState.READY:
-            raise RuntimeError("Entry is already built.")
+            return self
         if self._constitution is None:
             raise RuntimeError("Entry has no constitution attached.")
 
@@ -590,24 +620,29 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
             if c._code is None:
                 raise RuntimeError("no constitution code defined.")
 
-            target = await c._resolve_manifest_async()
+            target = await c._resolve_manifest_async(pool_hint=self._source_pool_gid)
             if target is None:
                 raise RuntimeError("no manifest available to run constitution.")
 
-            await target.async_realized
-            # User constitution code is sync and may itself call
-            # `manifest.realized` (a sync wait). Offload to an executor
-            # thread so it doesn't block the loop; blocking ``wait()``
-            # paths inside the body park the taskforce slot.
-            from ..policy.central.command.schema.parking import _CURRENT_SLOT
-
-            body = _exec_one_fn(c._code)
-            slot = _CURRENT_SLOT.get()
-            tf = getattr(slot, "tf", None)
-            if tf is not None and hasattr(tf, "run_sync"):
-                result = await tf.run_sync(body, target)
+            realized = await target.async_realized
+            if _process_taskforce_id is not None:
+                result = await self._run_body_in_process(
+                    c._code, target, realized, _process_taskforce_id
+                )
             else:
-                result = await asyncio.to_thread(body, target)
+                # User constitution code is sync and may itself call
+                # `manifest.realized` (a sync wait). Offload to an executor
+                # thread so it doesn't block the loop; blocking ``wait()``
+                # paths inside the body park the taskforce slot.
+                from ..policy.central.command.schema.parking import _CURRENT_SLOT
+
+                body = _exec_one_fn(c._code)
+                slot = _CURRENT_SLOT.get()
+                tf = getattr(slot, "tf", None)
+                if tf is not None and hasattr(tf, "run_sync"):
+                    result = await tf.run_sync(body, target)
+                else:
+                    result = await asyncio.to_thread(body, target)
             self._post_build(result)
             self.constitution = None
             self.state = EntryState.READY
@@ -616,6 +651,35 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
 
         self._build_inplace()
         return self
+
+    @staticmethod
+    async def _run_body_in_process(code: str, manifest, realized: dict, taskforce_id: str):
+        """Ship a realized manifest + constitution body to a process pool and await the result."""
+        import laila
+
+        from ..policy.central.memory.schema.manifest import Manifest
+
+        entries: dict[str, dict] = {}
+        for ent in Manifest._iter_entries(realized):
+            entries[ent.global_id] = ent.as_dict()
+        job = _ProcessConstitutionJob(
+            code=code,
+            blueprint=copy.deepcopy(manifest.data),
+            entries=entries,
+            manifest_uuid=str(manifest.uuid),
+        )
+        command = laila.get_active_policy().central.command
+        try:
+            fut = command.submit([job], taskforce_id=taskforce_id)
+        except TypeError as exc:
+            raise TypeError(
+                "laila.build on a process pool requires the realized manifest payload "
+                "to be picklable (it is shipped to the worker process)."
+            ) from exc
+        try:
+            return await fut
+        finally:
+            fut.release()
 
     def _build(self, *, asynchronous: bool = False):
         """Dispatch to :meth:`_build_async` (returns coroutine) or
@@ -1098,7 +1162,10 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
             )
 
         if transformations is None:
-            return self if self._evolution is None else self._snapshot()
+            # In-memory pools store the object itself: hand them an
+            # independent snapshot so later mutation of this entry (or of
+            # its payload) never changes what ``remember`` returns.
+            return self._snapshot()
 
         if self._payload is not None:
             serialized_payload, payload_backward_code = self._payload.serialize()
@@ -1123,17 +1190,41 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         }
 
     def _snapshot(self) -> Entry:
-        """Shallow copy sharing the payload object but with independent identity.
+        """Independent copy of this entry with a deep-copied payload.
 
-        Used by :meth:`serialize` for variables stored without
-        transformations. Identity fields (``_uuid``, ``_scopes``,
-        ``_evolution``), state, constitution and creation_timestamp are copied by
-        value / reference; the payload wrapper is shared (re-assigning
-        ``data`` on the original does not affect the copy). The copy
-        gets its own atomic lock and starts clean (not locally modified).
+        Used by :meth:`serialize` for entries stored without
+        transformations (in-memory pools). Identity fields (``_uuid``,
+        ``_scopes``, ``_evolution``), state, constitution and
+        creation_timestamp are copied; the payload is deep-copied
+        (``ComputationalData.__deepcopy__``: ``dict``/``list`` via
+        ``copy.deepcopy``, numpy ``.copy()``, torch ``.clone()``) so
+        in-place mutation of the original after ``memorize`` does not
+        leak into the stored evolution. Payloads that cannot be
+        deep-copied (locks, file handles, generators, ...) are kept by
+        reference, best effort, with a debug log. The copy gets its own
+        atomic lock and starts clean (not locally modified).
+
+        Read side is unchanged: a ``remember`` from an in-memory pool
+        returns the stored object itself (copying on every read would
+        double the cost of data-loader style access).
         """
+        import copy
+
         clone = self.model_copy()
         object.__setattr__(clone, "_local_lock", None)
+        if self._payload is not None:
+            try:
+                clone._payload = copy.deepcopy(self._payload)
+            except Exception as exc:
+                try:
+                    from ..logger import get_logger
+
+                    get_logger().debug(
+                        f"Entry {self.global_id}: payload not deep-copyable ({exc!r}); "
+                        "stored by reference"
+                    )
+                except Exception:
+                    pass
         clone._locally_modified = False
         return clone
 
@@ -1164,12 +1255,24 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
             that predate the field (or come from non-Python producers)
             are stamped with the current time instead.
         """
+        # Identity fields come from storage / the wire: validate them so a
+        # corrupt record fails loudly instead of being rebuilt silently.
+        raw_uuid = in_dict["_uuid"]
+        if not isinstance(raw_uuid, str) or not _UUID_RE.match(raw_uuid):
+            raise ValueError(f"Entry.from_dict: invalid _uuid {raw_uuid!r}")
+        raw_evolution = in_dict.get("_evolution")
+        if raw_evolution is not None and (
+            isinstance(raw_evolution, bool)
+            or not isinstance(raw_evolution, int)
+            or raw_evolution < 0
+        ):
+            raise ValueError(f"Entry.from_dict: invalid _evolution {raw_evolution!r}")
         entry = cls.__new__(cls)
         Entry._initialize_identity(
             entry,
             {
-                "uuid": in_dict["_uuid"],
-                "evolution": in_dict.get("_evolution"),
+                "uuid": raw_uuid,
+                "evolution": raw_evolution,
                 "scopes": in_dict.get("_scopes"),
             },
         )
@@ -1292,6 +1395,38 @@ class Entry(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
     def __repr__(self):
         """Return the global identifier string."""
         return self.global_id
+
+
+class _ProcessConstitutionJob:
+    """Picklable, self-contained constitution build shipped to a process-pool worker.
+
+    Built by :meth:`Entry._run_body_in_process` once the manifest has been
+    realized in the parent. Carries only plain data: the constitution
+    source, the manifest blueprint (gid strings) and every referenced
+    entry as its :meth:`Entry.as_dict` form. In the worker the entries
+    are rebuilt (no policy or pool is needed), a manifest whose
+    ``realized`` / ``async_realized`` yield those pre-built entries is
+    constructed, and the body is executed against it. The return value
+    travels back to the parent as the build result.
+    """
+
+    __slots__ = ("blueprint", "code", "entries", "manifest_uuid")
+
+    def __init__(self, *, code: str, blueprint: dict, entries: dict, manifest_uuid: str):
+        self.code = code
+        self.blueprint = blueprint
+        self.entries = entries
+        self.manifest_uuid = manifest_uuid
+
+    def __call__(self):
+        from ..policy.central.memory.schema.manifest import Manifest, _RealizedManifest
+        from .constitution.constitution import _exec_one_fn
+
+        resolved = {gid: Entry.from_dict(d) for gid, d in self.entries.items()}
+        manifest = _RealizedManifest(data=self.blueprint, uuid=self.manifest_uuid)
+        manifest._prebuilt = Manifest._rebuild_with_entries(self.blueprint, resolved)
+        body = _exec_one_fn(self.code)
+        return body(manifest)
 
 
 from .constitution.build_maps import register_builder

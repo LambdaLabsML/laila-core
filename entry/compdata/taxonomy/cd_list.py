@@ -6,12 +6,16 @@ type, which is what keeps the original Python type (list vs tuple)
 intact on round-trip. Copy semantics respect the source type (tuples
 are immutable so shallow-copy returns the same object).
 
-Known limitation: a tuple *nested inside a list* still goes through
-msgpack and comes back as a list.
+A tuple (or any other value msgpack cannot express faithfully) *nested*
+inside a list is caught too: the msgpack serializer packs in strict
+mode and raises, and :meth:`ComputationalData.serialize` falls back to
+pickle, so nested tuples round-trip as tuples.
 """
 
 import copy
-from typing import Any, ClassVar
+from typing import ClassVar
+
+from pydantic import InstanceOf
 
 from ..transformation.serialization import MsgpackSerializer, PickleSerializer
 from .compdata import ComputationalData, register_cdtype
@@ -26,7 +30,8 @@ class CD_list(ComputationalData):
     and array-like compdata can use a uniform interface.
     """
 
-    data: list[Any] | tuple[Any, ...]
+    # ``InstanceOf`` keeps the caller's object and exact subclass.
+    data: InstanceOf[list] | InstanceOf[tuple]
     _SERIALIZER_CLS: ClassVar[type] = MsgpackSerializer
 
     def _ensure_serializer(self):

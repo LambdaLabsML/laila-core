@@ -161,7 +161,7 @@ class ComplexConstitution(Constitution):
         """
         return self._manifest_global_id
 
-    def _resolve_manifest_sync(self):
+    def _resolve_manifest_sync(self, pool_hint: str | None = None):
         """Synchronously resolve :attr:`_manifest` from :attr:`_manifest_global_id`.
 
         Cache hit: if :attr:`_manifest` is already populated, return it
@@ -190,15 +190,23 @@ class ComplexConstitution(Constitution):
 
         import laila
 
-        ref = laila.remember(self._manifest_global_id)
-        try:
-            resolved = ref.wait(None)
-        finally:
-            # Internal, self-consumed future: release it from the bank.
-            ref.release()
-        return self._record_resolved_manifest(resolved)
+        last_exc = None
+        for pool in self._manifest_candidate_pools(pool_hint):
+            ref = laila.remember(self._manifest_global_id, dst_pool=pool)
+            try:
+                resolved = ref.wait(None)
+            except KeyError as exc:
+                last_exc = exc
+                continue
+            finally:
+                # Internal, self-consumed future: release it from the bank.
+                ref.release()
+            return self._record_resolved_manifest(resolved)
+        raise KeyError(
+            f"Could not resolve manifest {self._manifest_global_id!r} from any registered pool"
+        ) from last_exc
 
-    async def _resolve_manifest_async(self):
+    async def _resolve_manifest_async(self, pool_hint: str | None = None):
         """Asynchronously resolve :attr:`_manifest` from its global id.
 
         ``await``\\ s the ``laila.remember`` future so the calling
@@ -215,19 +223,46 @@ class ComplexConstitution(Constitution):
 
         import laila
 
-        ref = laila.remember(self._manifest_global_id)
-        try:
-            resolved = await ref
-        finally:
-            ref.release()
-        return self._record_resolved_manifest(resolved)
+        last_exc = None
+        for pool in self._manifest_candidate_pools(pool_hint):
+            ref = laila.remember(self._manifest_global_id, dst_pool=pool)
+            try:
+                resolved = await ref
+            except KeyError as exc:
+                last_exc = exc
+                continue
+            finally:
+                ref.release()
+            return self._record_resolved_manifest(resolved)
+        raise KeyError(
+            f"Could not resolve manifest {self._manifest_global_id!r} from any registered pool"
+        ) from last_exc
 
-    def _resolve_manifest(self, *, asynchronous: bool = False):
+    @staticmethod
+    def _manifest_candidate_pools(pool_hint: str | None) -> list:
+        """Pools to try for the manifest: the hinted pool, alpha, then the rest."""
+        import laila
+
+        try:
+            memory = laila.get_active_policy().central.memory
+            known = list(memory.pool_router.pools.keys())
+            alpha = memory.alpha_pool
+        except Exception:
+            return [None]
+        order: list = []
+        if pool_hint is not None and pool_hint in known:
+            order.append(pool_hint)
+        if pool_hint != alpha:
+            order.append(None)
+        order.extend(g for g in known if g != pool_hint and g != alpha)
+        return order
+
+    def _resolve_manifest(self, *, asynchronous: bool = False, pool_hint: str | None = None):
         """Dispatch to :meth:`_resolve_manifest_async` (returns coroutine)
         or :meth:`_resolve_manifest_sync` (blocks)."""
         if asynchronous:
-            return self._resolve_manifest_async()
-        return self._resolve_manifest_sync()
+            return self._resolve_manifest_async(pool_hint=pool_hint)
+        return self._resolve_manifest_sync(pool_hint=pool_hint)
 
     def _record_resolved_manifest(self, resolved: Any):
         """Cache the resolved manifest in :attr:`_manifest` and return it.
@@ -297,17 +332,41 @@ class ComplexConstitution(Constitution):
         return _exec_one_fn(self._code)(target)
 
     def as_dict(self) -> dict:
-        """Serialize as `{"_kind": "complex", "code": ..., "manifest_global_id": ...}`."""
+        """Serialize as ``{"_kind": "complex", "code", "manifest_global_id", "_hmac"}``.
+
+        ``_hmac`` is an HMAC-SHA256 over the canonical code/manifest pair
+        keyed by the per-user constitution secret (see
+        :mod:`laila.entry.constitution.trust`); :meth:`_from_dict`
+        refuses dicts whose signature does not verify, so stored or
+        received builder source only runs if it was written by a
+        process holding the same secret.
+        """
+        from .trust import sign_complex
+
         return {
             "_kind": "complex",
             "code": self._code,
             "manifest_global_id": self._manifest_global_id,
+            "_hmac": sign_complex(self._code, self._manifest_global_id),
         }
 
     @classmethod
     def _from_dict(cls, in_dict: dict) -> ComplexConstitution:
-        """Build a `ComplexConstitution` from its serialized dict."""
-        return cls(
-            code=in_dict.get("code"),
-            manifest_global_id=in_dict.get("manifest_global_id"),
-        )
+        """Build a `ComplexConstitution` from its serialized dict.
+
+        Raises
+        ------
+        ValueError
+            If the ``_hmac`` signature is missing or does not verify
+            against this user's constitution secret.
+        """
+        from .trust import verify_complex
+
+        code = in_dict.get("code")
+        manifest_global_id = in_dict.get("manifest_global_id")
+        if not verify_complex(code, manifest_global_id, in_dict.get("_hmac")):
+            raise ValueError(
+                "untrusted constitution: complex constitution signature missing or invalid "
+                "(written by a process without this user's ~/.laila/constitution.key)"
+            )
+        return cls(code=code, manifest_global_id=manifest_global_id)

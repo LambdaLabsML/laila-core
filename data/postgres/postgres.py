@@ -10,7 +10,7 @@ import subprocess
 import time
 from collections.abc import Iterable, Iterator
 from contextlib import suppress
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import ConfigDict, Field, PrivateAttr
 
@@ -48,6 +48,8 @@ class PostgresPool(_LAILA_IDENTIFIABLE_POOL):
     _socket_dir: str | None = PrivateAttr(default=None)
     _local_dbname: str = PrivateAttr(default="postgres")
     _local_user: str = PrivateAttr(default="laila")
+
+    _persistent_storage: ClassVar[bool] = True
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

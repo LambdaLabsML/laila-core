@@ -1,0 +1,22 @@
+[package]
+name = "laila-interop-harness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Rust laila peer harness for the N-language interop matrix (tests/interop/README.md)"
+
+# `rs_harness` is the Rust peer of `tests/interop/harness/py_harness.py`:
+# the orchestrator in `tests/interop/` drives it through the harness CLI
+# contract. Only the default `laila-core` features (std, sqlite, tls) are
+# needed, so building it does not require DuckDB / HDF5 on the machine:
+#     cd laila-rs && cargo build -p laila-interop-harness
+#     -> laila-rs/target/debug/rs_harness
+[[bin]]
+name = "rs_harness"
+path = "main.rs"
+
+[dependencies]
+laila = { workspace = true }
+# SIGTERM / SIGINT in `serve` mode (`signal.signal` in the Python harness).
+libc = { workspace = true }

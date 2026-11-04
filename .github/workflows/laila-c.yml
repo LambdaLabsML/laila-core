@@ -58,6 +58,24 @@ jobs:
           cmake -S laila-c -B laila-c/build
           cmake --build laila-c/build -j
 
+      # Peers for the device-side interop legs (run_qemu_test.sh skips any that
+      # are missing): the Python package for the system interpreter, Node +
+      # laila-js for the JS cells of tests/interop.
+      - name: Install Python peer (system python3)
+        shell: bash
+        run: |
+          /usr/bin/python3 -m pip install --upgrade pip --break-system-packages || true
+          /usr/bin/python3 -m pip install --break-system-packages ".[all,dev]" || \
+            echo "::warning::Python peer not installed; Python/matrix legs will be skipped"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install laila-js (JS peer)
+        working-directory: laila-js
+        run: npm ci || echo "::warning::laila-js not installed; JS cells will be skipped"
+
       - name: Boot on emulated ESP32 + pull an entry over TCP
         shell: bash
         run: |

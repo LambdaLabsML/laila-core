@@ -496,6 +496,12 @@ class _LAILA_IDENTIFIABLE_COMMUNICATION(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIF
             raise RuntimeError("Communication has no reference to the local policy.")
         for segment in path:
             obj = getattr(obj, segment)
+        # Entries shipped by a morphed caller (``laila.memorize(entry)``
+        # with a peer active) arrive as serialized envelopes; rebuild them
+        # so the target method receives real ``Entry`` objects.
+        from ..protocol import rehydrate_entry_args
+
+        args, kwargs = rehydrate_entry_args(args, kwargs)
         return obj(*args, **kwargs)
 
     # ------------------------------------------------------------------

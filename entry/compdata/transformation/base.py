@@ -27,10 +27,27 @@ special-casing on the call sites.
 
 from __future__ import annotations
 
+import ast
+import re
+import threading
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
+
+# Sentinel ``backward_kwargs`` used to render a class's recovery-code
+# *template*: its ``repr`` is located in the rendered code and replaced
+# by a capture group (see ``_data_transformation._backward_code_pattern``).
+_SLOT_KWARGS: dict[str, Any] = {"__laila_slot__": 0}
+_SLOT_KWARGS_REPR = repr(_SLOT_KWARGS)
+
+
+def _is_literal_dict(text: str) -> bool:
+    """``True`` when *text* is the ``repr`` of a plain literal dict."""
+    try:
+        return isinstance(ast.literal_eval(text), dict)
+    except Exception:
+        return False
 
 
 class _data_transformation(BaseModel, ABC):
@@ -63,12 +80,110 @@ class _data_transformation(BaseModel, ABC):
     backward_code: str = Field(default_factory=str)
     REGISTRY: ClassVar[dict[str, type[_data_transformation]]] = {}
 
+    # ------------------------------------------------------------------
+    # Recovery-code trust
+    # ------------------------------------------------------------------
+    # A ``SimpleConstitution`` read back from a pool or a peer is a list
+    # of Python source snippets that get ``exec``'d. Only snippets this
+    # process could itself have produced are allowed to run:
+    #
+    # - ``_matches_backward_code`` -- template match against the class's
+    #   own recovery code (fixed text identical, the ``backward_kwargs``
+    #   slot a literal dict). Records written with other kwargs by other
+    #   processes / hosts / ports still match.
+    # - ``_KNOWN_BACKWARD_CODES`` -- exact strings generated in this
+    #   process (every assignment to ``backward_code`` lands here), the
+    #   fallback for third-party transformations whose template cannot
+    #   be probed.
+    _KNOWN_BACKWARD_CODES: ClassVar[set[str]] = set()
+    _PATTERN_CACHE: ClassVar[dict[type, Any]] = {}
+    _TRUST_LOCK: ClassVar[threading.Lock] = threading.Lock()
+
     def __init_subclass__(cls, **kwargs):
         """Register the subclass in ``REGISTRY`` when *name* is set."""
         super().__init_subclass__(**kwargs)
         n = getattr(cls, "name", None)
         if isinstance(n, str) and n:
             _data_transformation.REGISTRY[n] = cls
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+        if name == "backward_code" and isinstance(value, str) and value:
+            with _data_transformation._TRUST_LOCK:
+                _data_transformation._KNOWN_BACKWARD_CODES.add(value)
+
+    @classmethod
+    def _template_probe(cls) -> _data_transformation:
+        """Return an instance whose ``backward_code`` embeds the sentinel kwargs.
+
+        Subclasses needing extra constructor arguments (e.g. a key)
+        override this; raising means "no template" and only exact,
+        locally generated codes are trusted for the class.
+        """
+        return cls(backward_kwargs=dict(_SLOT_KWARGS))
+
+    @classmethod
+    def _template_slots(cls) -> list[tuple[str, Any]]:
+        """``(sentinel_text, validator)`` pairs present in the probe's code."""
+        return [(_SLOT_KWARGS_REPR, _is_literal_dict)]
+
+    @classmethod
+    def _backward_code_pattern(cls):
+        """Compiled template for this class's recovery code (cached), or ``None``."""
+        cache = _data_transformation._PATTERN_CACHE
+        if cls in cache:
+            return cache[cls]
+        try:
+            code = cls._template_probe().backward_code
+        except Exception:
+            code = ""
+        result = None
+        if code:
+            slots = cls._template_slots()
+            token_re = "|".join(re.escape(t) for t, _ in slots)
+            parts = re.split(f"({token_re})", code)
+            pattern = ""
+            validators = []
+            for part in parts:
+                hit = next((v for t, v in slots if t == part), None)
+                if hit is not None:
+                    pattern += "(.*?)"
+                    validators.append(hit)
+                else:
+                    pattern += re.escape(part)
+            # A slot-less template (e.g. JsonString) is an exact match.
+            result = (re.compile(pattern, re.DOTALL), validators)
+        with _data_transformation._TRUST_LOCK:
+            cache[cls] = result
+        return result
+
+    @classmethod
+    def _matches_backward_code(cls, code: str) -> bool:
+        """``True`` when *code* is an instance of this class's recovery template."""
+        compiled = cls._backward_code_pattern()
+        if compiled is None:
+            return False
+        pattern, validators = compiled
+        m = pattern.fullmatch(code)
+        if m is None:
+            return False
+        return all(v(g) for v, g in zip(validators, m.groups()))
+
+    @classmethod
+    def is_trusted_backward_code(cls, code: Any) -> bool:
+        """``True`` when *code* may be executed as a recovery step.
+
+        Trusted means: generated in this process, or matching the
+        recovery-code template of a loaded transformation class.
+        """
+        if not isinstance(code, str) or not code:
+            return False
+        with _data_transformation._TRUST_LOCK:
+            if code in _data_transformation._KNOWN_BACKWARD_CODES:
+                return True
+        return any(
+            sub._matches_backward_code(code) for sub in list(_data_transformation.REGISTRY.values())
+        )
 
     @abstractmethod
     def forward(self, data: Any) -> Any: ...

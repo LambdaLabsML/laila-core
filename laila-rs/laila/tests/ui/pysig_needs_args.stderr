@@ -1,0 +1,5 @@
+error: pysig: function needs an `args: impl Into<Args>` parameter
+ --> tests/ui/pysig_needs_args.rs:6:4
+  |
+6 | fn f() -> Result<Arg> {
+  |    ^

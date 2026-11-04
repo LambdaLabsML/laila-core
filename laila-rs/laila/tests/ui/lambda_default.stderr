@@ -1,0 +1,5 @@
+error: laila::python: bad lambda parameter list near `=`
+ --> tests/ui/lambda_default.rs:7:17
+  |
+7 |         let g = lambda x, y=1: x + y;
+  |                 ^^^^^^

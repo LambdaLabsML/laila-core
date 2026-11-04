@@ -8,7 +8,7 @@ live in the concrete :class:`Future` registered in the owning policy's
 ``future_bank``. The identity object instead resolves all status /
 result / exception accessors *through* the bank, so any process that
 holds an identity can introspect the live future as long as the owning
-policy is reachable in :data:`_local_policies`.
+policy is reachable via :func:`laila._future_bank_policies`.
 
 The split exists so that a future can be referenced by metadata alone
 (e.g. across a process boundary) and so that :class:`RemoteFuture` can
@@ -87,10 +87,10 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
     @property
     def status(self):
         """Read-only status resolved from the owning policy's future bank."""
-        from ....... import _local_policies
+        from ....... import _future_bank_policies
 
         gid = self.global_id
-        for policy in _local_policies.values():
+        for policy in _future_bank_policies():
             if gid in policy.future_bank:
                 return policy.future_bank[gid].status
         raise KeyError(f"Future {gid} not found in any local policy bank")
@@ -98,10 +98,10 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
     @property
     def result(self):
         """Read-only result resolved from the owning policy's future bank."""
-        from ....... import _local_policies
+        from ....... import _future_bank_policies
 
         gid = self.global_id
-        for policy in _local_policies.values():
+        for policy in _future_bank_policies():
             if gid in policy.future_bank:
                 return policy.future_bank[gid].result
         raise KeyError(f"Future {gid} not found in any local policy bank")
@@ -109,10 +109,10 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
     @property
     def data(self):
         """Read-only unwrapped Entry payload, resolved through the owning policy's future bank."""
-        from ....... import _local_policies
+        from ....... import _live_policies, _local_policies
 
         pid = self.policy_id.global_id if hasattr(self.policy_id, "global_id") else self.policy_id
-        policy = _local_policies.get(pid)
+        policy = _local_policies.get(pid) or _live_policies.get(pid)
         if policy is None:
             raise KeyError(f"Owning policy {pid} for future {self.global_id} not found locally")
         try:
@@ -123,10 +123,10 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
     @property
     def exception(self):
         """Read-only exception resolved from the owning policy's future bank."""
-        from ....... import _local_policies
+        from ....... import _future_bank_policies
 
         gid = self.global_id
-        for policy in _local_policies.values():
+        for policy in _future_bank_policies():
             if gid in policy.future_bank:
                 return policy.future_bank[gid].exception
         raise KeyError(f"Future {gid} not found in any local policy bank")
@@ -144,10 +144,10 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
 
         _check_not_loop_thread()
 
-        from ....... import _local_policies
+        from ....... import _future_bank_policies
 
         gid = self.global_id
-        for policy in _local_policies.values():
+        for policy in _future_bank_policies():
             if gid in policy.future_bank:
                 return policy.future_bank[gid].wait(timeout)
         raise KeyError(f"Future {gid} not found in any local policy bank")
@@ -162,10 +162,10 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         result has been consumed, otherwise the future (and its result
         payload) stays resident for the life of the process.
         """
-        from ....... import _local_policies
+        from ....... import _future_bank_policies
 
         gid = self.global_id
-        for policy in _local_policies.values():
+        for policy in _future_bank_policies():
             fut = policy.future_bank.get(gid)
             if fut is not None:
                 if fut is self:
@@ -182,10 +182,10 @@ class _LAILA_IDENTIFIABLE_FUTURE(_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT):
         ``GroupFuture``, ``RemoteFuture`` — implements its own non-blocking
         completion signal).
         """
-        from ....... import _local_policies
+        from ....... import _future_bank_policies
 
         gid = self.global_id
-        for policy in _local_policies.values():
+        for policy in _future_bank_policies():
             if gid in policy.future_bank:
                 return policy.future_bank[gid].__await__()
         raise KeyError(f"Future {gid} not found in any local policy bank")

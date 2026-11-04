@@ -1,0 +1,5 @@
+error: laila::python: `try` needs at least one `except` or a `finally`
+ --> tests/ui/try_without_except.rs:7:9
+  |
+7 |         try {
+  |         ^^^

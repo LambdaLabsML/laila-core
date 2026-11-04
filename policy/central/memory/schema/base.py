@@ -79,10 +79,55 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
     """
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_CENTRAL_MEMORY_SCOPE]))
+    # Weak back-reference to the owning policy, set by
+    # ``_LAILA_IDENTIFIABLE_POLICY.model_post_init``. Memory operations
+    # submit their coroutines to the *owner's* command (not the
+    # process-global active policy), so ``laila.memorize(..., dst_policy=B)``
+    # never has to transiently activate ``B``.
+    _policy_ref: Any = PrivateAttr(default=None)
     pool_router: _LAILA_IDENTIFIABLE_POOL_ROUTER | None = Field(default=None)
     alpha_pool: str | None = Field(default=None)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    # ------------------------------------------------------------------
+    # Owner resolution
+    # ------------------------------------------------------------------
+
+    def _policy(self):
+        """Return the policy that owns this memory.
+
+        Falls back to the process-global active policy for standalone
+        memory objects (unit tests, ad-hoc construction) that were never
+        attached to a policy.
+        """
+        ref = self._policy_ref
+        owner = ref() if ref is not None else None
+        if owner is not None:
+            return owner
+        from ..... import active_policy
+
+        return active_policy
+
+    def _command(self):
+        """Return the owning policy's central command."""
+        return self._policy().central.command
+
+    def _owner_gid(self) -> str:
+        """Return the owning policy's global id (used as record provenance)."""
+        return self._policy().global_id
+
+    @staticmethod
+    def _future_bank():
+        """Return the bank futures created by this memory self-register in.
+
+        Futures always register with the active *local* policy (the
+        caller's scope, so ``laila.guarantee`` sees them) regardless of
+        which policy's command runs them.
+        """
+        from ..... import _get_active_local_policy
+
+        return _get_active_local_policy().future_bank
 
     def model_post_init(self, __context: Any) -> None:
         """Wire a default :class:`PoolRouter` and pick an alpha pool.
@@ -262,7 +307,9 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             ``remember`` (typical for the in-memory default pool which
             doesn't expose futures).
         """
-        from ..... import active_policy
+        cmd = self._command()
+        owner_gid = self._owner_gid()
+        future_bank = self._future_bank()
 
         if inflight_max_entries < 1:
             raise ValueError("duplicate_pool requires inflight_max_entries >= 1.")
@@ -282,16 +329,16 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
 
         duplicate_futures = {
             entry_id: ConcurrentPackageFuture(
-                taskforce_id=active_policy.central.command.internal_taskforce,
-                policy_id=active_policy.global_id,
+                taskforce_id=cmd.internal_taskforce,
+                policy_id=owner_gid,
                 purpose=f"duplicate_pool:{entry_id}",
             )
             for entry_id in entry_ids
         }
 
         group_future = GroupFuture(
-            taskforce_id=active_policy.central.command.internal_taskforce,
-            policy_id=active_policy.global_id,
+            taskforce_id=cmd.internal_taskforce,
+            policy_id=owner_gid,
             future_ids=[f.global_id for f in duplicate_futures.values()],
         )
 
@@ -312,7 +359,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
                     if remember_ref is None:
                         raise RuntimeError("duplicate_pool requires a non-default source pool.")
 
-                    remember_fut = active_policy.future_bank[remember_ref.global_id]
+                    remember_fut = future_bank[remember_ref.global_id]
                     entry = await remember_fut
 
                     memorize_ref = self.memorize(
@@ -320,7 +367,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
                         pool_id=dest_pool.global_id,
                     )
                     if memorize_ref is not None:
-                        memorize_fut = active_policy.future_bank[memorize_ref.global_id]
+                        memorize_fut = future_bank[memorize_ref.global_id]
                         await memorize_fut
 
                     child_future.exception = None
@@ -405,8 +452,6 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             entries), or ``None`` if the pool path was synchronous and
             no future handle was needed.
         """
-        from ..... import active_policy
-
         pool = self._route_pool(
             entries,
             pool=pool,
@@ -421,7 +466,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             get_logger().record_memorize(
                 entries=entries,
                 pool=pool,
-                policy=active_policy,
+                policy=self._policy(),
             )
         except Exception:
             pass
@@ -464,11 +509,9 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         for many. Replaces the previous two-stage :class:`ComplexFuture`
         pipeline that double-queued each leg.
         """
-        from ..... import active_policy
-
-        cmd = active_policy.central.command
+        cmd = self._command()
         internal_id = cmd.internal_taskforce
-        policy_gid = active_policy.global_id
+        policy_gid = self._owner_gid()
         transformations = pool.transformations
 
         async def _memorize_one(e=None, p=pool, t=transformations, pgid=policy_gid):
@@ -486,6 +529,10 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             mark = getattr(e, "mark_memorized", None)
             if mark is not None:
                 mark()
+            try:
+                e._source_pool_gid = p.global_id
+            except Exception:
+                pass
             return e.global_id
 
         # ``partial`` of a coroutine function is recognised as one by
@@ -511,6 +558,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         pool_nickname: str | None = None,
         affinity: float | None = None,
         persist: bool = True,
+        resolve: bool = True,
     ):
         """Fetch entries from the routed pool, optionally caching them
         into the alpha pool on the way back.
@@ -540,6 +588,12 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             Reserved for future affinity routing.
         persist : bool, default True
             Whether to cache fetched entries into the alpha pool.
+        resolve : bool, default True
+            Run *recursive blueprint resolution* on every
+            :class:`ComplexManifest` fetched: its manifest-scoped leaves
+            are read from the same pool and cast into typed members
+            (see :meth:`ComplexManifest.resolve`). ``False`` returns the
+            bare blueprint.
 
         Returns
         -------
@@ -547,8 +601,6 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             Future-like handle resolving to the entry or list of
             entries.
         """
-        from ..... import active_policy
-
         pool = self._route_pool(
             entry_ids,
             pool=pool,
@@ -563,21 +615,22 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             get_logger().record_remember(
                 entry_ids=entry_ids,
                 pool=pool,
-                policy=active_policy,
+                policy=self._policy(),
             )
         except Exception:
             pass
 
         if not persist or pool.global_id == self.alpha_pool:
-            return self._fetch(entry_ids, pool=pool)
+            return self._fetch(entry_ids, pool=pool, resolve=resolve)
 
-        return self._remember_with_persist(entry_ids, pool=pool)
+        return self._remember_with_persist(entry_ids, pool=pool, resolve=resolve)
 
     def _remember_with_persist(
         self,
         entry_ids: list[str],
         *,
         pool: _LAILA_IDENTIFIABLE_POOL,
+        resolve: bool = True,
     ):
         """Fetch entries from *pool* and then memorize them into the alpha pool.
 
@@ -585,12 +638,13 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         whose children only reach ``FINISHED`` once both the fetch and the
         alpha-pool write have completed.  Modeled after ``_duplicate_pool``.
         """
-        from ..... import active_policy
+        cmd = self._command()
+        owner_gid = self._owner_gid()
 
         child_futures = {
             entry_id: ConcurrentPackageFuture(
-                taskforce_id=active_policy.central.command.internal_taskforce,
-                policy_id=active_policy.global_id,
+                taskforce_id=cmd.internal_taskforce,
+                policy_id=owner_gid,
                 purpose=f"remember_with_persist:{entry_id}",
             )
             for entry_id in entry_ids
@@ -599,8 +653,8 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         group_future = None
         if len(child_futures) > 1:
             group_future = GroupFuture(
-                taskforce_id=active_policy.central.command.internal_taskforce,
-                policy_id=active_policy.global_id,
+                taskforce_id=cmd.internal_taskforce,
+                policy_id=owner_gid,
                 future_ids=[f.global_id for f in child_futures.values()],
             )
             for child_future in child_futures.values():
@@ -613,7 +667,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
                 for child_future in child_futures.values():
                     child_future.status = FutureStatus.RUNNING
 
-                fetch_ref = self._fetch(entry_ids, pool=pool)
+                fetch_ref = self._fetch(entry_ids, pool=pool, resolve=resolve)
                 if fetch_ref is None:
                     raise RuntimeError(
                         "remember with persist requires a non-default source pool "
@@ -633,7 +687,11 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
 
                 from .....entry.entry_state import EntryState
 
-                ready_entries = [e for e in entries if e.state == EntryState.READY]
+                # Nested manifests a complex manifest resolved to are
+                # cached back too, so the next read from alpha resolves.
+                ready_entries = [
+                    e for e in self._with_resolved_members(entries) if e.state == EntryState.READY
+                ]
                 if ready_entries:
                     memorize_ref = self.memorize(entries=ready_entries, pool_id=alpha_pool_id)
                     if memorize_ref is not None:
@@ -751,17 +809,20 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
           with ``evolution``) -- the stored evolution whose entry
           creation_timestamp equals the given stamp exactly.
 
-        Resolution order per tier of the proxy chain:
+        Resolution over the proxy chain:
 
-        1. the tier's :meth:`_resolve_indexed` (its :class:`PoolIndex`);
-           a hit is **validated** with ``_exists_async`` and, when the
-           key turns out to be gone, the shard is invalidated and the
-           search continues;
-        2. only when no tier's index answers: candidate keys from
-           :meth:`_search_keys` / :meth:`_candidate_keys`, and for
-           timestamp queries the candidate records are read on the tier
-           that holds them (no write-back); the matching raw record is
-           returned so the caller does not read it twice.
+        1. every tier contributes candidates -- its index shard
+           (:meth:`_search_keys`, one read) or, without an index answer,
+           a prefix scan (:meth:`_candidate_keys`);
+        2. the union is ranked once (so an origin holding a newer
+           evolution than its cache wins) and only the chosen key is
+           **validated** with ``_exists_async``; a stale indexed key is
+           removed from its shard (repairing the persisted index) and the
+           next best is tried, and when the indexes turn out to be
+           entirely stale the chain is re-scanned from its keys;
+        3. for timestamp queries the candidate records are read on the
+           tier that holds them (no write-back); the matching raw record
+           is returned so the caller does not read it twice.
 
         Returns
         -------
@@ -799,60 +860,45 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             if evolution is None and await pool._exists_async(base):
                 return base, None
 
-        # 1. Index-first, tier by tier, validating every hit. A hit whose key
-        #    is gone (external delete, lost race) is removed from the shard --
-        #    which repairs the persisted index -- and the tier is asked again.
-        for tier in chain:
-            for _attempt in range(64):
-                key = await asyncio.to_thread(tier._resolve_indexed, base, attrs)
-                if key is None:
-                    break
-                if await tier._exists_async(key):
-                    return key, None
-                await asyncio.to_thread(tier.index.remove, key)
-
-        # 2. Scan fallback: candidate (tier, key) pairs across the chain.
-        candidates: list[tuple[_LAILA_IDENTIFIABLE_POOL, str]] = []
-        for tier in chain:
-            keys = await asyncio.to_thread(tier._search_keys, base, attrs)
-            if keys is None:
-                keys = await asyncio.to_thread(tier._candidate_keys, base)
-            for key in keys:
-                if key != base and not key.startswith(f"{base}@"):
-                    continue
-                if (
-                    evolution is not None
-                    and evolution >= 0
-                    and self._key_evolution(key) != evolution
-                ):
-                    continue
-                candidates.append((tier, key))
-
-        if evolution is not None and evolution < 0 and candidates:
-            # k-th from the end over the sorted, de-duplicated evolutions
-            # (constants rank lowest).
-            ranked = sorted({self._key_evolution(k) for _t, k in candidates})
-            idx = len(ranked) + evolution
-            if idx < 0:
-                candidates = []
-            else:
-                wanted = ranked[idx]
-                candidates = [(t, k) for t, k in candidates if self._key_evolution(k) == wanted]
+        # Lineage queries are answered over the *union* of every tier's
+        # candidates (a cache may hold an older evolution than its origin),
+        # ranking once and validating only the chosen key. A chosen key
+        # that is gone (external delete, lost race) is un-indexed on its
+        # tier -- repairing the persisted shard -- and the next best is
+        # tried; when an index turns out to be entirely stale the tier is
+        # re-scanned from its keys.
+        candidates = await self._gather_candidates(chain, base, attrs, evolution)
 
         if creation_timestamp is None:
-            if not candidates:
-                raise KeyError(f"Entry {eid} not found in pool {pool.global_id}")
-            if evolution is None:
-                # Prefer an exact (constant) key; otherwise the highest evolution.
-                for _tier, key in candidates:
-                    if key == base:
-                        return key, None
-            _tier, key = max(candidates, key=lambda tk: self._key_evolution(tk[1]))
-            return key, None
+            rescanned = False
+            while True:
+                picked = self._pick_candidate(candidates, base, evolution)
+                if picked is None:
+                    # Nothing (valid) left from the indexes: scan the keys once.
+                    if not rescanned:
+                        rescanned = True
+                        candidates = await self._gather_candidates(
+                            chain, base, attrs, evolution, use_index=False
+                        )
+                        if candidates:
+                            continue
+                    raise KeyError(f"Entry {eid} not found in pool {pool.global_id}")
+                tier, key, indexed = picked
+                if await tier._exists_async(key):
+                    return key, None
+                candidates.remove(picked)
+                if indexed:
+                    await asyncio.to_thread(tier.index.remove, key)
 
         # Time-based search: inspect each candidate record's creation_timestamp.
+        if evolution is not None and evolution < 0:
+            # The stamp must agree with the k-th evolution from the end.
+            ranked = sorted({self._key_evolution(c[1]) for c in candidates})
+            idx = len(ranked) + evolution
+            wanted = ranked[idx] if idx >= 0 else None
+            candidates = [c for c in candidates if self._key_evolution(c[1]) == wanted]
         matches: list[tuple[int, str, Any]] = []
-        for tier, key in candidates:
+        for tier, key, _indexed in candidates:
             raw = await tier._read_async(key)
             if raw is None:
                 continue
@@ -866,12 +912,85 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         _evo, key, raw = max(matches, key=lambda m: m[0])
         return key, raw
 
+    async def _gather_candidates(
+        self,
+        chain: list[_LAILA_IDENTIFIABLE_POOL],
+        base: str,
+        attrs: dict[str, str],
+        evolution: int | None,
+        use_index: bool = True,
+    ) -> list[tuple[_LAILA_IDENTIFIABLE_POOL, str, bool]]:
+        """Collect ``(tier, key, from_index)`` candidates for *base* across *chain*.
+
+        Each tier contributes its indexed keys (``_search_keys``; one
+        shard read) or, when it has no index answer or *use_index* is
+        ``False``, the keys from a prefix scan (``_candidate_keys``). A
+        key found on several tiers is attributed to the nearest one.
+        """
+        seen: set[str] = set()
+        out: list[tuple[_LAILA_IDENTIFIABLE_POOL, str, bool]] = []
+        for tier in chain:
+            keys = None
+            if use_index:
+                keys = await asyncio.to_thread(tier._search_keys, base, attrs)
+            from_index = keys is not None
+            if keys is None:
+                keys = await asyncio.to_thread(tier._candidate_keys, base)
+            for key in keys:
+                if key in seen:
+                    continue
+                if key != base and not key.startswith(f"{base}@"):
+                    continue
+                if (
+                    evolution is not None
+                    and evolution >= 0
+                    and self._key_evolution(key) != evolution
+                ):
+                    continue
+                seen.add(key)
+                out.append((tier, key, from_index))
+        return out
+
+    def _pick_candidate(
+        self,
+        candidates: list[tuple[_LAILA_IDENTIFIABLE_POOL, str, bool]],
+        base: str,
+        evolution: int | None,
+    ) -> tuple[_LAILA_IDENTIFIABLE_POOL, str, bool] | None:
+        """Choose the candidate a lineage query refers to, or ``None``.
+
+        - ``evolution is None``: the constant key when present, else the
+          highest evolution across all tiers;
+        - ``evolution < 0``: the k-th from the end over the sorted,
+          de-duplicated evolutions (constants rank lowest);
+        - ``evolution >= 0``: the (already filtered) exact match.
+        """
+        if not candidates:
+            return None
+        if evolution is None:
+            for cand in candidates:
+                if cand[1] == base:
+                    return cand
+            return max(candidates, key=lambda c: self._key_evolution(c[1]))
+        if evolution < 0:
+            ranked = sorted({self._key_evolution(c[1]) for c in candidates})
+            idx = len(ranked) + evolution
+            if idx < 0:
+                return None
+            wanted = ranked[idx]
+            for cand in candidates:
+                if self._key_evolution(cand[1]) == wanted:
+                    return cand
+            return None
+        return candidates[0]
+
     def _fetch(
         self,
         entry_ids: list[str],
         *,
         pool: dict[str, _LAILA_IDENTIFIABLE_POOL] | None = None,
         borrow: bool = False,
+        resolve: bool = True,
     ):
         """Dispatch fetching to batch or non-batch path based on pool capability."""
         if borrow:
@@ -879,13 +998,14 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         if pool.batch_accelerated:
             return self._batch_accelerated_fetch(entry_ids, pool=pool)
         else:
-            return self._parallel_individual_fetch(entry_ids, pool=pool)
+            return self._parallel_individual_fetch(entry_ids, pool=pool, resolve=resolve)
 
     def _parallel_individual_fetch(
         self,
         entry_ids: list[str],
         *,
         pool: dict[str, _LAILA_IDENTIFIABLE_POOL] | None = None,
+        resolve: bool = True,
     ):
         r"""Fetch and deserialize each entry via a single per-entry coroutine.
 
@@ -901,10 +1021,9 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         :class:`GroupFuture` (many). Replaces the previous two-stage
         :class:`ComplexFuture` pipeline.
         """
-        from ..... import active_policy
         from ...command.schema.parking import _RESOLVE_CHAIN, check_resolve_cycle
 
-        cmd = active_policy.central.command
+        cmd = self._command()
         internal_id = cmd.internal_taskforce
         check_resolve_cycle(*entry_ids)
 
@@ -920,12 +1039,51 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
                 if raw is None:
                     raise KeyError(f"Entry {eid} not found in pool {p.global_id}")
                 record = await Record._build_async(raw)
-                return record["entry"]
+                entry = self._stamp_source_pool(
+                    self._check_record_identity(key, record["entry"]), p
+                )
+                return await self._resolve_on_arrival(entry, p, resolve)
             finally:
                 _RESOLVE_CHAIN.reset(token)
 
         factories = [functools.partial(_remember_one, eid=entry_id) for entry_id in entry_ids]
         return cmd.submit(tasks=factories, taskforce_id=internal_id)
+
+    # ------------------------------------------------------------------
+    # Recursive blueprint resolution hook
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    async def _resolve_on_arrival(entry: Entry, pool: _LAILA_IDENTIFIABLE_POOL, resolve: bool):
+        """Resolve a freshly hydrated :class:`ComplexManifest` against *pool*.
+
+        Only complex manifests (scope ``MANIFEST:COMPLEX``) are touched:
+        their manifest-scoped leaves are fetched from the same pool and
+        cast into typed members, recursively. Any other entry -- a plain
+        manifest included -- is returned as is, with no scan.
+        """
+        if not resolve:
+            return entry
+        from .manifest import ComplexManifest
+
+        if isinstance(entry, ComplexManifest):
+            await entry.async_resolve(pool=pool, persist=False)
+        return entry
+
+    @staticmethod
+    def _with_resolved_members(entries: list) -> list:
+        """*entries* plus the manifests their complex manifests resolved to (for cache-back)."""
+        from .manifest import ComplexManifest
+
+        out = list(entries)
+        seen = {e.global_id for e in out}
+        for entry in entries:
+            if isinstance(entry, ComplexManifest):
+                for member in entry._manifest_members(recursive=True):
+                    if member.global_id not in seen:
+                        seen.add(member.global_id)
+                        out.append(member)
+        return out
 
     def _batch_accelerated_fetch(
         self,
@@ -940,6 +1098,44 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
     # Direct-await resolver (internal, self-consumed reads)
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Record identity validation
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _stamp_source_pool(entry: Entry, pool: _LAILA_IDENTIFIABLE_POOL) -> Entry:
+        """Remember which pool *entry* came from (see ``Entry._source_pool_gid``)."""
+        try:
+            entry._source_pool_gid = pool.global_id
+        except Exception:
+            pass
+        return entry
+
+    @staticmethod
+    def _check_record_identity(key: str, entry: Entry) -> Entry:
+        """Require the rebuilt *entry* to be the one *key* names.
+
+        The stored record carries its own identity fields; a record
+        edited, corrupted or copied under the wrong key must fail
+        loudly instead of being returned silently. Compares the
+        ``<scopes>:<uuid>`` head, and the evolution when the key carries
+        one (constant keys have none).
+        """
+        try:
+            key_head, key_attrs = split_global_id_attributes(str(key))
+        except ValueError:
+            return entry
+        head = _LAILA_IDENTIFIABLE_OBJECT.to_global_id(
+            uuid=entry._uuid, scopes=entry._scopes, evolution=None
+        )
+        mismatch = head != key_head
+        key_evolution = key_attrs.get(EVOLUTION_ATTRIBUTE)
+        if not mismatch and key_evolution is not None and not key_evolution.startswith("-"):
+            mismatch = str(entry._evolution) != key_evolution
+        if mismatch:
+            raise KeyError(f"record identity mismatch: key {key!r} holds entry {entry.global_id!r}")
+        return entry
+
     def _direct_read_concurrency(self) -> int:
         """Concurrency bound for :meth:`_read_entries_async`.
 
@@ -948,9 +1144,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         so switching to the direct resolver does not change the pressure
         put on a pool backend.
         """
-        from ..... import active_policy
-
-        cmd = active_policy.central.command
+        cmd = self._command()
         tf = cmd.taskforces.get(cmd.internal_taskforce)
         workers = getattr(tf, "num_workers", 1) or 1
         per_thread = getattr(tf, "max_async_per_thread", 64) or 64
@@ -965,6 +1159,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         pool_nickname: str | None = None,
         persist: bool = True,
         max_concurrency: int | None = None,
+        resolve: bool = True,
     ) -> list:
         r"""Fetch *entry_ids* by ``await``\ ing the pool directly -- no per-entry futures.
 
@@ -1006,10 +1201,9 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             raise NotImplementedError
 
         try:
-            from ..... import active_policy
             from .....logger import get_logger
 
-            get_logger().record_remember(entry_ids=entry_ids, pool=routed, policy=active_policy)
+            get_logger().record_remember(entry_ids=entry_ids, pool=routed, policy=self._policy())
         except Exception:
             pass
 
@@ -1027,7 +1221,10 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
                     if raw is None:
                         raise KeyError(f"Entry {eid} not found in pool {routed.global_id}")
                     record = await Record._build_async(raw)
-                    return record["entry"]
+                    entry = self._stamp_source_pool(
+                        self._check_record_identity(key, record["entry"]), routed
+                    )
+                    return await self._resolve_on_arrival(entry, routed, resolve)
                 finally:
                     _RESOLVE_CHAIN.reset(token)
 
@@ -1036,7 +1233,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         if persist and routed.global_id != self.alpha_pool:
             from .....entry.entry_state import EntryState
 
-            ready = [e for e in entries if e.state == EntryState.READY]
+            ready = [e for e in self._with_resolved_members(entries) if e.state == EntryState.READY]
             if ready:
                 ref = self.memorize(entries=ready, pool_id=self.alpha_pool)
                 if ref is not None:
@@ -1063,9 +1260,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         entry). The caller owns the future: ``wait()`` / ``await`` it,
         read ``.data`` and ``release()`` it.
         """
-        from ..... import active_policy
-
-        cmd = active_policy.central.command
+        cmd = self._command()
         coro_factory = functools.partial(
             self._read_entries_async,
             list(entry_ids),
@@ -1118,6 +1313,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         pool: str | None = None,
         pool_id: str | None = None,
         pool_nickname: str | None = None,
+        persist: bool = False,
     ) -> list:
         """Fetch entries locally and return them wire-serialized.
 
@@ -1126,6 +1322,10 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         the entries from the local pool, then returns each as the JSON-safe
         ``Entry.serialize(transformation_base64)`` form so the caller can
         rebuild real :class:`Entry` objects on its side.
+
+        ``persist`` is the caller's ``laila.remember(..., persist=)`` flag:
+        with ``True`` the entries are also cached back into *this* (the
+        peer's) alpha pool, exactly as a local ``remember`` would.
         """
         from .....entry import transformation_base64
 
@@ -1134,7 +1334,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
             pool=pool,
             pool_id=pool_id,
             pool_nickname=pool_nickname,
-            persist=False,
+            persist=bool(persist),
         )
         result = future.wait(timeout=60) if hasattr(future, "wait") else future
         entries = result if isinstance(result, list) else [result]
@@ -1191,7 +1391,10 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         import laila
 
         ids = [x.global_id if hasattr(x, "global_id") else str(x) for x in entry_ids]
-        fetched = laila.remember(ids, dst_pool=src_pool, persist=False)
+        # Local leg on *this* memory (owner-bound: no reliance on which
+        # policy happens to be active); remote leg through the shim so the
+        # peer link / ``comm`` resolution stays in one place.
+        fetched = self.remember(ids, pool=src_pool, persist=False)
         result = fetched.wait(timeout=60) if hasattr(fetched, "wait") else fetched
         entries = result if isinstance(result, list) else [result]
 
@@ -1227,7 +1430,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         result = fetched.wait(timeout=60) if hasattr(fetched, "wait") else fetched
         entries = result if isinstance(result, list) else [result]
 
-        stored = laila.memorize(entries, dst_pool=src_pool) if persist else None
+        stored = self.memorize(entries, pool=src_pool) if persist else None
         if stored is not None and hasattr(stored, "wait"):
             stored.wait(timeout=60)
         return [e.global_id for e in entries]
@@ -1265,13 +1468,12 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         )
 
         try:
-            from ..... import active_policy
             from .....logger import get_logger
 
             get_logger().record_forget(
                 entry_ids=entry_ids,
                 pool=pool,
-                policy=active_policy,
+                policy=self._policy(),
             )
         except Exception:
             pass
@@ -1303,9 +1505,7 @@ class _LAILA_IDENTIFIABLE_CENTRAL_MEMORY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTI
         pool: _LAILA_IDENTIFIABLE_POOL,
     ):
         """Delete each entry via a single per-entry async coroutine."""
-        from ..... import active_policy
-
-        cmd = active_policy.central.command
+        cmd = self._command()
         internal_id = cmd.internal_taskforce
 
         async def _delete_one(eid=None, p=pool):

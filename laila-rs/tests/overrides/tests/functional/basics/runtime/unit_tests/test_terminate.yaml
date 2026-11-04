@@ -1,0 +1,13 @@
+# py2rs override for tests/functional/basics/runtime/unit_tests/test_terminate.py
+#
+# Two groups have no Rust twin:
+# - `object.__setattr__(obj, "close", fn)` monkeypatching of a bound method
+#   on an instance (a patch site: Rust methods are not instance attributes);
+# - `PythonProcessPoolTaskForce` (subprocess workers: a marker class whose
+#   constructor raises `NotImplementedError` in the Rust port) and `psutil`.
+skip_tests:
+  test_13_terminate_continues_when_pool_close_raises: object.__setattr__ patch of a bound method (patch site)
+  test_14_terminate_continues_when_command_shutdown_raises: object.__setattr__ patch of a bound method (patch site)
+  test_15_terminate_continues_when_communication_stop_raises: object.__setattr__ patch of a bound method (patch site)
+  test_19_terminate_processpool_workers_exit: PythonProcessPoolTaskForce (subprocess workers) + psutil
+  test_24_terminate_with_proxy_chain_closes_both_pools: object.__setattr__ patch of a bound method (patch site)

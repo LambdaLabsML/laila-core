@@ -1,0 +1,10 @@
+# py2rs override for tests/functional/utils/decorators/unit_tests/test_decorators.py
+# `TestSynchronized` monkeypatches the *class attribute*
+# `_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT.atomic` with a spy and rebinds a
+# method inside a class body (`work = synchronized(work)`); a Rust method is
+# not a patchable slot. The id-ordered locking, kwargs lookup, return-value
+# and exception semantics of `synchronized` are covered by
+# `laila/tests/atomic_tier1.rs` (`cargo test -p laila-core --test atomic_tier1`).
+skip_functions:
+  _LockableStub: only used by the skipped `TestSynchronized`
+  TestSynchronized: patches the Rust method `_LAILA_LOCALLY_ATOMIC_IDENTIFIABLE_OBJECT.atomic` (covered in laila-core atomic_tier1)

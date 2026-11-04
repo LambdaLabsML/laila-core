@@ -126,7 +126,10 @@ bash emulator/run_qemu_test.sh   # QEMU_NET_TEST (C client) + QEMU_PY_INTEROP (P
 The C-only `interop` unit suite (in the main test binary) covers
 `memorize`/`remember`/`forget` in-process and over a real TCP stream socket,
 bi- and tri-directionally; the `tests/interop/` harness adds the cross-language
-(Python) legs.
+(Python) legs. The repository-level matrix in `../tests/interop/` drives the
+same `c_harness` (host or QEMU device) alongside Python and laila-js in every
+client/server/carrier combination, including three-language relays; see
+`../tests/interop/README.md` for the shared harness contract.
 
 ## Peers and `laila.request`
 
@@ -159,19 +162,47 @@ auto entry = laila->remember(gid, o)->data();
 ### Serving peers (so another node can pull from THIS policy)
 
 A policy can act as an inbound RPC server. `add_connection` opens a listener when
-the platform can serve the link type; pump it with `poll()` from your run loop
-(cooperative/single-core) or a background thread:
+the platform can serve the link type and starts accepting peers in the
+background; the listener is live when the call returns (exactly like laila's
+`add_connection` -> `protocol.start()`):
 
 ```cpp
-laila->add_connection(std::make_shared<TCPIPProtocol>("0.0.0.0", 8770, "s3cr3t"));
-uint16_t port = laila->listen_port();   // resolves an OS-assigned port if you bound :0
-for (;;) { laila->poll(50); /* ... */ } // answers peers' central.memory.{remember,...}
+auto proto = std::make_shared<TCPIPProtocol>("0.0.0.0", 0, "s3cr3t");
+laila->add_connection(proto);
+uint16_t port = proto->bound_port();   // resolves an OS-assigned port if you bound :0
+// ... peers' central.memory.{remember,memorize,forget} are answered until
+laila->remove_connection(proto);       // (or the policy is destroyed)
 ```
 
 The inbound dispatcher only ever serves THIS policy's own `central.memory`
 (golden-rule compliant). The POSIX and ESP32 (lwIP) backends implement both the
 outbound socket transport and the inbound listener; `examples/esp32_peer_request/`
 shows the ESP32 side. Every call returns a `Future` (a `RemoteFuture`).
+
+#### Concurrency model of the inbound server
+
+- One accept thread per listener. Each accepted connection is served on its
+  own session thread (`ws://` upgrade or `tcp://` length-prefixed stream, both
+  persistent: `peer.connect`, then `rpc.call` frames until the peer closes). A
+  slow or idle peer therefore no longer blocks other peers' handshakes.
+- `ConnectionConfig::max_inbound_sessions` caps live sessions per listener
+  (default 8 on hosts, 2 on ESP32). At the cap the listener stops calling
+  `accept`, so further connections wait in the kernel backlog instead of being
+  accepted and then starved.
+- Socket I/O runs concurrently, but RPC *execution* is serialized: every
+  session funnels its frames through `CentralCommunication::dispatch_inbound`,
+  which holds a per-policy dispatch mutex around `dispatch_rpc`. Policy and
+  pool state is never mutated from two threads at once.
+- `remove_connection` / policy destruction set the per-listener stop flag,
+  close the listener, and join the accept thread, which in turn joins its
+  session threads (sessions poll the flag every 200 ms).
+- WebSocket sessions complete the RFC 6455 closing handshake: on a peer Close
+  the server echoes Close once and closes TCP immediately (Python
+  `websockets` waits for that EOF; it used to hit its 5 s close timeout).
+- Outbound links (`RemotePolicyProxy`) demultiplex replies by JSON-RPC `id`
+  and answer inbound `__comm_ping__` frames that arrive on the same link while
+  a call is in flight, so a server-side liveness ping is never mistaken for
+  the reply.
 
 ## Translation: Python → laila-C → targeted C (requires a Claude API token)
 

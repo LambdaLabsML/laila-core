@@ -1,0 +1,6 @@
+# py2rs override for tests/functional/pools/mempool/unit_tests/test_memory_pool.py
+# The port's `keys(as_generator=True)` is a generator over a snapshot: it has
+# no live-dict `RuntimeError` and no `next()` / `close()` protocol.
+skip_tests:
+  test_keys_generator_holds_lock_during_iteration_same_thread_mutation_raises: Python generator over a live dict (the port's generator is a snapshot)
+  test_keys_generator_partial_consumption_then_close: `next(it)` / `it.close()` on a generator object (snapshot generator)

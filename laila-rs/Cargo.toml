@@ -1,0 +1,69 @@
+[workspace]
+resolver = "2"
+members = ["laila", "laila-macros", "tests", "tests/interop/rs_harness"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/laila-ai/laila"
+rust-version = "1.85"
+
+[workspace.dependencies]
+laila = { path = "laila", package = "laila-core" }
+laila-macros = { path = "laila-macros" }
+indexmap = { version = "2", default-features = false }
+parking_lot = "0.12"
+spin = { version = "0.9", default-features = false, features = ["mutex", "spin_mutex", "rwlock", "lazy"] }
+libm = "0.2"
+num-bigint = { version = "0.4", default-features = false }
+num-traits = { version = "0.2", default-features = false }
+half = { version = "2", default-features = false }
+aes = { version = "0.8", default-features = false }
+cbc = { version = "0.1", default-features = false, features = ["alloc", "block-padding"] }
+hmac = { version = "0.12", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+# Byte-identical `zlib.compress`: real zlib (bundled, static) on host.
+flate2 = { version = "1", default-features = false, features = ["zlib"] }
+libz-sys = { version = "1", default-features = false, features = ["static"] }
+getrandom = "0.3"
+sha1 = { version = "0.10", default-features = false }
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "visit-mut", "extra-traits"] }
+# Storage backends (host only): dynamic links against the system libraries
+# (`libsqlite3-dev`, `libhdf5-dev`, `libduckdb.so`); no bundled copies.
+rusqlite = { version = "0.40", default-features = false }
+# `duckdb` 1.10505.0 wraps the DuckDB 1.5.5 C API -- the same engine version
+# as the Python `duckdb` wheel -- and needs `DUCKDB_LIB_DIR` /
+# `DUCKDB_INCLUDE_DIR` (see `.cargo/config.toml`).
+duckdb = { version = "=1.10505.0", default-features = false }
+# `hdf5-metno` (the maintained `hdf5` crate) finds the system HDF5 through
+# `pkg-config` (`hdf5-serial` on Debian / Ubuntu).
+hdf5 = { package = "hdf5-metno", version = "0.15", default-features = false }
+# Cloud / database backends (host only). Pure-Rust clients, one per Python
+# driver: `redis-py` -> `redis`, `psycopg` -> `postgres`, `pymongo` ->
+# `mongodb`; the HTTP object stores (`boto3`, `google-cloud-storage`,
+# `azure-storage-blob`, `huggingface_hub`) talk REST through `ureq`
+# (rustls), signing requests in-tree (SigV4, SharedKey, RS256 JWT).
+redis = "0.32"
+postgres = "0.19"
+mongodb = { version = "3", features = ["sync"] }
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rsa = { version = "0.9", features = ["sha2"] }
+libc = "0.2"
+
+# The macro-expanded test targets are large (~130 binaries); full DWARF is
+# ~95% of each one (500 MB -> 30 MB without it). Line tables keep
+# `RUST_BACKTRACE` file:line locations; `--config profile.test.debug=2`
+# restores full debuginfo for a debugger session.
+[profile.dev]
+opt-level = 0
+debug = "line-tables-only"
+
+[profile.test]
+opt-level = 1
+debug = "line-tables-only"

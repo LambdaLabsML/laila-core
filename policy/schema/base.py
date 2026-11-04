@@ -16,6 +16,7 @@ against.
 
 from __future__ import annotations
 
+import weakref
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
@@ -120,6 +121,17 @@ class _LAILA_IDENTIFIABLE_POLICY(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENTIFIABLE_O
             )
 
         self.central.communication._local_policy = self
+        # Owner back-reference so memory operations run on *this*
+        # policy's command even when another policy is active.
+        self.central.memory._policy_ref = weakref.ref(self)
+        # Weak, construction-time registration so futures stamped with
+        # this gid land in *this* bank even before the policy is activated.
+        try:
+            from ... import _live_policies
+
+            _live_policies[str(self.global_id)] = self
+        except Exception:
+            pass
 
     def extend(self, new_pool: _LAILA_IDENTIFIABLE_POOL) -> None:
         """Register a new pool with this policy's central memory.

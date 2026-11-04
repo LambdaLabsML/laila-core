@@ -1,0 +1,7 @@
+# DuckDB C library location for the `duckdb` pool backend (`libduckdb-sys`
+# without `bundled` reads these; the CI workflow exports the same values).
+# Unpack `libduckdb-linux-amd64.zip` of the DuckDB 1.5.5 release there
+# (`libduckdb.so` + `duckdb.h`), or point these at the library's location.
+[env]
+DUCKDB_LIB_DIR = { value = "/usr/local/lib", relative = false }
+DUCKDB_INCLUDE_DIR = { value = "/usr/local/include", relative = false }

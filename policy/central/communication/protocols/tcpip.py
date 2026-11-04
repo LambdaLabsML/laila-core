@@ -191,7 +191,7 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
             await cancel_pending_tasks()
 
         stop_loop_thread(self, _shutdown)
-        self._pending_rpcs.clear()
+        self._fail_pending("transport stopped")
         self._bound_port = None
         self._started = False
         policy_id = self._communication.policy_id if self._communication else None
@@ -242,11 +242,23 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
         """Drop a peer's WebSocket and notify the communication layer.
 
         Called when the connection closes (either side). Idempotent:
-        if the peer is not in the table, this is a no-op.
+        if the peer is not in the table, this is a no-op. Every RPC still
+        in flight to that peer fails with :class:`ConnectionError` right
+        away instead of sitting out :attr:`rpc_timeout`.
         """
         self._connections.pop(peer_id, None)
+        self._fail_pending(f"peer {peer_id} disconnected", peer_id=peer_id)
         if self._communication is not None:
             self._communication._unregister_peer(peer_id)
+
+    def _fail_pending(self, reason: str, *, peer_id: str | None = None) -> None:
+        """Fail outstanding outbound RPCs (all, or those to *peer_id*) with ``ConnectionError``."""
+        for request_id, slot in list(self._pending_rpcs.items()):
+            if peer_id is not None and slot.get("peer_id") != peer_id:
+                continue
+            slot.setdefault("exception", ConnectionError(reason))
+            slot["event"].set()
+            self._pending_rpcs.pop(request_id, None)
 
     def has_peer(self, peer_id: str) -> bool:
         """Return ``True`` if a live WebSocket to *peer_id* is currently held."""
@@ -330,10 +342,6 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
             raise ConnectionError("TCP/IP transport is shut down.")
 
         request_id = str(_uuid.uuid4())
-        event = threading.Event()
-        slot: dict[str, Any] = {"event": event}
-        self._pending_rpcs[request_id] = slot
-
         req = rpc_protocol.make_request(
             "rpc.call",
             {
@@ -343,9 +351,31 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
             },
             request_id=request_id,
         )
+        from .. import connection
+
+        frame = rpc_protocol.encode(req)
+        if len(frame) > connection.MAX_FRAME_BYTES:
+            # The peer would close the socket (1009) on receipt; refuse
+            # up front so the link survives and the caller learns why.
+            raise ConnectionError(
+                f"RPC frame of {len(frame)} bytes exceeds the {connection.MAX_FRAME_BYTES} "
+                f"byte WebSocket frame limit for peer {peer_id}."
+            )
+
+        event = threading.Event()
+        slot: dict[str, Any] = {"event": event, "peer_id": peer_id}
+        self._pending_rpcs[request_id] = slot
+
+        def _sent(f: Any) -> None:
+            exc = f.exception() if not f.cancelled() else None
+            if exc is not None:
+                slot.setdefault(
+                    "exception", ConnectionError(f"send to peer {peer_id} failed: {exc!r}")
+                )
+                event.set()
 
         try:
-            asyncio.run_coroutine_threadsafe(ws.send(rpc_protocol.encode(req)), loop)
+            asyncio.run_coroutine_threadsafe(ws.send(frame), loop).add_done_callback(_sent)
         except RuntimeError as exc:
             self._pending_rpcs.pop(request_id, None)
             raise ConnectionError("TCP/IP transport is shut down.") from exc
@@ -354,6 +384,10 @@ class _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)
         self._pending_rpcs.pop(request_id, None)
         if not completed:
             raise TimeoutError(f"RPC to peer {peer_id} timed out after {timeout}s.")
+
+        exc = slot.get("exception")
+        if exc is not None:
+            raise exc
 
         if "error" in slot:
             err = slot["error"]

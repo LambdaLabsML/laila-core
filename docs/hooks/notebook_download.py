@@ -20,12 +20,16 @@ _NOTEBOOK_ROOTS: dict[str, list[Path]] = {
     ],
     "examples/": [
         Path("examples/image_dataset"),
+        Path("examples/torch_wrappers"),
     ],
 }
 
+# ``{up}`` climbs from the page's directory URL back to the section root,
+# where ``notebooks/`` lives: one ``../`` per path component under the section
+# (``tutorials/02_x.md`` -> ``../``, ``examples/torch_wrappers/03_x.md`` -> ``../../``).
 _BUTTON_TEMPLATE = (
     '<a class="md-button md-button--primary notebook-download" '
-    'href="../notebooks/{filename}" download>{filename}</a>\n\n'
+    'href="{up}notebooks/{filename}" download>{filename}</a>\n\n'
 )
 
 
@@ -53,11 +57,13 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
     if nb_name is None:
         return markdown
 
+    up = "../" * (len(Path(src).parts) - 1)
+    button_html = _BUTTON_TEMPLATE.format(up=up, filename=nb_name)
+
     heading_re = re.compile(r"^(# .+)$", re.MULTILINE)
     match = heading_re.search(markdown)
     if match:
         insert_pos = match.end()
-        button_html = "\n\n" + _BUTTON_TEMPLATE.format(filename=nb_name)
-        return markdown[:insert_pos] + button_html + markdown[insert_pos:]
+        return markdown[:insert_pos] + "\n\n" + button_html + markdown[insert_pos:]
 
-    return _BUTTON_TEMPLATE.format(filename=nb_name) + markdown
+    return button_html + markdown

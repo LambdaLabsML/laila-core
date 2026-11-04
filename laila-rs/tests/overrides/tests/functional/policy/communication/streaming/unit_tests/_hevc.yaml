@@ -1,0 +1,6 @@
+# py2rs override for tests/functional/policy/communication/streaming/unit_tests/_hevc.py
+# The synthetic H.265 Annex B generator / reference parser has a
+# hand-written Rust twin: a `mod` and a module value of the same name
+# (`import _hevc as H` -> `use laila_tests::hevc as H;`) [P18c].
+skip: hand-written twin `laila_tests::hevc`
+twin: laila_tests::hevc

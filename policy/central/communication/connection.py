@@ -45,6 +45,15 @@ log = logging.getLogger(__name__)
 #: Reserved dotted path of the liveness ping (same as the carriers').
 _COMM_PING_PATH = ["__comm_ping__"]
 
+#: Largest WebSocket frame accepted or sent on a peer link -- the same
+#: 64 MiB the stream carriers use (``max_stream_frame_bytes``). The
+#: ``websockets`` default is 1 MiB, which a single base64-serialized
+#: entry can exceed; a peer that receives a bigger frame closes the
+#: socket with 1009, so the limit is enforced symmetrically here and
+#: in :meth:`_LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL._send` (which
+#: refuses to send an oversize frame instead of killing the link).
+MAX_FRAME_BYTES = 64 * 1024 * 1024
+
 
 async def start_server(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL) -> None:
     """Start the WebSocket listener and store the server handle on *proto*.
@@ -58,6 +67,7 @@ async def start_server(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL) -> None:
         lambda ws: _handle_inbound(proto, ws),
         proto.host,
         proto.port,
+        max_size=MAX_FRAME_BYTES,
     )
     bound_port = server.sockets[0].getsockname()[1]
     proto._bound_port = bound_port
@@ -149,7 +159,7 @@ async def connect_outbound(
     ConnectionError
         If the handshake is rejected or times out.
     """
-    ws = await connect(uri)
+    ws = await connect(uri, max_size=MAX_FRAME_BYTES)
 
     policy_id = proto._communication.policy_id if proto._communication else None
     req = protocol.make_request(
@@ -212,7 +222,10 @@ async def _receive_loop(
                 if msg.get("method") == "peer.disconnect":
                     # graceful goodbye from the peer: end this connection
                     break
-                await _handle_rpc_request(proto, ws, msg)
+                # Handle off the receive loop so a blocking policy method
+                # (a remember that waits on a pool) neither stalls the
+                # socket nor serialises every call from this peer.
+                asyncio.ensure_future(_handle_rpc_request(proto, ws, msg))
             elif protocol.is_response(msg):
                 _handle_rpc_response(proto, msg)
             else:
@@ -260,7 +273,9 @@ async def _handle_rpc_request(
         return
 
     try:
-        result = proto._communication._execute_rpc(path, args, kwargs)
+        # The policy method may block (pool reads, future waits): run it
+        # on a worker thread, never on the socket's event loop.
+        result = await asyncio.to_thread(proto._communication._execute_rpc, path, args, kwargs)
         resp = protocol.make_result(request_id, result)
     except Exception as exc:
         resp = protocol.make_error(
@@ -269,7 +284,10 @@ async def _handle_rpc_request(
             f"{type(exc).__name__}: {exc}",
         )
 
-    await ws.send(protocol.encode(resp))
+    try:
+        await ws.send(protocol.encode(resp))
+    except websockets.ConnectionClosed:
+        log.debug("peer went away before the reply to %s could be sent", request_id)
 
 
 def _handle_rpc_response(proto: _LAILA_IDENTIFIABLE_TCPIP_COMM_PROTOCOL, msg: dict) -> None:

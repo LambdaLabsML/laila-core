@@ -365,6 +365,31 @@ test('ndarray', async () => {
   assert.ok(T.eq(NDArray.array([1, 2, 3], "<i4"), NDArray.array([1, 2, 3], "<i4")));
 });
 
+test('asyncio StreamReader.readexactly beyond the flow-control high-water mark', async () => {
+  // Regression: a frame larger than 2 * limit paused the transport and nothing
+  // resumed it until the whole frame was buffered -> deadlock on every tcp://
+  // RPC frame over ~128-192 KiB. Mirrors CPython: _wait_for_data resumes.
+  const { StreamReader } = await import(C + "asyncio.js");
+  const r = new StreamReader();
+  let paused = 0, resumed = 0, flowing = true;
+  r._transport = { pause_reading() { paused++; flowing = false; }, resume_reading() { resumed++; flowing = true; } };
+  const N = 3 * 65536 + 1;
+  const want = Buffer.alloc(N); for (let i = 0; i < N; i++) want[i] = i % 251;
+  const done = r.readexactly(N);
+  // A real socket only delivers while the stream is flowing; keep feeding in
+  // 64 KiB chunks whenever the reader has resumed us.
+  let fed = 0;
+  while (fed < N) {
+    if (!flowing) { await new Promise((res) => setImmediate(res)); continue; }
+    const chunk = want.subarray(fed, Math.min(N, fed + 65536)); fed += chunk.length;
+    r.feed_data(chunk);
+    await new Promise((res) => setImmediate(res));
+  }
+  const got = await done;
+  assert.equal(got.length, N); assert.ok(got.equals(want));
+  assert.ok(paused >= 1, "transport should have been paused"); assert.ok(resumed >= 1, "reader must resume a paused transport while waiting");
+});
+
 test('subprocess', async () => {
   const cp = SP.run(["echo", "hi"], { capture_output: true, text: true });
   assert.equal(cp.returncode, 0); assert.equal(cp.stdout, "hi\n");

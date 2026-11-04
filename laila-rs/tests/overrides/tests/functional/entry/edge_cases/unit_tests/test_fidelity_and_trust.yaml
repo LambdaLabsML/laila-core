@@ -1,0 +1,6 @@
+# py2rs override for tests/functional/entry/edge_cases/unit_tests/test_fidelity_and_trust.py
+# Constitution source written inline in the test bodies: Rust runs the
+# native twin registered under the exact literal text [P31b].
+builder_tokens:
+  "def build(m):\n    return m.realized['a'].data * 2\n": laila_tests::builders::realized_a_times_two
+  "def build(m):\n    return sum(v.data for v in m.realized.values())\n": laila_tests::builders::sum_realized_data

@@ -4,10 +4,19 @@ Dicts are serialized with msgpack rather than pickle so the on-disk
 representation is language-neutral (other msgpack readers can decode
 laila-pooled dicts) and substantially smaller for the common
 shallow-string-keyed cases.
+
+msgpack packs in strict mode: a dict holding values it cannot express
+faithfully (tuples, tuple keys, ``OrderedDict`` / other ``dict`` or
+scalar subclasses, arbitrary objects) raises at pack time and
+:meth:`ComputationalData.serialize` falls back to pickle, so the exact
+Python types come back on ``remember``. Such payloads give up msgpack's
+language-neutrality; plain dicts keep it.
 """
 
 import copy
-from typing import Any, ClassVar
+from typing import ClassVar
+
+from pydantic import InstanceOf
 
 from ..transformation.serialization import MsgpackSerializer
 from .compdata import ComputationalData, register_cdtype
@@ -23,7 +32,10 @@ class CD_dict(ComputationalData):
     mask bugs).
     """
 
-    data: dict[Any, Any]
+    # ``InstanceOf`` keeps the caller's object (and its exact type:
+    # ``OrderedDict``, ``defaultdict``, ...) instead of coercing to a plain
+    # ``dict`` copy, so what you memorize is what you remember.
+    data: InstanceOf[dict]
     _SERIALIZER_CLS: ClassVar[type] = MsgpackSerializer
 
     # --- Serializer getter/setter ---

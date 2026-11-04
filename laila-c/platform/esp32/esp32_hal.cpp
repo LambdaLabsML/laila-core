@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "esp_pthread.h"
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -30,6 +31,12 @@
 
 #ifndef LAILA_ESP32_FS_ROOT
 #define LAILA_ESP32_FS_ROOT "/spiffs"
+#endif
+// Stack for the inbound-serving threads (accept + per-session). 12 KiB covers
+// JSON-RPC parse/dispatch/serialize for the payload sizes the device handles;
+// with the default cap of 2 sessions that is 36 KiB of the ~170 KiB DRAM.
+#ifndef LAILA_ESP32_SERVE_STACK_BYTES
+#define LAILA_ESP32_SERVE_STACK_BYTES (12 * 1024)
 #endif
 
 namespace laila_c {
@@ -181,7 +188,24 @@ public:
     addr.sin_port = lwip_htons(cfg.port);
     if (::lwip_bind(fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) { ::lwip_close(fd); return nullptr; }
     if (::lwip_listen(fd, 4) != 0) { ::lwip_close(fd); return nullptr; }
+    configure_serving_threads();
     return new EspListener(fd);
+  }
+
+private:
+  // The core serves a listener from std::threads (one accept thread, one thread
+  // per admitted session) that parse JSON-RPC, dispatch against the policy and
+  // serialize entries. ESP-IDF creates std::threads with
+  // CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT (3 KiB), which overflows on the
+  // first request. The pthread config is per-thread and inherited by children,
+  // and the core spawns the accept thread right after listen() returns on this
+  // same thread, so raising it here sizes every serving thread.
+  static void configure_serving_threads() {
+    esp_pthread_cfg_t cfg = esp_pthread_get_default_config();
+    if (cfg.stack_size < LAILA_ESP32_SERVE_STACK_BYTES) cfg.stack_size = LAILA_ESP32_SERVE_STACK_BYTES;
+    cfg.inherit_cfg = true;
+    cfg.thread_name = "laila_serve";
+    esp_pthread_set_cfg(&cfg);
   }
 };
 

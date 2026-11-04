@@ -115,8 +115,10 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
            so ``self.global_id`` reflects any explicit ``uuid=``.
         2. Point :attr:`_default_callbacks` at the shared
            "set my status to X when callback X fires" table.
-        3. Resolve the active *local* policy (``_get_active_local_policy``
-           lazily activates a ``DefaultPolicy`` if needed).
+        3. Resolve the owning *local* policy: the one named by
+           ``self.policy_id`` when it is local, else the active local
+           policy (``_get_active_local_policy`` lazily activates a
+           ``DefaultPolicy`` if needed).
         4. Register ``self`` in every currently-open guarantee scope
            on this thread, then drop a reference into
            ``policy.future_bank`` so the future can be looked up by
@@ -127,9 +129,9 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
         """
         super().model_post_init(__context)
         self._setup_default_callbacks()
-        from ....... import _get_active_local_policy
+        from ....... import _owning_local_policy
 
-        policy = _get_active_local_policy()
+        policy = _owning_local_policy(self.policy_id)
         policy.central.command._register_future_with_active_guarantees(self)
         policy.future_bank[self.global_id] = self
         try:
@@ -402,15 +404,17 @@ class Future(_LAILA_IDENTIFIABLE_FUTURE):
         unaffected. Open guarantee scopes are left untouched; they are
         transient and drained on exit.
         """
-        from ....... import _local_policies
+        from ....... import _future_bank_policies, _live_policies, _local_policies
 
         gid = self.global_id
         pid = self.policy_id.global_id if hasattr(self.policy_id, "global_id") else self.policy_id
-        policy = _local_policies.get(pid) if isinstance(pid, str) else None
+        policy = None
+        if isinstance(pid, str):
+            policy = _local_policies.get(pid) or _live_policies.get(pid)
         if policy is not None and policy.future_bank.get(gid) is self:
             policy.future_bank.pop(gid, None)
             return
-        for policy in _local_policies.values():
+        for policy in _future_bank_policies():
             if policy.future_bank.get(gid) is self:
                 policy.future_bank.pop(gid, None)
                 return

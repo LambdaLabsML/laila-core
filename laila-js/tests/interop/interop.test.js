@@ -280,6 +280,19 @@ for (const transport of ["tcpip", "tcp"]) {
         ]);
       }));
 
+    test("256 KB payload crosses the wire in both directions", () =>
+      macrotask(() => {
+        // Regression: frames above ~2 * StreamReader.limit (128 KiB) deadlocked the
+        // raw-TCP reader (transport paused, never resumed) on the way in and out.
+        const big = _blob(256 * 1024);
+        const e = laila.constant(big, { nickname: "js-big" });
+        laila.memorize(e, { policy_id: remote_id, pool_nickname: "remote-store" }).wait(30);
+        const back = laila.remember(e.global_id, { policy_id: remote_id, pool_nickname: "remote-store", persist: false }).wait(30);
+        assert.ok(back.data instanceof Uint8Array);
+        assert.equal(back.data.length, big.length);
+        assert.equal(sha1(Buffer.from(back.data)), sha1(big));
+      }));
+
     test("forget(policy=py) deletes on the CPython side", () =>
       macrotask(() => {
         const e = laila.constant({ bye: 1 }, { nickname: "js-forget" });

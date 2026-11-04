@@ -1,0 +1,5 @@
+# py2rs override for tests/functional/policy/memory/manifest/unit_tests/test_manifest_direct_resolver.py
+# The inline constitution source of test_008 runs as its native twin,
+# registered under the same text [P31b].
+builder_tokens:
+  "def combine(manifest):\n    return sum(e.data for e in manifest.realized.values())\n": laila_tests::builders::sum_realized_data

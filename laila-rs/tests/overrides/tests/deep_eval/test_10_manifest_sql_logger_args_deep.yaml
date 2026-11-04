@@ -1,0 +1,7 @@
+# py2rs override for tests/deep_eval/test_10_manifest_sql_logger_args_deep.py
+skip_tests:
+  test_subclass_preserved_by_sql: a test-local `Manifest` subclass (a typed Rust struct cannot be subclassed from a test)
+  test_sub_manifest_and_add_return_base_manifest: a test-local `Manifest` subclass (a typed Rust struct cannot be subclassed from a test)
+  test_runtime_property_returns_submodule: `import laila.runtime as rt` / `laila.runtime is rt` compares module identity (no Rust twin)
+  test_import_runtime_is_warning_free: `warnings` / `importlib.import_module` guard a CPython import-time warning (no Rust twin)
+  test_reset_singleton: reads `Logger.__dict__` (the class namespace) to check the singleton slot (no Rust twin; `reset_singleton` is covered by `test_reset_singleton_stops_running_logger`)

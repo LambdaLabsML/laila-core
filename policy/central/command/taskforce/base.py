@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable, Iterable
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import ConfigDict, Field, PrivateAttr
 
@@ -103,6 +103,14 @@ class _LAILA_IDENTIFIABLE_TASK_FORCE(
     """
 
     _scopes: list[str] = PrivateAttr(default_factory=lambda: list([_TASK_FORCE_SCOPE]))
+
+    # Whether ``Command.submit`` should wrap plain sync callables into the
+    # coroutine shim (:func:`ensure_coroutine_function`) before handing
+    # them to this backend. Thread/async backends want the shim so a sync
+    # body is offloaded to the sync executor; backends that ship the
+    # callable to *another process* must receive the original, picklable
+    # object instead (the shim is a local closure and cannot be pickled).
+    _wraps_sync: ClassVar[bool] = True
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

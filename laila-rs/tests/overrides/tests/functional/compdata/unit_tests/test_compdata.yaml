@@ -1,0 +1,25 @@
+# py2rs override for tests/functional/compdata/unit_tests/test_compdata.py
+#
+# The numpy dtype x shape x mode matrix and the edge cases are generated
+# per case [P19c]; the torch half of the file is gated on `HAVE_TORCH`,
+# which is False in Rust (`import torch` has no twin) [P2e].
+#
+# The Rust `ndarray` stores the numeric dtypes (`b i u f c`, both byte
+# orders, C and Fortran layout); it has no structured / sub-array / record
+# / datetime64 / timedelta64 / void dtypes and no strided views, so the
+# edge cases built on them are skipped.
+skip_tests:
+  test_np_edge_noncontiguous_slice: "`arr[:, ::2]` -- strided view of a 2-d array (no view type in the Rust ndarray)"
+  test_np_edge_negative_strides_view: "`base[::-1]` -- negative-stride view"
+  test_np_edge_view_of_view: "`base[::2][::2]` -- strided view of a view"
+  test_np_edge_structured_dtype: "structured dtype `[('a', 'i4'), ('b', 'f8')]`"
+  test_np_edge_structured_aligned: "aligned structured dtype"
+  test_np_edge_subarray_dtype: "sub-array dtype `[('coord', 'f4', (3,))]`"
+  test_np_edge_record_array: "`np.rec.fromrecords` record array"
+  test_np_edge_datetime64: "`datetime64[D]` dtype"
+  test_np_edge_timedelta64: "`timedelta64[D]` dtype"
+  test_np_edge_void_bytes: "void dtype `[('v', 'V3')]`"
+  test_np_edge_chain_structured_dtype: "structured dtype through the Base64 -> Zlib chain"
+skip_functions:
+  _t007: "defined but never registered with `_case` in the Python file (not a test there either)"
+  _assert_torch_equal: "torch comparison helper, only attached under `if HAVE_TORCH:` (False in Rust)"

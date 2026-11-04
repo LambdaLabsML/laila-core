@@ -292,7 +292,7 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
 
         stop_loop_thread(self, _shutdown)
         self._shutdown_lanes()
-        self._pending_rpcs.clear()
+        self._fail_pending("transport stopped")
         self._shutdown_executor()
         self._started = False
 
@@ -491,7 +491,7 @@ class _StreamRPCProtocol(_CarrierRPCProtocol):
         """Send one ``rpc.call`` to *peer_id* and block for the response."""
         if peer_id not in self._connections:
             raise ConnectionError(f"No connection to peer {peer_id}")
-        request_id, slot = self._register_pending()
+        request_id, slot = self._register_pending(peer_id)
         req = self._make_rpc_request(path, args, kwargs, request_id)
         try:
             self._queue_rpc(peer_id, req)

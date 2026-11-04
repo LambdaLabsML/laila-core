@@ -1,0 +1,5 @@
+# py2rs override for tests/functional/policy/communication/streaming/unit_tests/test_stream_entry.py
+# `Channel` is built on a test-local carrier stand-in (`_DummyProto`) and
+# poked through its private surface (`_on_chunk`, `_tx_chunk_seq`, ..):
+# the Rust twin drives it through the dynamic object protocol.
+dyn_types: [Channel]

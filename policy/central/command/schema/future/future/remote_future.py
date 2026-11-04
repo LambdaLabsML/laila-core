@@ -105,6 +105,10 @@ class RemoteFuture(_LAILA_IDENTIFIABLE_FUTURE):
         super().model_post_init(__context)
         from ....... import _get_active_local_policy
 
+        # Always the *caller's* side: ``policy_id`` names the peer, and
+        # the handle shares the peer future's uuid, so registering by
+        # ``policy_id`` (as local futures do) would clobber the peer's
+        # own bank slot when both policies live in one process.
         policy = _get_active_local_policy()
         policy.central.command._register_future_with_active_guarantees(self)
         policy.future_bank[self.global_id] = self

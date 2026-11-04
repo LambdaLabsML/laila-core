@@ -1,0 +1,12 @@
+# Test homes created by tests/testmain (per-package HOME isolation)
+.laila_test_home/
+# Go build / coverage artefacts
+*.test
+*.out
+coverage.*
+# Workspace sum is machine-local
+go.work.sum
+# Scratch
+_dev/
+# Interop harness binary (built on demand: LAILA_INTEROP_BUILD_GO=1 / CI)
+tests/interop/go_harness/go_harness

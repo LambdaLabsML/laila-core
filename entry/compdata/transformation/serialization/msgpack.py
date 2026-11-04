@@ -4,6 +4,19 @@
 ``strict_map_key=False`` so that dict payloads keyed by ``int`` /
 ``float`` / ``bool`` -- which msgpack packs without complaint -- round-trip
 instead of raising ``ValueError`` on the way back.
+
+``forward`` packs with ``strict_types=True``: msgpack has no tuple type
+and no notion of ``dict``/``list``/``int``/``str`` *subclasses*
+(``OrderedDict``, ``IntEnum``, ``numpy.float64`` inside a dict, ...), and
+the non-strict packer silently coerces them (a nested tuple comes back as
+a list, a tuple key is lost, an ``OrderedDict`` becomes a plain dict). In
+strict mode the packer raises ``TypeError`` for such values instead, and
+:meth:`ComputationalData.serialize` falls back to the universal
+:class:`PickleSerializer`, so what you memorize is exactly what you
+remember. Payloads made of plain ``dict``/``list``/``str``/``bytes``/
+``int``/``float``/``bool``/``None`` are unaffected and stay
+language-neutral. Pass ``forward_kwargs={"strict_types": False}`` to opt
+back into coercion for a specific transformation instance.
 """
 
 import textwrap
@@ -40,8 +53,14 @@ class MsgpackSerializer(_data_transformation):
         -------
         bytes
             Msgpack-encoded bytes.
+
+        Raises
+        ------
+        TypeError
+            For values msgpack cannot express faithfully (tuples,
+            ``dict``/``list``/scalar subclasses, arbitrary objects).
         """
-        kwargs = {"use_bin_type": True, **self.forward_kwargs}
+        kwargs = {"use_bin_type": True, "strict_types": True, **self.forward_kwargs}
         return msgpack.packb(inp, **kwargs)
 
     def backward(self, inp: bytes) -> Any:

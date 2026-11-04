@@ -1,0 +1,5 @@
+# py2rs override for tests/functional/policy/communication/unit_tests/test_liveness.py
+# `_DeadProtocol(_LAILA_IDENTIFIABLE_COMM_PROTOCOL)` overrides the transport
+# verbs; its Rust twin is a base spec with hooks (`laila_tests::comm_fakes`).
+class_aliases:
+  _DeadProtocol: laila_tests::comm_fakes::_DeadProtocol

@@ -1,0 +1,3 @@
+# The UART carrier's Rust twin opens the pty itself: `import serial`
+# (pyserial) is satisfied natively, so `HAVE_SERIAL` is True.
+present_imports: [serial]

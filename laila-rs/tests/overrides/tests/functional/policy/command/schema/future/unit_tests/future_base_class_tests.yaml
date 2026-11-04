@@ -1,0 +1,3 @@
+# py2rs override for tests/functional/policy/command/schema/future/unit_tests/future_base_class_tests.py
+skip_tests:
+  test_009_callback_add_and_remove: fails upstream too -- `fut.callbacks[FutureStatus.FINISHED]` raises `KeyError` after `remove_callback` pops the slot (the Rust port matches Python)

@@ -125,7 +125,19 @@ pip install "laila-core[s3]"        # S3 / Cloudflare R2 / Backblaze B2
 pip install "laila-core[redis]"     # Redis
 pip install "laila-core[hdf5]"      # HDF5
 pip install "laila-core[torch]"     # PyTorch tensor support
+pip install "laila-core[torch-skills]"  # + laila.addons.torch wrappers and the bundled agent skills
+pip install "laila-core[notebook]"  # ipywidgets, for running the tutorials in Jupyter
 pip install "laila-core[all]"       # everything
+```
+
+`torch-skills` brings in what `laila.addons.torch` (`Dataset` / `DataLoader` /
+`Module` / `Optimizer`) needs; the agent skills that drive those wrappers
+(`data-loading`, `model-checkpoint`) ship in the same wheel. Drop them into a
+project's skills folder with:
+
+```bash
+laila-skills install          # -> ./.cursor/skills/{data-loading,model-checkpoint}
+laila-skills install --user   # -> ~/.cursor/skills/
 ```
 
 ## Logging

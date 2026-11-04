@@ -4,6 +4,17 @@ CONFIG_COMPILER_CXX_EXCEPTIONS=y
 CONFIG_COMPILER_CXX_RTTI=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y
+# Model a WROVER-class part: 4 MB PSRAM (idf.py qemu passes `-m 4M`, which is the
+# emulated ESP32's PSRAM). laila-C pools keep entries in RAM, and ~170 KiB of
+# internal DRAM holds only a few dozen entries before lwIP/emac starve; with
+# PSRAM in the malloc pool the device can absorb a full interop run. Small
+# allocations and all task stacks stay internal; a board without PSRAM still
+# boots (IGNORE_NOTFOUND) with the internal heap only.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=49152
 # Emulated Ethernet NIC (QEMU openeth) -- the IP transport used in the emulator
 # (QEMU has no Wi-Fi radio; laila-C's lwIP socket path is identical either way).
 CONFIG_ETH_USE_OPENETH=y

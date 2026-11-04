@@ -190,21 +190,39 @@ Where a pool is a map keyed by `global_id`, `MultiBuffer` is a fixed ring of int
 
 **No credentials or external services required.**
 
-## Examples — `../examples/image_dataset/`
+## Examples
 
-Longer, end-to-end walkthroughs that combine several features into one workflow. They are rendered under the **Examples** tab of the documentation site.
+Longer, end-to-end walkthroughs that combine several features into one workflow. They are rendered under the **Examples** tab of the documentation site, in two groups.
+
+### Simple Data Loading — `../examples/image_dataset/`
 
 ### Example 1. Dataset Creation — Random Images to Cloudflare R2 — `01_dataset_creation.ipynb`
 
-Set up a Cloudflare R2 bucket and API token step by step, generate random PNG images with Pillow, store each one as an entry whose payload is the raw file bytes, and index them all under a `Manifest` nicknamed `my_dataset`. Finishes by recovering the dataset from a cold start using only the nickname.
+Set up a Cloudflare R2 bucket and API token step by step, generate random PNG images with Pillow, upload each image (raw file bytes) and its caption to R2 inside the generation loop, and index them under a `Manifest` nicknamed `my_dataset` as `datapoint -> {"image": gid, "caption": gid}`. Finishes by recovering the dataset from a cold start using only the nickname.
 
 **Requires:** `pip install "laila-core[cloudflare]" pillow` and a `secrets.toml` with `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`.
 
 ### Example 2. Data Loader — Prefetching Through memory << hdd << cloudflare — `02_data_loader.ipynb`
 
-Wire `laila.alpha_pool << hdd << r2` and build `LailaDataLoader`, a `torch.utils.data.DataLoader` subclass with a four-batch lookahead: each batch is a `sub_manifest` realized through the proxy chain and cast bytes-to-`torch.Tensor` on a LAILA taskforce, so `next()` never waits on Cloudflare. Consumed batches are forgotten from the alpha pool, and optionally from the HDF5 cache, to bound memory and disk. Cleans up the dataset created in Example 1.
+Wire `laila.alpha_pool << hdd << r2` with `laila.addons.torch.default_tiers` and stream the dataset with `laila.addons.torch.Dataset` / `DataLoader`, a `torch.utils.data.DataLoader` with a four-batch lookahead: each batch is a `sub_manifest` realized through the proxy chain and decoded by per-modality transforms on a LAILA taskforce, so `next()` never waits on Cloudflare. Consumed batches are forgotten from the alpha pool, and optionally from the HDF5 cache, to bound memory and disk. Cleans up the dataset created in Example 1.
 
 **Requires:** `pip install "laila-core[cloudflare,hdf5,torch]" pillow`, the same `secrets.toml`, and the `my_dataset` manifest from Example 1.
+
+### Torch Wrappers — `../examples/torch_wrappers/`
+
+The model side of `laila.addons.torch`. Both notebooks run on local pools.
+
+### Example 3. Checkpoint and Restore — `Module` and `Optimizer` Wrappers — `03_checkpoint_module_optimizer.ipynb`
+
+Wrap a CNN and its `AdamW` with `laila.addons.torch.Module` / `Optimizer` (drop-in subclasses of the torch types), checkpoint them every few steps inside the training loop with `laila.memorize` (one detached CPU entry per tensor, parameters and BatchNorm buffers alike, plus a weight-free architecture skeleton), inspect the `ModuleManifest` / `OptimizerManifest` blueprints, restore into freshly built objects with `laila.remember` and no optimizer priming, keep training, `rebuild()` a second copy from the nickname alone, and `forget` the checkpoint.
+
+**Requires:** `pip install "laila-core[hdf5,torch]"`.
+
+### Example 4. Train, Checkpoint, Resume — Everything Under One Nickname — `04_train_checkpoint_resume.ipynb`
+
+Build a small PNG dataset on a local origin pool, stream it with `Dataset` / `DataLoader` through `RAM << HDF5 << origin`, and put the model, optimizer, dataset manifest, config and RNG state under `laila.complex_manifest(nickname="everything")`. One `laila.memorize(everything)` per epoch overwrites the checkpoint in place; after dropping every live object, `laila.remember("MANIFEST:COMPLEX:everything").rebuild()` returns the live `Module`, the `Optimizer` bound to it and the dataset manifest, and training resumes at the next epoch. Forgetting `everything` removes the checkpoint and leaves the dataset's entries alone.
+
+**Requires:** `pip install "laila-core[hdf5,torch]" pillow`.
 
 ## Getting started
 

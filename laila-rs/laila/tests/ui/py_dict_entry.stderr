@@ -1,0 +1,5 @@
+error: py!: dict entries must be `key: value`
+ --> tests/ui/py_dict_entry.rs:7:25
+  |
+7 |     let _d = laila::py!({"a": 1, "b"});
+  |                         ^^^^^^^^^^^^^

@@ -46,6 +46,19 @@ struct ConnectionConfig {
   uint32_t frequency_hz = 0; // LoRa/radio frequency
   uint8_t spreading_factor = 0;  // LoRa SF
   uint8_t address = 0;       // I2C/CAN/RS485 node address
+  // Inbound serving (add_connection): how many accepted peer sessions may be
+  // served concurrently, each on its own thread. When the cap is reached the
+  // listener stops accepting and further connections wait in the kernel
+  // backlog. RPC execution against the policy is serialized regardless.
+#if defined(ESP_PLATFORM)
+  // Each session is a thread with a ~12 KiB internal-DRAM stack. RPC execution
+  // is serialized regardless (dispatch_mu_), so extra sessions only let the
+  // device accept and handshake concurrent peers promptly instead of leaving
+  // them to time out in the backlog -- which is what a burst of clients does.
+  int max_inbound_sessions = 4;
+#else
+  int max_inbound_sessions = 8;
+#endif
   std::map<std::string, std::string> extra;  // backend-specific knobs
 };
 

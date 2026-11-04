@@ -192,7 +192,7 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
         self._reasm.clear()
         self._unacked.clear()
         self._handshake_pending.clear()
-        self._pending_rpcs.clear()
+        self._fail_pending("transport stopped")
         self._shutdown_executor()
         self._started = False
 
@@ -200,32 +200,67 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
     # Reliable message layer
     # ------------------------------------------------------------------
 
-    def _send_message(self, addr: Any, payload: bytes) -> None:
-        """Fragment *payload* and queue every fragment for reliable delivery."""
+    def _send_message(self, addr: Any, payload: bytes, request_id: str | None = None) -> None:
+        """Fragment *payload* and queue every fragment for reliable delivery.
+
+        *request_id* tags the fragments of an outbound ``rpc.call`` so a
+        delivery give-up can fail that call's pending slot.
+        """
         msg_id = _uuid.uuid4().bytes
         mtu = max(1, self.mtu)
         fragments = [payload[i : i + mtu] for i in range(0, len(payload), mtu)] or [b""]
         frag_count = len(fragments)
         for index, frag in enumerate(fragments):
             packet = _HEADER.pack(_MAGIC, _TYPE_DATA, index, frag_count) + msg_id + frag
-            self._unacked[(addr, msg_id, index)] = {"packet": packet, "tries": 0}
+            self._unacked[(addr, msg_id, index)] = {
+                "packet": packet,
+                "tries": 0,
+                "request_id": request_id,
+            }
             self._sendto(addr, packet)
 
+    def _give_up(self, key: tuple, slot: dict, reason: str) -> None:
+        """Abandon a message: drop its sibling fragments and fail its RPC slot.
+
+        Without this the caller of a lost request would sit out the full
+        ``rpc_timeout`` even though the carrier already knows the message
+        will never arrive.
+        """
+        addr, msg_id, _index = key
+        for other in list(self._unacked):
+            if other[0] == addr and other[1] == msg_id:
+                self._unacked.pop(other, None)
+        request_id = slot.get("request_id")
+        if request_id is not None:
+            self._fail_request(
+                request_id,
+                ConnectionError(
+                    f"datagram delivery to {addr} gave up ({reason}) after "
+                    f"{self.max_retries} retransmits on {type(self).__name__}."
+                ),
+            )
+
     async def _retransmit_loop(self) -> None:
-        """Resend unacked fragments every ``ack_timeout`` up to ``max_retries``."""
+        """Resend unacked fragments every ``ack_timeout`` up to ``max_retries``.
+
+        A fragment that exhausts its retries (or whose send fails) takes
+        its whole message down with it -- see :meth:`_give_up`.
+        """
         try:
             while True:
                 await asyncio.sleep(self.ack_timeout)
                 for key, slot in list(self._unacked.items()):
+                    if key not in self._unacked:
+                        continue  # purged with a sibling that gave up
                     if slot["tries"] >= self.max_retries:
-                        self._unacked.pop(key, None)
+                        self._give_up(key, slot, "no ack")
                         continue
                     slot["tries"] += 1
                     addr = key[0]
                     try:
                         self._sendto(addr, slot["packet"])
-                    except Exception:
-                        self._unacked.pop(key, None)
+                    except Exception as exc:
+                        self._give_up(key, slot, f"send failed: {exc!r}")
         except asyncio.CancelledError:
             pass
 
@@ -399,10 +434,10 @@ class _DatagramRPCProtocol(_CarrierRPCProtocol):
         addr = self._connections.get(peer_id)
         if addr is None:
             raise ConnectionError(f"No connection to peer {peer_id}")
-        request_id, slot = self._register_pending()
+        request_id, slot = self._register_pending(peer_id)
         req = self._make_rpc_request(path, args, kwargs, request_id)
         try:
-            self._loop_call(self._send_message, addr, self._encode(req))
+            self._loop_call(self._send_message, addr, self._encode(req), request_id)
         except ConnectionError:
             self._pending_rpcs.pop(request_id, None)
             raise

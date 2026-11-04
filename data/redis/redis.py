@@ -10,7 +10,7 @@ import subprocess
 import time
 from collections.abc import Iterable, Iterator
 from contextlib import suppress
-from typing import Any
+from typing import Any, ClassVar
 
 import redis
 from pydantic import ConfigDict, Field, PrivateAttr
@@ -55,6 +55,8 @@ class RedisPool(_LAILA_IDENTIFIABLE_POOL):
     _redis_socket_name: str = PrivateAttr(default="laila_redis.sock")
 
     transformations: TransformationSequence | None = Field(default=transformation_base64)
+
+    _persistent_storage: ClassVar[bool] = True
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

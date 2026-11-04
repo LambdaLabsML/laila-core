@@ -1,0 +1,17 @@
+# py2rs override for tests/functional/policy/memory/manifest/unit_tests/test_manifest_sql.py
+# `_DoubleManifest` / `_EntryRowManifest` subclass `Manifest` to override the
+# `_sql_rows` / `_sql_project` hooks: `Entry`'s subclass set is closed in
+# Rust (`Manifest` is a newtype), so the hook tests have no twin.
+# `inspect.signature(..)` has no Rust twin either (the `#[pysig]` text is the
+# signature; those three tests pin the *absence* of index flags, which the
+# Rust signatures share by construction).
+skip_functions:
+  _DoubleManifest: subclasses `Manifest` (closed subclass set; no Rust twin)
+  _EntryRowManifest: subclasses `Manifest` (closed subclass set; no Rust twin)
+skip_tests:
+  test_double_manifest_two_rows_per_key: `_DoubleManifest` overrides the `_sql_rows` / `_sql_project` hooks (closed subclass set)
+  test_double_manifest_dedupes_top_level_keys: `_DoubleManifest` overrides the `_sql_rows` / `_sql_project` hooks (closed subclass set)
+  test_entry_in_row_raises_typeerror_no_state: `_EntryRowManifest` overrides `_sql_rows` (closed subclass set)
+  test_memorize_has_no_index_flags: "`inspect.signature(Manifest.memorize)`: an unbound method of a Rust class read as a value carries no signature (the `#[pysig]` is bound to the call, not the class object)"
+  test_remember_has_no_index_flags: "`inspect.signature(Manifest.remember)`: unbound method of a Rust class read as a value (no signature)"
+  test_forget_signature_unchanged: "`inspect.signature(Manifest.forget)`: unbound method of a Rust class read as a value (no signature)"

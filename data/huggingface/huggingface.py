@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import functools
 import json
+import types
 from collections.abc import Iterable, Iterator
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import quote, unquote
 
 from pydantic import ConfigDict, Field, PrivateAttr
@@ -13,13 +15,27 @@ from ...entry import transformation_base64
 from ...entry.compdata.transformation import TransformationSequence
 from ..schema.base import _LAILA_IDENTIFIABLE_POOL
 
-try:
-    from huggingface_hub import HfApi, hf_hub_download
-    from huggingface_hub.utils import EntryNotFoundError
-except ImportError:
-    HfApi = None  # type: ignore
-    hf_hub_download = None  # type: ignore
-    EntryNotFoundError = Exception  # type: ignore
+
+@functools.lru_cache(maxsize=1)
+def _sdk() -> types.SimpleNamespace:
+    """Import ``huggingface_hub`` on first use and cache the handles.
+
+    The SDK is deliberately *not* imported at module load: ``laila.data``
+    imports every backend eagerly, and ``huggingface_hub`` drags in
+    ``tqdm.auto`` (which warns about missing ipywidgets under Jupyter) plus
+    a sizeable import tree. Deferring it keeps ``import laila`` clean for
+    users who never touch :class:`HuggingFacePool`.
+    """
+    try:
+        from huggingface_hub import HfApi, hf_hub_download
+        from huggingface_hub.utils import EntryNotFoundError
+    except ImportError as exc:
+        raise ImportError("huggingface_hub is required for HuggingFacePool") from exc
+    return types.SimpleNamespace(
+        HfApi=HfApi,
+        hf_hub_download=hf_hub_download,
+        EntryNotFoundError=EntryNotFoundError,
+    )
 
 
 class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
@@ -39,15 +55,15 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
 
     _api: Any = PrivateAttr(default=None)
 
+    _persistent_storage: ClassVar[bool] = True
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def _get_api(self):
         """Return the ``HfApi`` instance, creating it on first call."""
         if self._api is not None:
             return self._api
-        if HfApi is None or hf_hub_download is None:
-            raise ImportError("huggingface_hub is required for HuggingFacePool")
-        self._api = HfApi(token=self.token)
+        self._api = _sdk().HfApi(token=self.token)
         return self._api
 
     def _prefix(self) -> str:
@@ -78,9 +94,10 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
 
     def _read(self, key: str) -> Any | None:
         """Download and parse the JSON file for *key*, or return ``None``."""
+        sdk = _sdk()
         with self.atomic():
             try:
-                path = hf_hub_download(
+                path = sdk.hf_hub_download(
                     repo_id=self.repo_id,
                     filename=self._object_key(key),
                     repo_type=self.repo_type,
@@ -90,7 +107,7 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
                 with open(path, encoding="utf-8") as f:
                     raw = f.read()
                 return json.loads(raw)
-            except EntryNotFoundError:
+            except sdk.EntryNotFoundError:
                 return None
 
     def _write(self, key: str, entry: Any) -> None:
@@ -122,7 +139,7 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
                     revision=self.revision,
                     commit_message=f"laila: delete {key}",
                 )
-            except EntryNotFoundError:
+            except _sdk().EntryNotFoundError:
                 pass
 
     def _empty(self) -> None:
@@ -133,9 +150,10 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
 
     def _exists(self, key: str) -> bool:
         """Return ``True`` if *key* exists in the Hub repo."""
+        sdk = _sdk()
         with self.atomic():
             try:
-                hf_hub_download(
+                sdk.hf_hub_download(
                     repo_id=self.repo_id,
                     filename=self._object_key(key),
                     repo_type=self.repo_type,
@@ -143,7 +161,7 @@ class HuggingFacePool(_LAILA_IDENTIFIABLE_POOL):
                     token=self.token,
                 )
                 return True
-            except EntryNotFoundError:
+            except sdk.EntryNotFoundError:
                 return False
 
     def __contains__(self, key: str) -> bool:

@@ -1,0 +1,10 @@
+# py2rs override for tests/functional/policy/memory/manifest/unit_tests/test_manifest_heavy_workloads.py
+# The constitution bodies are Python source; Rust runs the native twins
+# registered under the same text [P31]. `_build_body_for(key)` *computes*
+# one body per key, so its twin is registered under every returned text
+# and reads the key back from the source [P31c].
+builder_tokens:
+  _SUM_ALL: laila_tests::builders::sum_realized_data
+  _WALK_NESTED: laila_tests::builders::walk_nested
+builder_functions:
+  _build_body_for: laila_tests::builders::build_body_for

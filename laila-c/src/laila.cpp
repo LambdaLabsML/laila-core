@@ -44,8 +44,11 @@ FuturePtr Laila::memorize(const EntryPtr& entry, const MemorizeOpts& opts) {
   if (!src.empty() && src != active) {
     auto p = policy->communication().peer(src);
     if (!p) raise(Status::NotFound, "relay: active policy is not peered to source " + src);
+    // Omit unset pools: Python resolves `""` as a pool *name*, not as "default".
     Json kwargs = Json::object();
-    kwargs["dst_policy"] = dst; kwargs["dst_pool"] = dst_pool; kwargs["src_pool"] = src_pool;
+    kwargs["dst_policy"] = dst;
+    if (!dst_pool.empty()) kwargs["dst_pool"] = dst_pool;
+    if (!src_pool.empty()) kwargs["src_pool"] = src_pool;
     return p->request("central.memory._relay_memorize", ids_arg(entry->global_id()), kwargs);
   }
   // active -> peer push (2-party).
@@ -85,8 +88,11 @@ FuturePtr Laila::remember(const std::string& entry_id, const RememberOpts& opts)
   if (!src.empty() && src != active) {
     auto p = policy->communication().peer(src);
     if (!p) raise(Status::NotFound, "relay: active policy is not peered to source " + src);
+    // Omit unset pools: Python resolves `""` as a pool *name*, not as "default".
     Json kwargs = Json::object();
-    kwargs["dst_policy"] = dst; kwargs["dst_pool"] = dst_pool; kwargs["src_pool"] = src_pool;
+    kwargs["dst_policy"] = dst;
+    if (!dst_pool.empty()) kwargs["dst_pool"] = dst_pool;
+    if (!src_pool.empty()) kwargs["src_pool"] = src_pool;
     kwargs["persist"] = persist;
     return p->request("central.memory._relay_remember", ids_arg(gid), kwargs);
   }

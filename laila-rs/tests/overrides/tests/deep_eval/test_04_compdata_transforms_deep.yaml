@@ -1,0 +1,20 @@
+# py2rs override for tests/deep_eval/test_04_compdata_transforms_deep.py
+# `_run_code` `exec`s recovery code; the Rust twin resolves the code
+# natively through `_exec_one_fn` (every laila recovery template is
+# recognised) and calls the resulting `backward`.
+skip_functions:
+  _run_code: `exec` of Python source (hand-written twin in `laila_tests::deep_eval_helpers`)
+use: [laila_tests::deep_eval_helpers::_run_code]
+skip_tests:
+  test_subclass_of_dict_dispatches_via_mro: a test-local `dict` subclass dispatched through the MRO (no Rust twin)
+  test_direct_subclass_bypasses_dispatch: `type(cd) is CD_generic` compares class identity of a typed Rust struct (no class value)
+  test_register_cdtype_custom: registers a test-local `CD_generic` subclass in `TYPE_TO_WRAPPER` (no Rust twin)
+  test_object_registered_as_catch_all: `TYPE_TO_WRAPPER[object] is CD_generic` reads the registry as a dict of classes (the Rust registry maps type names to wrapper kinds)
+  TestMsgpack.test_name: `REGISTRY["msgpack"] is MsgpackSerializer` compares class identity (the Rust registry holds recovery-code templates)
+  test_object_arrays_rejected_on_save: `np.array(.., dtype=object)` (the port's ndarray has no object dtype)
+  test_numpy_copy_independent: `c.data[0] = 1` assigns into an ndarray (the port's ndarray is immutable; copies are independent by construction)
+  test_roundtrip__arr5: `np.array(["a", "bc"])` (the port's ndarray has no unicode dtype)
+  test_subclass_without_name_not_registered: a test-local `_data_transformation` subclass (no Rust twin)
+  test_descriptor_class_access: `Holder.x` reads a `ComputationalData` class attribute through the descriptor protocol (`py_model!` has no class-level attribute values)
+import_twins:
+  _data_transformation: laila_tests::deep_eval_helpers::compdata::_data_transformation

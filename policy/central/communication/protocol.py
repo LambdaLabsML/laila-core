@@ -48,6 +48,60 @@ ERR_EXECUTION = -32002
 # scoped to overload only.
 ERR_BUSY = -32003
 
+# Keys that identify the self-describing ``Entry.serialize(
+# transformation_base64)`` envelope on the wire. Every entry (and
+# manifest) serialized that way carries all four; ordinary RPC dicts
+# never carry ``_uuid`` *and* ``constitution`` together.
+_ENTRY_ENVELOPE_KEYS = frozenset({"_uuid", "_scopes", "payload", "constitution"})
+
+
+def serialize_entry_arg(o: Any) -> dict | None:
+    """Return the wire envelope for a READY :class:`Entry`, else ``None``.
+
+    The envelope is the same ``Entry.serialize(transformation_base64)``
+    form future results travel in, so a peer rebuilds the real entry
+    with :func:`build_by_scope`. Non-READY entries (nothing faithful to
+    ship yet) and non-entries yield ``None`` so the caller can fall
+    through to the generic encoders.
+    """
+    from ....entry.entry import Entry
+
+    if not isinstance(o, Entry):
+        return None
+    try:
+        from ....entry import transformation_base64
+
+        return o.serialize(transformations=transformation_base64)
+    except Exception:
+        return None
+
+
+def is_entry_envelope(value: Any) -> bool:
+    """``True`` when *value* is a dict carrying the serialized-entry signature."""
+    return isinstance(value, dict) and _ENTRY_ENVELOPE_KEYS <= value.keys()
+
+
+def rehydrate_entry_args(args: Any, kwargs: Any) -> tuple[list, dict]:
+    """Rebuild entries shipped as wire envelopes inside RPC ``args`` / ``kwargs``.
+
+    Walks one level deep (top-level values and the items of top-level
+    lists / tuples) -- the shapes laila's memory verbs accept. Dicts that
+    carry the envelope signature become real :class:`Entry` objects via
+    :func:`build_by_scope`; everything else is returned untouched.
+    """
+    from ....entry.constitution.build_maps import build_by_scope
+
+    def one(v: Any) -> Any:
+        if is_entry_envelope(v):
+            return build_by_scope(v, asynchronous=False)
+        if isinstance(v, (list, tuple)) and any(is_entry_envelope(x) for x in v):
+            return type(v)(
+                build_by_scope(x, asynchronous=False) if is_entry_envelope(x) else x for x in v
+            )
+        return v
+
+    return [one(a) for a in (args or [])], {k: one(v) for k, v in (kwargs or {}).items()}
+
 
 class LailaJSONEncoder(json.JSONEncoder):
     """JSON encoder that serialises LAILA objects via their existing hooks.
@@ -59,10 +113,16 @@ class LailaJSONEncoder(json.JSONEncoder):
        child future ids needed to reconstruct the proxy.
     2. :class:`_LAILA_IDENTIFIABLE_FUTURE` -- emit a future-shaped
        envelope with ``__is_group__=False``.
-    3. Pydantic v2 models -- delegate to ``model_dump()``.
-    4. Anything providing ``as_dict`` -- delegate to that.
-    5. Anything providing ``identity`` -- delegate to that.
-    6. Final fallback: ``str(o)`` so RPC payloads never raise on
+    3. A READY :class:`Entry` -- emit the canonical, self-describing
+       ``Entry.serialize(transformation_base64)`` form (the same envelope
+       future results travel in), which the receiving
+       ``_execute_rpc`` rehydrates into a real entry. This is what lets
+       ``laila.memorize(entry)`` work in morph mode. Non-READY entries
+       fall through to ``model_dump()``.
+    4. Pydantic v2 models -- delegate to ``model_dump()``.
+    5. Anything providing ``as_dict`` -- delegate to that.
+    6. Anything providing ``identity`` -- delegate to that.
+    7. Final fallback: ``str(o)`` so RPC payloads never raise on
        encoding even for opaque objects.
     """
 
@@ -91,6 +151,10 @@ class LailaJSONEncoder(json.JSONEncoder):
                 "policy_id": str(o.policy_id),
                 "taskforce_id": str(o.taskforce_id),
             }
+
+        envelope = serialize_entry_arg(o)
+        if envelope is not None:
+            return envelope
 
         if hasattr(o, "model_dump"):
             return o.model_dump()

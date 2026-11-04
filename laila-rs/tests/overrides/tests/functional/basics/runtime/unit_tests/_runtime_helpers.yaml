@@ -1,0 +1,5 @@
+# py2rs override for tests/functional/basics/runtime/unit_tests/_runtime_helpers.py
+# The psutil / threading probes have a hand-written Rust twin (reads /proc);
+# its mixin class is copied into the test cases by py2rs [P18c, P12e].
+skip: hand-written twin `laila_tests::runtime_helpers`
+twin: laila_tests::runtime_helpers

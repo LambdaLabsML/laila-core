@@ -97,8 +97,16 @@ class SimpleConstitution(Constitution):
         return current
 
     def as_dict(self) -> dict:
-        """Serialize as ``{"_kind": "simple", "codes": [...]}``."""
-        return {"_kind": "simple", "codes": list(self._codes)}
+        """Serialize as ``{"_kind": "simple", "codes": [...], "_hmac": ...}``.
+
+        ``_hmac`` signs the code list with the per-user constitution
+        secret so a hand-written simple constitution round-trips for
+        the same user; pipeline-emitted codes do not need it (they are
+        accepted by template on the way back).
+        """
+        from .trust import sign_simple
+
+        return {"_kind": "simple", "codes": list(self._codes), "_hmac": sign_simple(self._codes)}
 
     @classmethod
     def _from_dict(cls, in_dict: dict) -> SimpleConstitution:
@@ -107,5 +115,16 @@ class SimpleConstitution(Constitution):
         Missing ``codes`` is treated as an empty chain (a valid no-op
         constitution) rather than raising, mirroring the constructor's
         default.
+
+        The dict comes from storage or the wire, so every snippet must
+        pass the trust gate (:mod:`laila.entry.constitution.trust`):
+        it has to match a loaded transformation's recovery-code
+        template or be byte-identical to code generated in this
+        process. Anything else raises ``ValueError`` *before* it could
+        be executed.
         """
-        return cls(codes=in_dict.get("codes", []))
+        from .trust import check_simple_codes
+
+        codes = in_dict.get("codes", [])
+        check_simple_codes(codes, in_dict.get("_hmac"))
+        return cls(codes=codes)

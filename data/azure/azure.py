@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Iterator
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import quote, unquote
 
 from pydantic import ConfigDict, Field, PrivateAttr
@@ -35,6 +35,8 @@ class AzurePool(_LAILA_IDENTIFIABLE_POOL):
 
     _client: Any = PrivateAttr(default=None)
     _container: Any = PrivateAttr(default=None)
+
+    _persistent_storage: ClassVar[bool] = True
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

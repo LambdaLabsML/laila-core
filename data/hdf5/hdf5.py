@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Iterable, Iterator
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import quote, unquote
 
 import h5py
@@ -27,6 +27,8 @@ class HDF5Pool(_LAILA_IDENTIFIABLE_POOL):
     transformations: TransformationSequence | None = Field(default=transformation_base64)
 
     _file: Any = PrivateAttr(default=None)
+
+    _persistent_storage: ClassVar[bool] = True
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -79,10 +81,17 @@ class HDF5Pool(_LAILA_IDENTIFIABLE_POOL):
         return str(raw)
 
     def close(self) -> None:
-        """Close the HDF5 file handle."""
-        if self._file is not None:
-            self._file.close()
-            self._file = None
+        """Close the HDF5 file handle.
+
+        Runs under the pool lock so an in-flight ``_write``/``_delete``
+        finishes before the handle is released; later writers hit the
+        documented ``RuntimeError("HDF5Pool is closed.")`` instead of
+        crashing inside h5py.
+        """
+        with self.atomic():
+            if self._file is not None:
+                self._file.close()
+                self._file = None
 
     # ---------------- mapping API ----------------
     def _read(self, key: str) -> Any | None:
@@ -106,6 +115,10 @@ class HDF5Pool(_LAILA_IDENTIFIABLE_POOL):
                 del root[skey]
             dt = h5py.string_dtype(encoding="utf-8")
             root.create_dataset(skey, data=value, dtype=dt)
+            # Push the write through the HDF5 library buffers so a process
+            # that dies without ``close()`` (crash, ``os._exit``, SIGKILL)
+            # still leaves a readable file. Library-level flush, not fsync.
+            root.flush()
 
     def _delete(self, key: str) -> None:
         """Delete the dataset for *key* if it exists."""
@@ -114,14 +127,15 @@ class HDF5Pool(_LAILA_IDENTIFIABLE_POOL):
             root = self._root()
             if skey in root:
                 del root[skey]
+                root.flush()
 
     def _empty(self) -> None:
         """Remove all entries from the pool."""
-        if self._file is None:
-            raise RuntimeError("HDF5Pool is closed.")
         with self.atomic():
-            for name in list(self._file.keys()):
-                del self._file[name]
+            root = self._root()
+            for name in list(root.keys()):
+                del root[name]
+            root.flush()
 
     def _exists(self, key: str) -> bool:
         """Return ``True`` if a dataset for *key* exists."""

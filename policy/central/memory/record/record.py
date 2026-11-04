@@ -150,9 +150,13 @@ class Record(BaseModel):
 
         Dispatches to the registered builder for the entry's scope via
         :func:`build_by_scope` (sync path), which returns a fully
-        hydrated :class:`Entry`. Mutates *record* in place to replace
-        the serialized ``entry`` field with the live entry, and
-        returns the same record.
+        hydrated :class:`Entry`. Returns a *shallow copy* of the record
+        dict with the serialized ``entry`` slot replaced by the live
+        entry: the input is never mutated, because in-memory pools hand
+        out their stored dict by reference and rewriting it would turn
+        every later read into the same already-built entry object
+        (sharing state between readers and bypassing the
+        constitution, e.g. decryption under the current key).
 
         Returning a dict (rather than a fresh :class:`Record`) is
         intentional: callers in the read pipeline only need the inner
@@ -164,8 +168,9 @@ class Record(BaseModel):
 
         from .....entry.constitution.build_maps import build_by_scope
 
-        record["entry"] = build_by_scope(record["entry"], asynchronous=False)
-        return record
+        built = dict(record)
+        built["entry"] = build_by_scope(record["entry"], asynchronous=False)
+        return built
 
     @classmethod
     async def _build_async(cls, record: Any) -> dict:
@@ -180,8 +185,9 @@ class Record(BaseModel):
 
         from .....entry.constitution.build_maps import build_by_scope
 
-        record["entry"] = await build_by_scope(record["entry"], asynchronous=True)
-        return record
+        built = dict(record)
+        built["entry"] = await build_by_scope(record["entry"], asynchronous=True)
+        return built
 
     @classmethod
     def _build(cls, record: Any, *, asynchronous: bool = False):

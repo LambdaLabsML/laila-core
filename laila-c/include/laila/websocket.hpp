@@ -43,12 +43,20 @@ public:
   // Send one text data frame.
   bool send_text(const std::string& payload);
   // Receive the next text/binary message; transparently answers ping with pong
-  // and returns false on close/timeout/error. `timeout_ms` < 0 blocks.
+  // and returns false on close/timeout/error. `timeout_ms` < 0 blocks. A peer
+  // Close frame completes the closing handshake (echo once, then close the TCP
+  // connection) and leaves the session permanently not `ok()`.
   bool recv_text(std::string& out, int timeout_ms);
 
-  // Send a close frame (best-effort).
+  // Complete the closing handshake from our side: send a Close frame once
+  // (best-effort) and close the underlying TCP connection. Idempotent. RFC 6455
+  // requires the server to close TCP after the handshake; Python `websockets`
+  // waits (up to its 5 s close timeout) for exactly that EOF.
   void close();
-  bool ok() const { return conn_ != nullptr && conn_->is_open(); }
+  // False once either side closed (or the connection dropped).
+  bool ok() const { return !closed_ && conn_ != nullptr && conn_->is_open(); }
+  // True once a Close frame has been received from the peer or sent by us.
+  bool closed() const { return closed_; }
 
 private:
   // Ensure the internal buffer holds at least `n` bytes (reading more from the
@@ -59,6 +67,8 @@ private:
 
   hal::Connection* conn_;
   bool client_;
+  bool closed_ = false;      // closing handshake done (either direction)
+  bool close_sent_ = false;  // our Close frame already went out
   std::vector<uint8_t> buf_;  // unconsumed bytes already read from the socket
 };
 

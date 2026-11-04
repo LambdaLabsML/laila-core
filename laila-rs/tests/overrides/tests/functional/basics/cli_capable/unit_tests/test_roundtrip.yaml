@@ -1,0 +1,4 @@
+# py2rs override for tests/functional/basics/cli_capable/unit_tests/test_roundtrip.py
+# (no overrides: every test builds a DefaultPolicy / DefaultTCPIPProtocol and
+# round-trips build_environment() through laila.args, all of which have
+# Rust twins.)

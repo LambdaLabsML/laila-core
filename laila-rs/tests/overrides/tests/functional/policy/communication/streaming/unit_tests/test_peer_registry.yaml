@@ -1,0 +1,5 @@
+# py2rs override for tests/functional/policy/communication/streaming/unit_tests/test_peer_registry.py
+# `_RpcOnlyLoopback(DefaultLoopbackProtocol)` only flips `supports_channels`;
+# its Rust twin is a loopback spec with lanes off (`laila_tests::comm_fakes`).
+class_aliases:
+  _RpcOnlyLoopback: laila_tests::comm_fakes::_RpcOnlyLoopback

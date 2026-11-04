@@ -1,0 +1,9 @@
+# py2rs override for tests/functional/entry/constitution/unit_tests/test_constitution_build.py
+# `_CONSTITUTION_SRC` is Python source (`def combine(manifest): ...`); Rust
+# runs the native twin registered under the same token text [P31].
+builder_tokens:
+  _CONSTITUTION_SRC: laila_tests::builders::combine
+  "def build(m):\n    import time\n    time.sleep(0.2)\n    return 42\n": laila_tests::builders::sleep_then_42
+# Both remaining tests need the command taskforces (Phase 3): one routes the
+# build through `policy.central.command.alpha_taskforce`, the other asserts
+# that concurrent builds of one entry coalesce on the in-flight future.

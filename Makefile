@@ -2,7 +2,7 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -euo pipefail -c
 
-.PHONY: help init lint fmt typecheck test test-fast test-cloud test-workloads cov build clean docs docs-serve release-dryrun
+.PHONY: help init lint fmt typecheck test test-fast test-cloud test-workloads test-interop test-go cov build clean docs docs-serve release-dryrun
 
 help:
 	@echo "laila — developer targets"
@@ -15,6 +15,8 @@ help:
 	@echo "  make test-fast      Run only non-cloud, non-slow tests"
 	@echo "  make test-cloud     Run cloud-marked tests (requires creds)"
 	@echo "  make test-workloads Run the long-running workload/stress suite (tests/workloads)"
+	@echo "  make test-interop   Run the cross-language interop matrix (Python/JS/C/Go/Rust; builds c_harness + go_harness + rs_harness)"
+	@echo "  make test-go        Run the Go port: conformance + facades check, unit tests, Python<->Go interop"
 	@echo "  make cov            Run tests with coverage report"
 	@echo "  make build          Build sdist + wheel into dist/"
 	@echo "  make clean          Remove build/dist/cache artifacts"
@@ -51,6 +53,19 @@ test-cloud:
 # Tune with LAILA_WORKLOAD_SCALE=<float> and LAILA_WORKLOAD_TIMEOUT=<seconds>.
 test-workloads:
 	python -m pytest tests/workloads -m "workload" --tb=short -p no:cacheprovider
+
+# Cross-language interop matrix (tests/interop). Languages whose toolchain is
+# absent are skipped; set LAILA_QEMU_URI/LAILA_QEMU_GID to include the emulated
+# ESP32 (laila-c/emulator/run_qemu_test.sh does this automatically).
+test-interop:
+	LAILA_INTEROP_BUILD_C=1 LAILA_INTEROP_BUILD_GO=1 LAILA_INTEROP_BUILD_RUST=1 python -m pytest tests/interop -m interop -v -p no:cacheprovider
+
+# Go port (laila-go). Mirrors .github/workflows/laila-go.yml minus the race job.
+test-go:
+	python3 laila-go/tools/conformance/check.py
+	python3 laila-go/tools/facades/gen_facades.py --check
+	cd laila-go && go vet ./... && go test -count=1 -short ./...
+	cd laila-go/tests && go test -count=1 -short -timeout 45m ./functional/... ./interop/
 
 transports-emulators-up:
 	docker compose -f tests/transports/emulators/docker-compose.yml up -d

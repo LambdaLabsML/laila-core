@@ -11,6 +11,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -170,11 +171,19 @@ public:
   void remove_connection(const CommProtocolPtr& protocol);
   const std::map<std::string, CommProtocolPtr>& connections() const { return connections_; }
 
+  // Run one inbound JSON-RPC frame against this policy under the dispatch lock.
+  // Every inbound session thread (and the outbound client when a peer pings it
+  // mid-call) funnels through here, so policy/pool mutation stays
+  // single-threaded while socket I/O proceeds concurrently.
+  Json dispatch_inbound(const Json& request);
+
 private:
   // One inbound-serving record per add_connection that opened a listener: the
-  // listener, its background accept/dispatch thread, and a per-record stop flag
-  // so a single connection can be torn down (remove_connection) or all of them
+  // listener, its background accept thread, and a per-record stop flag so a
+  // single connection can be torn down (remove_connection) or all of them
   // (destructor) deterministically -- without a user-driven listen()/poll().
+  // The accept thread owns the per-session threads it spawns and joins them
+  // before it exits, so joining `thread` reclaims everything.
   struct ServeRecord {
     std::string protocol_id;
     hal::Listener* listener = nullptr;
@@ -182,15 +191,18 @@ private:
     std::thread thread;
   };
 
-  // Serve one accepted connection: a WebSocket session (Python laila peer) or the
-  // raw one-shot JSON-RPC frame used by a laila-C TCP peer. `expected_secret` is
-  // the receiving protocol's peer_secret_key (empty => accept any).
+  // Serve one accepted connection: a WebSocket session (Python laila peer) or
+  // the length-prefixed stream used by a laila-C / laila-js TCP peer; both are
+  // persistent (peer.connect, then rpc.call frames until close). `expected_secret`
+  // is the receiving protocol's peer_secret_key (empty => accept any).
   void serve_connection(hal::Connection* conn, const std::vector<uint8_t>& first,
                         const std::string& expected_secret,
                         const std::shared_ptr<std::atomic<bool>>& stop);
-  // Background accept/dispatch loop for one listener; exits when *stop is set.
+  // Background accept loop for one listener: hands each accepted connection to
+  // its own session thread (at most `max_sessions` live at once; beyond that the
+  // kernel backlog queues connections) and exits when *stop is set.
   void serve_loop(hal::Listener* l, std::string expected_secret,
-                  std::shared_ptr<std::atomic<bool>> stop);
+                  std::shared_ptr<std::atomic<bool>> stop, int max_sessions);
   // Stop + join one record (by index) and reclaim its listener.
   void stop_record(ServeRecord& rec);
   // Stop every serve thread and reclaim listeners. Called by the destructor.
@@ -200,6 +212,10 @@ private:
   std::map<std::string, RemotePolicyProxyPtr> peers_;
   std::map<std::string, CommProtocolPtr> connections_;
   std::vector<ServeRecord> serving_;
+  // Serializes RPC execution across inbound session threads (recursive: a
+  // relay verb dispatched here may itself service a peer's ping via
+  // dispatch_inbound on the same thread).
+  std::recursive_mutex dispatch_mu_;
 };
 using CentralCommunication = _LAILA_IDENTIFIABLE_COMMUNICATION;
 

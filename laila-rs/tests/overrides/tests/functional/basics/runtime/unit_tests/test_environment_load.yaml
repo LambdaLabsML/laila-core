@@ -1,0 +1,13 @@
+# py2rs override for tests/functional/basics/runtime/unit_tests/test_environment_load.py
+#
+# One group has no Rust twin: `PythonProcessPoolTaskForce` (subprocess
+# workers: a marker class whose constructor raises `NotImplementedError` in
+# the Rust port).
+skip_tests:
+  test_049_processpool_default: PythonProcessPoolTaskForce (subprocess workers)
+  test_050_processpool_num_workers_4: PythonProcessPoolTaskForce (subprocess workers)
+  test_053_processpool_replaces_threadpool: PythonProcessPoolTaskForce (subprocess workers)
+  test_054_thread_to_process_transition: PythonProcessPoolTaskForce (subprocess workers)
+  test_055_process_to_thread_transition: PythonProcessPoolTaskForce (subprocess workers)
+  test_095_processpool_workers_fully_exit: PythonProcessPoolTaskForce (subprocess workers)
+# above.

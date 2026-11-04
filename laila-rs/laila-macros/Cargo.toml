@@ -1,0 +1,16 @@
+[package]
+name = "laila-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Proc-macros for laila-core: #[laila::python] expression rewriter and #[laila::pysig] signature binder."
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true }

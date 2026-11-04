@@ -1,6 +1,11 @@
-# Tutorial 4: Model Checkpoint and Reload from a Single Manifest
+# Tutorial 4: Model Checkpoint and Reload with an "everything" Manifest
 
-This is the most advanced tutorial. You will save a PyTorch model's weights **and** optimizer state to S3 as individual entries, create a single **manifest** entry that references all of them, then destroy every local reference and rebuild the entire training state from that one manifest ID.
+This is the most advanced tutorial. You will save a PyTorch model **and** its optimizer to S3, together with the training config, under one **`ComplexManifest`** named `everything`; destroy every local reference; and get the exact same objects back from that single nickname.
+
+Two pieces do the work:
+
+- **`laila.addons.torch.Module` / `Optimizer`** wrap the torch objects without changing how you use them. Memorizing them snapshots every tensor as a detached CPU entry; the model additionally stores a weight-free *architecture skeleton* and the optimizer a reference to the model (and parameter name) each of its parameters belongs to.
+- **`laila.complex_manifest`** (scope `MANIFEST:COMPLEX`) holds them as members. Memorizing it is recursive; remembering it triggers **recursive blueprint resolution** (every manifest-scoped leaf comes back as its typed manifest) and `rebuild()` hands back the live `Module` and `Optimizer`.
 
 ## Prerequisites
 
@@ -15,6 +20,7 @@ import torch
 import torch.nn as nn
 import laila
 from laila.data import S3Pool
+from laila.addons.torch import Module, Optimizer
 
 laila.read_args("./secrets.toml")
 # secrets.toml example:
@@ -73,151 +79,116 @@ for _ in range(3):
 model.eval()
 ```
 
-## Step 2: Wrap every parameter as a LAILA entry
+## Step 2: Wrap the model and the optimizer
 
-Each tensor in the model's `state_dict` and the optimizer's `state_dict` becomes its own constant entry with a descriptive nickname:
+`Module` and `Optimizer` behave exactly like the objects they wrap (`forward`, `parameters()`, `step()`, `state_dict()`, LR schedulers, ...) and are addressable by nickname: the model's checkpoint lives under `MANIFEST:TORCH_MODULE:<nickname>`, the optimizer's under `MANIFEST:TORCH_OPTIMIZER:<nickname>`.
 
 ```python
-weight_entries = {}
-for name, tensor in model.state_dict().items():
-    entry = laila.constant(data=tensor.detach().cpu(), nickname=f"model.{name}")
-    weight_entries[name] = entry
+model = Module(model, nickname="my_cnn")
+optimizer = Optimizer(optimizer, nickname="my_cnn_adam")
 
-optim_entry = laila.constant(
-    data=optimizer.state_dict(),
-    nickname="optimizer_state",
+print(model.global_id)      # LAILA:MANIFEST:TORCH_MODULE:<uuid5("my_cnn")>
+print(optimizer.global_id)  # LAILA:MANIFEST:TORCH_OPTIMIZER:<uuid5("my_cnn_adam")>
+```
+
+## Step 3: Put everything under one complex manifest
+
+`everything[key] = value` accepts manifests, manifest-backed objects (the wrappers -- or bare `nn.Module` / `torch.optim.Optimizer` objects, which are wrapped for you and come back bare), entries and plain blueprint fragments. The blueprint only ever holds gids; the live objects stay attached as *members*.
+
+```python
+everything = laila.complex_manifest(nickname="my_checkpoint")
+everything["model"] = model
+everything["optimizer"] = optimizer
+everything["config"] = laila.constant(
+    data={"lr": 1e-3, "steps": 3, "arch": "SimpleCNN"}, nickname="my_checkpoint/config"
 )
+
+print(everything.global_id)   # LAILA:MANIFEST:COMPLEX:<uuid5("my_checkpoint")>
+print(everything.blueprint)   # {"model": "LAILA:MANIFEST:TORCH_MODULE:...", "optimizer": "...", "config": "LAILA:ENTRY:..."}
 ```
 
-## Step 3: Build the manifest
-
-The manifest is a single entry whose data is a dictionary mapping human-readable names to `global_id` strings. This is the only ID you need to reconstruct everything.
-
-```python
-manifest_data = {
-    "model_class": "SimpleCNN",
-    "model_params": {
-        name: entry.global_id for name, entry in weight_entries.items()
-    },
-    "optimizer": optim_entry.global_id,
-}
-
-manifest = laila.constant(data=manifest_data, nickname="my_checkpoint")
-print(f"Manifest global_id: {manifest.global_id}")
-```
+A plain `Manifest` (a dataset, say) can be a member too -- `everything["dataset"] = ds.manifest`. It is referenced, never copied: only its one record is fetched on the way back, and forgetting `everything` never touches its entries.
 
 ## Step 4: Memorize everything to S3
 
-Use `laila.guarantee` to ensure all futures are waited on before exiting the block:
+One call. The complex manifest asks each member to memorize itself into the same pool (the optimizer sees its sibling model and records which parameter belongs to which model), batches the plain entries, and finally stores its own blueprint. The returned `GroupFuture` covers every write; `laila.guarantee` blocks until all of them are done:
 
 ```python
-all_entries = list(weight_entries.values()) + [optim_entry]
-
 with laila.guarantee:
-    laila.memorize(all_entries, dst_pool="ckpt")
-
-with laila.guarantee:
-    laila.memorize(manifest, dst_pool="ckpt")
-
-print(f"Uploaded {len(all_entries)} parameter entries + 1 manifest")
+    laila.memorize(everything, dst_pool="ckpt")
 ```
+
+Every leaf has a deterministic nickname (`my_cnn/state_dict/features.0.weight`, `my_cnn/architecture`, `my_cnn_adam/state/0/exp_avg`, ...), so memorizing again after more training overwrites the same keys in place.
 
 ## Step 5: Nuke all local state
 
-Destroy every local reference. After this, the only way to get the model back is through LAILA.
+Keep a copy of the weights for the final check, then delete every local object. After this, the only way to get the model back is through LAILA.
 
 ```python
-manifest_nickname = "my_checkpoint"
+reference_state = {name: tensor.clone() for name, tensor in model.state_dict().items()}
+reference_optimizer = optimizer.state_dict()
 
-del model, optimizer
-del weight_entries, optim_entry, manifest, manifest_data, all_entries
+del model, optimizer, everything
 ```
 
-## Step 6: Reload from the manifest alone
+## Step 6: Reload from the nickname alone
 
-Recall the manifest by its nickname, then use the IDs inside to fetch all parameters:
-
-```python
-# Recall the manifest
-manifest_future = laila.remember(
-    nickname=manifest_nickname,
-    dst_pool="ckpt",
-)
-laila.runtime.wait(manifest_future)
-manifest_data = manifest_future.data
-
-print(f"Model class: {manifest_data['model_class']}")
-print(f"Parameters: {list(manifest_data['model_params'].keys())}")
-```
-
-Now fetch every model parameter:
+`laila.remember("MANIFEST:COMPLEX:my_checkpoint")` fetches the blueprint. Because the scope says `COMPLEX`, LAILA walks it on arrival and casts every manifest-scoped leaf into its typed manifest -- **recursive blueprint resolution**. The `config` leaf is a plain entry and stays a gid; a plain manifest would never be walked.
 
 ```python
-param_ids = list(manifest_data["model_params"].values())
-
 with laila.guarantee:
-    param_future = laila.remember(param_ids, dst_pool="ckpt")
+    ref = laila.remember("MANIFEST:COMPLEX:my_checkpoint", dst_pool="ckpt")
+everything = ref.result
 
-laila.runtime.wait(param_future)
+type(everything)              # ComplexManifest
+type(everything["model"])     # ModuleManifest
+type(everything["optimizer"]) # OptimizerManifest
+everything["config"]          # "LAILA:ENTRY:..."  (plain leaf: still a gid)
 ```
 
-Reconstruct the `state_dict` and load it into a fresh model:
+`rebuild()` then unpickles the architecture skeleton, materializes it (on the CPU by default -- pass `device=`), loads the weights, constructs the optimizer over the rebuilt model's parameters and loads its state:
 
 ```python
-recalled_state_dict = {}
-for name, gid in manifest_data["model_params"].items():
-    future = laila.remember(gid, dst_pool="ckpt")
-    laila.runtime.wait(future)
-    recalled_state_dict[name] = future.data
+live = everything.rebuild()
+model, optimizer, config = live["model"], live["optimizer"], live["config"].data
 
-model = SimpleCNN()
-model.load_state_dict(recalled_state_dict)
-model.eval()
-
-print("Model reconstructed from S3 ✓")
+type(model)             # laila.addons.torch.Module  (over SimpleCNN)
+type(optimizer)         # laila.addons.torch.Optimizer  (over Adam)
+everything["model"] is model   # True: the members went live
 ```
 
-Restore the optimizer:
-
-```python
-optim_future = laila.remember(manifest_data["optimizer"], dst_pool="ckpt")
-laila.runtime.wait(optim_future)
-
-optimizer = torch.optim.Adam(model.parameters())
-optimizer.load_state_dict(optim_future.data)
-
-print("Optimizer reconstructed from S3 ✓")
-```
+Pass `resolve=False` to `laila.remember` to get the bare blueprint instead, and call `everything.resolve()` later.
 
 ## Step 7: Verify
 
-Run a deterministic forward pass to confirm the model produces output:
+Same types, same values: the weights match the copy taken before the nuke, the optimizer state matches, and the optimizer drives the rebuilt model's parameters.
 
 ```python
-test_input = torch.randn(1, 3, 32, 32)
-output = model(test_input)
-print(f"Output shape: {output.shape}")  # torch.Size([1, 10])
-print(f"Output: {output}")
+assert all(torch.equal(reference_state[n], t) for n, t in model.state_dict().items())
+live_ids = {id(p) for p in model.parameters()}
+assert all(id(p) in live_ids for g in optimizer.param_groups for p in g["params"])
+assert optimizer.state_dict()["param_groups"] == reference_optimizer["param_groups"]
+
+output = model(torch.randn(1, 3, 32, 32))
+print(output.shape)  # torch.Size([1, 10])
 ```
+
+Training can simply continue -- `optimizer.step()` updates the rebuilt model -- and `laila.memorize(everything, dst_pool="ckpt")` re-snapshots the live members.
 
 ## Clean up
 
-```python
-all_ids = param_ids + [manifest_data["optimizer"]]
-with laila.guarantee:
-    laila.forget(all_ids, pool="ckpt")
+Forgetting `everything` removes what it owns: the model and optimizer checkpoints (every tensor and their blueprints), the config entry and the complex manifest itself. A plain `Manifest` member would only be dropped as a record -- its entries are shared, never deleted here.
 
-laila.forget(
-    nickname=manifest_nickname,
-    pool="ckpt",
-)
-print("All entries cleaned up from S3")
+```python
+with laila.guarantee:
+    laila.forget(everything, pool="ckpt")
 ```
 
 ## Summary
 
-- Each model parameter and the optimizer state become individual LAILA entries.
-- A **manifest** entry maps human-readable names to `global_id` strings, serving as the single point of entry for reconstruction.
-- After destroying all local state, you only need the manifest's nickname to recall everything from S3 and rebuild the model + optimizer.
-- `laila.guarantee` ensures all async writes complete before continuing.
-- This pattern scales to any checkpoint size — add learning rate schedulers, training metadata, or dataset fingerprints to the manifest as needed.
+- **`Module` / `Optimizer`** (`laila.addons.torch`) wrap the torch objects without changing how you use them; each memorizes as a typed manifest (`MANIFEST:TORCH_MODULE:<nickname>` / `MANIFEST:TORCH_OPTIMIZER:<nickname>`) with one detached CPU entry per tensor. No optimizer priming is needed on restore.
+- **`laila.complex_manifest`** (scope `MANIFEST:COMPLEX`) holds manifests, manifest-backed objects and entries as members; `laila.memorize(everything)` is recursive.
+- **Recursive blueprint resolution**: when a complex manifest is remembered, every manifest-scoped leaf is fetched from the same pool and cast into its typed manifest. Plain manifests are never scanned -- the `COMPLEX` scope is what opts a manifest in.
+- **`everything.rebuild()`** returns `{key: live object}` -- the model rebuilt from its architecture skeleton and weights, the optimizer bound to it with its state loaded, entries and dataset manifests as they are. A round trip gives back the same types and values.
+- **`laila.forget(everything)`** is owner-aware: checkpoints are deleted in full, plain manifest members only as records.
+- This pattern scales to any checkpoint: add LR schedulers' `state_dict`, RNG states (`torch.get_rng_state()`), metrics or a dataset manifest as further members.

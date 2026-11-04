@@ -327,6 +327,7 @@ class _CarrierRPCProtocol(_LAILA_IDENTIFIABLE_COMM_PROTOCOL):
         ``remove_connection``.
         """
         self._close_peer_lanes(peer_id, "peer disconnected")
+        self._fail_pending(f"peer {peer_id} disconnected", peer_id=peer_id)
         self._peer_caps.pop(peer_id, None)
         self._lane_cursor.pop(peer_id, None)
         self._connections.pop(peer_id, None)
@@ -835,12 +836,40 @@ class _CarrierRPCProtocol(_LAILA_IDENTIFIABLE_COMM_PROTOCOL):
     # Outbound correlation
     # ------------------------------------------------------------------
 
-    def _register_pending(self) -> tuple[str, dict]:
-        """Allocate a request id + pending slot for an outbound RPC."""
+    def _register_pending(self, peer_id: str | None = None) -> tuple[str, dict]:
+        """Allocate a request id + pending slot for an outbound RPC.
+
+        The slot remembers *peer_id* so :meth:`_fail_pending` can fail
+        exactly the calls in flight to a peer that just went away.
+        """
         request_id = str(_uuid.uuid4())
-        slot: dict[str, Any] = {"event": threading.Event()}
+        slot: dict[str, Any] = {"event": threading.Event(), "peer_id": peer_id}
         self._pending_rpcs[request_id] = slot
         return request_id, slot
+
+    def _fail_pending(self, reason: str, *, peer_id: str | None = None) -> None:
+        """Fail outstanding outbound RPCs with ``ConnectionError(reason)``.
+
+        With *peer_id* only the slots registered for that peer are failed
+        (a peer dropped: liveness, EOF, ``remove_peer``); without it every
+        slot is (transport ``stop()``). Waiters blocked in
+        :meth:`_await_pending` -- and therefore ``RemoteFuture.wait()`` --
+        wake immediately instead of sitting out :attr:`rpc_timeout`.
+        """
+        for request_id, slot in list(self._pending_rpcs.items()):
+            if peer_id is not None and slot.get("peer_id") != peer_id:
+                continue
+            slot.setdefault("exception", ConnectionError(reason))
+            slot["event"].set()
+            self._pending_rpcs.pop(request_id, None)
+
+    def _fail_request(self, request_id: str, exc: BaseException) -> None:
+        """Fail one pending RPC (carrier-level delivery failure)."""
+        slot = self._pending_rpcs.pop(request_id, None)
+        if slot is None:
+            return
+        slot.setdefault("exception", exc)
+        slot["event"].set()
 
     def _complete_pending(self, msg: dict) -> None:
         """Resolve the pending slot named by response *msg*'s id."""
@@ -867,6 +896,9 @@ class _CarrierRPCProtocol(_LAILA_IDENTIFIABLE_COMM_PROTOCOL):
         self._pending_rpcs.pop(request_id, None)
         if not completed:
             raise TimeoutError(f"RPC to peer timed out after {timeout}s on {type(self).__name__}.")
+        exc = slot.get("exception")
+        if exc is not None:
+            raise exc
         if "error" in slot:
             err = slot["error"]
             if err.get("code") == rpc_protocol.ERR_BUSY:

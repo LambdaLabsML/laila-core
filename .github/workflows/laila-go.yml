@@ -1,0 +1,181 @@
+name: laila-go
+
+on:
+  push:
+    branches: [main]
+    paths: ["laila-go/**", ".github/workflows/laila-go.yml"]
+  pull_request:
+    paths: ["laila-go/**", ".github/workflows/laila-go.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: laila-go-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: laila-go
+
+jobs:
+  unit:
+    name: Unit (1:1 ports of tests/functional) + py compat + vectors
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: laila-go/go.mod
+          cache-dependency-path: laila-go/go.sum
+
+      - name: Native libraries for the cgo drivers (HDF5; DuckDB ships static bindings)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libhdf5-dev pkg-config
+
+      - name: go vet (every module in the workspace)
+        run: go vet ./... && (cd tests && go vet ./...) && for d in drivers/*/; do (cd "$d" && go vet ./...); done
+
+      - name: py compat layer (Python-semantics vectors committed under py/testdata)
+        run: go test -count=1 ./py/
+
+      - name: Root package + facades
+        run: go test -count=1 -short ./...
+
+      - name: Examples build and run (data_types, local_pools, peers_tcp)
+        run: |
+          go build ./examples/...
+          for e in data_types local_pools peers_tcp; do
+            timeout 120 go run ./examples/$e
+          done
+
+      - name: Ported test tree (tests/functional)
+        working-directory: laila-go/tests
+        run: go test -count=1 -short -timeout 45m ./functional/...
+
+  race:
+    name: Race detector (serial packages)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: laila-go/go.mod
+          cache-dependency-path: laila-go/go.sum
+
+      - name: Native libraries for the cgo drivers
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libhdf5-dev pkg-config
+
+      - name: py compat layer under -race
+        run: go test -count=1 -race ./py/
+
+      # One package at a time: the Python suites assume the GIL's serialisation
+      # and are timing-sensitive under the race detector's slowdown.
+      - name: Ported test tree under -race (serial packages)
+        working-directory: laila-go/tests
+        run: go test -count=1 -race -short -p 1 -timeout 100m ./functional/...
+
+  vectors:
+    name: Vectors regenerate + diff (CPython truth)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # ``import laila`` resolves the repository directory by name.
+          path: laila
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: laila/laila-go/go.mod
+          cache-dependency-path: laila/laila-go/go.sum
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: laila/pyproject.toml
+
+      - name: Install the Python package
+        working-directory: laila
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[all]"
+
+      - name: Regenerate py/testdata/vectors.json with this checkout's Python and re-verify
+        working-directory: laila
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python laila-go/tools/gen_vectors.py > laila-go/py/testdata/vectors.json
+          (cd laila-go && go test -count=1 ./py/)
+          git diff --exit-code -- laila-go/py/testdata/vectors.json
+
+  interop:
+    name: Python <-> Go interop (TCP + WebSocket, both directions)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: laila
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: laila/laila-go/go.mod
+          cache-dependency-path: laila/laila-go/go.sum
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: laila/pyproject.toml
+
+      - name: Install the Python package (peer side)
+        working-directory: laila
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .
+
+      - name: Pairwise interop suite (laila-go/tests/interop)
+        working-directory: laila/laila-go/tests
+        env:
+          LAILA_PYTHON: python
+          LAILA_PYTHONPATH: ${{ github.workspace }}
+        run: go test -count=1 -race -v -timeout 20m ./interop/
+
+      - name: Shared N-language matrix, Python + Go cells (tests/interop)
+        working-directory: laila
+        env:
+          LAILA_INTEROP_BUILD_GO: "1"
+          LAILA_INTEROP_LANGS: python,go
+          LAILA_INTEROP_SCENARIOS: "10"
+        run: |
+          python -m pip install pytest
+          python -m pytest tests/interop/test_matrix.py tests/interop/test_typed.py \
+            tests/interop/test_relay.py tests/interop/test_scenarios.py \
+            -m interop -q --tb=short -p no:cacheprovider
+
+  conformance:
+    name: Conformance (Python surface == Go surface under the naming rule)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: laila-go/go.mod
+          cache-dependency-path: laila-go/go.sum
+
+      - name: Check every Python module / class / function has its Go twin
+        run: python3 tools/conformance/check.py
+
+      - name: Facade alias packages are regenerated from the Python __init__.py files
+        run: python3 tools/facades/gen_facades.py --check

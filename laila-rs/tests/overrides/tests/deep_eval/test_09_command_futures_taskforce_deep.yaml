@@ -1,0 +1,23 @@
+# py2rs override for tests/deep_eval/test_09_command_futures_taskforce_deep.py
+skip_tests:
+  test_imap_is_lazy: a nested generator (`yield`) feeding `imap` (no Rust twin; laziness is covered by `test_imap_yields_futures_in_order`)
+  test_base_hooks_not_implemented: a test-local `_LAILA_IDENTIFIABLE_TASK_FORCE` subclass overriding the `_on_start` / `_on_shutdown` hooks (no Rust twin)
+  test_base_start_failure_keeps_state: a test-local `_LAILA_IDENTIFIABLE_TASK_FORCE` subclass raising from `_on_start` (no Rust twin)
+# The self-referencing build body is an f-string carrying the entry's gid:
+# the local assignment registers the native twin under the computed text.
+builder_tokens:
+  test_cycle_detected_through_laila_build.src: laila_tests::builders::remember_gid_from_source
+# The command / parking helpers are typed in Rust (`&str`, `i64`, `FnOnce`,
+# futures); the tests call them with Python values.
+import_twins:
+  no_command_submit: laila_tests::deep_eval_helpers::command::no_command_submit
+  _check_no_pending_submit_owner: laila_tests::deep_eval_helpers::command::_check_no_pending_submit_owner
+  _check_not_loop_thread: laila_tests::deep_eval_helpers::command::_check_not_loop_thread
+  _register_async_loop_thread: laila_tests::deep_eval_helpers::command::_register_async_loop_thread
+  _unregister_async_loop_thread: laila_tests::deep_eval_helpers::command::_unregister_async_loop_thread
+  ensure_coroutine_function: laila_tests::deep_eval_helpers::command::ensure_coroutine_function
+  check_resolve_cycle: laila_tests::deep_eval_helpers::command::check_resolve_cycle
+  resolve_chain_with: laila_tests::deep_eval_helpers::command::resolve_chain_with
+  park_sync: laila_tests::deep_eval_helpers::command::park_sync
+  park_async: laila_tests::deep_eval_helpers::command::park_async
+  _live_taskforces_snapshot: laila_tests::deep_eval_helpers::command::_live_taskforces_snapshot

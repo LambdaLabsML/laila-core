@@ -1,0 +1,37 @@
+# py2rs override for tests/functional/policy/memory/base/unit_tests/test_base_memory.py
+# `_CountingPool` / `_CustomIndexedPool` are test-local pool subclasses that
+# override `_keys` (scan counting) and `_search_keys` (an external index
+# hook): a Rust pool's backend cannot be subclassed from a test, so both
+# stand in for the plain in-memory pool and the scan-count assertions are
+# skipped.
+class_aliases:
+  _CountingPool: laila::data::schema::base::_LAILA_IDENTIFIABLE_POOL
+  _CustomIndexedPool: laila::data::schema::base::_LAILA_IDENTIFIABLE_POOL
+skip_tests:
+  test_indexed_pool_resolves_without_scanning: asserts on `_CountingPool._keys` scan counts (a subclass hook with no Rust twin)
+  test_index_disabled_pool_falls_back_to_scan: asserts on `_CountingPool._keys` scan counts (a subclass hook with no Rust twin)
+  test_custom_search_keys_hook_short_circuits_scan: `_CustomIndexedPool._search_keys` is a subclass hook with no Rust twin
+  # `self.memory._record = Mock(..)` and friends: a `Mock` assigned onto the
+  # memory *instance* replaces a method and its (string) return value flows
+  # out of `memorize` / `_record`. A Rust handle has no instance dictionary;
+  # the routing these tests pin is covered by
+  # `tests/functional/policy/memory/alpha_pool` (`patch.object` on the
+  # `_record` / `_fetch` / `_delete` seams).
+  test_record_dispatches_to_non_batch: assigns `Mock` methods onto the memory instance (no Rust twin)
+  test_record_dispatches_to_batch: assigns `Mock` methods onto the memory instance (no Rust twin)
+  test_fetch_dispatches_by_batch_flag: assigns `Mock` methods onto the memory instance (no Rust twin)
+  test_delete_dispatches_by_batch_flag: assigns `Mock` methods onto the memory instance (no Rust twin)
+  test_memorize_returns_futures_for_default_pool: assigns `Mock` methods onto the memory instance (no Rust twin)
+  test_memorize_returns_futures_for_non_default_pool: assigns `Mock` methods onto the memory instance (no Rust twin)
+  test_memorize_single_entry_is_wrapped_to_list: assigns `Mock` methods onto the memory instance (no Rust twin)
+  test_remember_returns_futures_for_default_pool: assigns `Mock` methods onto the memory instance (no Rust twin)
+  test_remember_returns_futures_for_non_default_pool: assigns `Mock` methods onto the memory instance (no Rust twin)
+  test_forget_returns_futures_for_default_pool: assigns `Mock` methods onto the memory instance (no Rust twin)
+  test_forget_returns_futures_for_non_default_pool: assigns `Mock` methods onto the memory instance (no Rust twin)
+  test_record_non_batch_dispatch_calls_non_batch_once: assigns `Mock` methods onto the memory instance (no Rust twin)
+  test_fetch_non_batch_dispatch_calls_non_batch_once: assigns `Mock` methods onto the memory instance (no Rust twin)
+  test_delete_non_batch_dispatch_calls_non_batch_once: assigns `Mock` methods onto the memory instance (no Rust twin)
+  test_remember_single_id_is_wrapped_to_list: assigns `Mock` methods onto the memory instance (no Rust twin)
+  test_remember_set_ids_are_wrapped_to_list: assigns `Mock` methods onto the memory instance (no Rust twin)
+  test_forget_single_id_is_wrapped_to_list: assigns `Mock` methods onto the memory instance (no Rust twin)
+  test_forget_frozenset_ids_are_wrapped_to_list: assigns `Mock` methods onto the memory instance (no Rust twin)

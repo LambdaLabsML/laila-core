@@ -1,0 +1,11 @@
+error: laila::python: `return value` inside `try` / `except` of a function without a return type; declare `-> Arg`
+ --> tests/ui/return_in_try_untyped.rs:8:13
+  |
+8 |             return 1;
+  |             ^^^^^^
+
+error: laila::python: `return value` inside `try` / `except` of a function without a return type; declare `-> Arg`
+  --> tests/ui/return_in_try_untyped.rs:10:13
+   |
+10 |             return 2;
+   |             ^^^^^^

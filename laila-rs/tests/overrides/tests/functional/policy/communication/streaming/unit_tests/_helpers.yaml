@@ -1,0 +1,5 @@
+# py2rs override for tests/functional/policy/communication/streaming/unit_tests/_helpers.py
+# The stream-lane fixtures (two peered policies, PTY pairs / null modems,
+# fake RPC-only / lane peers) have a hand-written Rust twin [P18c].
+skip: hand-written twin `laila_tests::streaming_helpers`
+twin: laila_tests::streaming_helpers

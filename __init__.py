@@ -77,6 +77,7 @@ import os
 import sys
 import types
 import uuid
+import weakref
 from importlib import metadata as _metadata
 from typing import Optional
 
@@ -89,9 +90,10 @@ except _metadata.PackageNotFoundError:
 
 from . import entry, policy
 from .entry import Entry
-from .policy.central.memory.schema.manifest import Manifest
+from .policy.central.memory.schema.manifest import ComplexManifest, Manifest, ManifestBacked
 
 manifest = Manifest
+complex_manifest = ComplexManifest
 from .logger import (
     Logger,
     disable_logging,
@@ -217,7 +219,43 @@ class _LailaArgs(DotMap):
     ``__setitem__`` on the inner ``policies`` DotMap (NOT through this
     class's hooks), so the recursive loop described in
     :func:`_is_env_load_trigger` is impossible.
+
+    Lazy mirror
+    -----------
+    CLI-capable constructions only *mark* their owning policy dirty;
+    the dump is produced when ``environment`` is read through this
+    class (``laila.args.environment``, ``laila.args["environment"]``,
+    ``laila.args.get("environment")``, ``items()``, ``toDict()``). The
+    CLI-capable default lookups read other keys (``policy``, ``logger``,
+    ...) and never trigger a flush.
     """
+
+    @staticmethod
+    def _flush_mirror():
+        try:
+            from .basics.definitions.cli_capable import _flush_environment_mirror
+
+            _flush_environment_mirror()
+        except Exception:
+            pass
+
+    def __getitem__(self, key):
+        if key == "environment":
+            self._flush_mirror()
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        if key == "environment":
+            self._flush_mirror()
+        return super().get(key, default)
+
+    def items(self):
+        self._flush_mirror()
+        return super().items()
+
+    def toDict(self, seen=None):
+        self._flush_mirror()
+        return super().toDict(seen=seen)
 
     def __setattr__(self, key, value):
         if key == "environment" and _is_env_load_trigger(value):
@@ -246,6 +284,12 @@ arg_reader = ArgReader(target=args)
 
 _local_policies = {}
 _remote_policies = {}
+
+# Every local policy constructed in this process, by gid, held *weakly*:
+# lets owner-bound futures find their policy's bank before (or without)
+# that policy ever being activated. Does not affect lifetime or
+# ``terminate()`` (which only walks ``_local_policies``).
+_live_policies = weakref.WeakValueDictionary()
 
 
 def terminate(*, wait: bool = True, cancel_pending: bool = False) -> list:
@@ -278,8 +322,10 @@ def terminate(*, wait: bool = True, cancel_pending: bool = False) -> list:
 
     After the per-policy sweep:
 
-    4. :data:`_local_policies`, :data:`_remote_policies`, and
-       :data:`_active_policy_gid` are cleared.
+    4. :data:`_local_policies`, :data:`_remote_policies`,
+       :data:`_live_policies` (the weak construction-time registry used
+       by future-bank walkers), and :data:`_active_policy_gid` are
+       cleared.
     5. *Orphan* taskforces -- those created via raw ``TaskForce.*``
        instantiation but never attached to a policy -- are looked up
        through :func:`_live_taskforces_snapshot` and shut down.
@@ -350,6 +396,10 @@ def terminate(*, wait: bool = True, cancel_pending: bool = False) -> list:
 
     _local_policies.clear()
     _remote_policies.clear()
+    # Drop the construction-time registry too: a terminated policy must
+    # not keep serving future-bank lookups just because the caller still
+    # holds a Python reference to it.
+    _live_policies.clear()
     _active_policy_gid = None
 
     try:
@@ -371,6 +421,9 @@ def terminate(*, wait: bool = True, cancel_pending: bool = False) -> list:
         errors.append(f"logger.reset_singleton: {e!r}")
 
     try:
+        from .basics.definitions.cli_capable import _clear_environment_dirty
+
+        _clear_environment_dirty()
         env = args.get("environment") if hasattr(args, "get") else None
         if env is not None and hasattr(env, "get"):
             policies = env.get("policies")
@@ -592,10 +645,12 @@ def activate_policy(policy):
     if isinstance(policy, _LAILA_IDENTIFIABLE_POLICY):
         _local_policies[new_gid] = policy
 
+    # Lazy: the dump happens on the next read of ``laila.args.environment``.
     try:
-        from .basics.definitions.cli_capable import _refresh_args_environment
+        from .basics.definitions.cli_capable import _mark_environment_dirty
 
-        _refresh_args_environment(policy)
+        if isinstance(policy, _LAILA_IDENTIFIABLE_POLICY):
+            _mark_environment_dirty(policy)
     except Exception:
         pass
 
@@ -619,11 +674,14 @@ def _get_active_local_policy():
        the common case and ensures that swapping between several local
        policies routes future registration to the currently active one.
     3. Otherwise (active policy is a remote proxy):
-       - if exactly one local policy exists in this process, return it
-         (an obvious unambiguous fallback);
-       - if multiple local policies exist, raise ``RuntimeError`` --
-         the caller must first switch back to a local policy with
-         :func:`activate_policy`.
+       - return the local policy that *owns the link* to that peer
+         (the proxy's communication object belongs to exactly one local
+         policy) -- morph mode therefore keeps working no matter how
+         many local policies exist in the process;
+       - failing that, if exactly one local policy exists, return it;
+       - if multiple local policies exist and none owns the proxy,
+         raise ``RuntimeError`` -- the caller must first switch back to
+         a local policy with :func:`activate_policy`.
 
     Returns
     -------
@@ -640,12 +698,65 @@ def _get_active_local_policy():
         get_active_policy()
     if _active_policy_gid in _local_policies:
         return _local_policies[_active_policy_gid]
+    proxy = _remote_policies.get(_active_policy_gid)
+    owner = getattr(getattr(proxy, "_comm", None), "_local_policy", None)
+    if isinstance(owner, _LAILA_IDENTIFIABLE_POLICY):
+        return owner
     if len(_local_policies) == 1:
         return next(iter(_local_policies.values()))
     raise RuntimeError(
         "No local policy available for future registration; "
         "set `laila.active_policy` to a local policy first."
     )
+
+
+def _future_bank_policies():
+    """Yield every local policy whose ``future_bank`` may hold a future.
+
+    Activated policies (``_local_policies``) first, then every other
+    live one (``_live_policies``). Bank walkers (identity handles,
+    ``release``, ``GroupFuture`` children, ``runtime.wait``) use this so
+    a future owned by a constructed-but-never-activated policy -- e.g.
+    an in-process peer serving routed memory ops -- stays resolvable.
+    """
+    seen: set[int] = set()
+    for pol in list(_local_policies.values()):
+        if id(pol) in seen:
+            continue
+        seen.add(id(pol))
+        yield pol
+    for pol in list(_live_policies.values()):
+        if id(pol) in seen:
+            continue
+        seen.add(id(pol))
+        yield pol
+
+
+def _owning_local_policy(policy_id):
+    """Return the local policy a future stamped with *policy_id* belongs to.
+
+    Futures carry an explicit ``policy_id`` (owner-bound memory stamps
+    its futures with the memory's owner, taskforces with theirs). When
+    that gid names a *local* policy -- activated (``_local_policies``)
+    or merely constructed (``_live_policies``) -- the future is
+    registered in that policy's ``future_bank`` regardless of which
+    policy is active on the calling thread. Otherwise (``None``, a
+    remote gid, a nickname not yet registered) fall back to
+    :func:`_get_active_local_policy`.
+
+    Without this, a peer answering ``laila.memorize`` for a morphed
+    caller in the *same process* registered the resulting future in the
+    caller's bank, and the follow-up ``RemoteFuture.wait()`` failed with
+    ``KeyError: Future ... not in bank`` on the peer.
+    """
+    pid = getattr(policy_id, "global_id", policy_id)
+    if isinstance(pid, str):
+        owner = _local_policies.get(pid)
+        if owner is None:
+            owner = _live_policies.get(pid)
+        if owner is not None:
+            return owner
+    return _get_active_local_policy()
 
 
 class _LailaModule(types.ModuleType):
@@ -847,6 +958,14 @@ def build(entry, *, taskforce_id: Optional["str"] = None):
     ``_state`` flips to ``READY``. The future *also* resolves to the
     same entry instance for convenience.
 
+    Idempotent and coalescing
+    -------------------------
+    Building an entry that is already ``READY`` is a no-op (the future
+    resolves to the entry). Concurrent ``build`` calls for the *same*
+    entry object while a build is in flight return that in-flight
+    future, so the constitution body runs exactly once -- "ensure this
+    dependency is built" is safe to call from several builders at once.
+
     Parameters
     ----------
     entry : Entry
@@ -856,6 +975,13 @@ def build(entry, *, taskforce_id: Optional["str"] = None):
         Target taskforce ``global_id``; defaults to
         ``policy.central.command.alpha_taskforce``. Pass a different
         taskforce gid to route CPU-heavy builds to a process pool.
+        For a :class:`PythonProcessPoolTaskForce` the manifest is
+        resolved and realized on the alpha taskforce and only the
+        constitution *body* runs in a worker process, against a manifest
+        whose ``realized`` holds the pre-built entries (payloads must be
+        picklable). Bodies that need a live policy inside the worker
+        (``laila.remember``, nested ``laila.build``) are not supported
+        there.
 
     Returns
     -------
@@ -865,8 +991,8 @@ def build(entry, *, taskforce_id: Optional["str"] = None):
     Raises
     ------
     RuntimeError
-        Raised inside the future when *entry* has no constitution or is
-        already built. (The submission itself does not raise.)
+        Raised inside the future when *entry* is not built and has no
+        constitution. (The submission itself does not raise.)
     CyclicDependencyError
         Raised *synchronously* when this call is made from inside a
         resolution (build / remember) of the same entry -- i.e. the
@@ -891,15 +1017,41 @@ def build(entry, *, taskforce_id: Optional["str"] = None):
     # build of the same entry can never finish; fail fast instead.
     check_resolve_cycle(entry.global_id)
 
+    from .policy.central.command.schema.future.future.future_status import FutureStatus
+
+    _TERMINAL_FUTURE_STATES = (FutureStatus.FINISHED, FutureStatus.ERROR, FutureStatus.CANCELLED)
+    command = get_active_policy().central.command
+    key = (entry.global_id, id(entry))
+
+    # A process pool cannot run the (local, unpicklable) build coroutine.
+    # The orchestration -- manifest resolution and realization -- stays on
+    # the alpha taskforce; only the constitution body is shipped to the
+    # process pool as a picklable job (see ``Entry._run_body_in_process``).
+    process_tf_id = None
+    if taskforce_id is not None and not getattr(
+        command.taskforces[taskforce_id], "_wraps_sync", True
+    ):
+        process_tf_id = taskforce_id
+        taskforce_id = None
+
     async def _build_on_chain():
         token = _RESOLVE_CHAIN.set(_RESOLVE_CHAIN.get() + (entry.global_id,))
         try:
-            return await entry._build_async()
+            return await entry._build_async(_process_taskforce_id=process_tf_id)
         finally:
             _RESOLVE_CHAIN.reset(token)
+            with command._inflight_lock:
+                if command._inflight_builds.get(key) is fut_box[0]:
+                    command._inflight_builds.pop(key, None)
 
-    command = get_active_policy().central.command
-    return command.submit([_build_on_chain], taskforce_id=taskforce_id)
+    fut_box = [None]
+    with command._inflight_lock:
+        inflight = command._inflight_builds.get(key)
+        if inflight is not None and inflight.status not in _TERMINAL_FUTURE_STATES:
+            return inflight
+        fut_box[0] = command.submit([_build_on_chain], taskforce_id=taskforce_id)
+        command._inflight_builds[key] = fut_box[0]
+    return fut_box[0]
 
 
 def _route_memory_to_peer(proxy, op: str, args: tuple, kwargs: dict):
@@ -920,6 +1072,8 @@ def _route_memory_to_peer(proxy, op: str, args: tuple, kwargs: dict):
     """
     import asyncio as _asyncio
 
+    from .policy.central.command.schema.parking import park_async
+
     pool = kwargs.get("pool")
     if pool is not None and not isinstance(pool, str):
         raise TypeError(
@@ -928,6 +1082,20 @@ def _route_memory_to_peer(proxy, op: str, args: tuple, kwargs: dict):
         )
     mem_kwargs = {"pool": pool} if pool is not None else {}
     command = get_active_policy().central.command
+
+    # Same calling convention as the local verbs: one leading positional
+    # (an entry / gid or a list of them). Extra positionals are a caller
+    # error there (``TypeError``) and must not be silently dropped here.
+    if op in ("memorize", "remember", "forget") and len(args) > 1:
+        raise TypeError(
+            f"laila.{op}() takes one positional argument (an entry/gid or a list of "
+            f"them) but {len(args)} were given; pass a list to {op} several at once."
+        )
+
+    async def _wire(fn, *fargs, **fkwargs):
+        # The wire wait is pure I/O: park the taskforce slot for its
+        # duration so a fan-out larger than the slot cap cannot wedge.
+        return await park_async(_asyncio.to_thread(fn, *fargs, **fkwargs))
 
     if op == "memorize":
         entries = args[0] if args else kwargs.get("entries")
@@ -938,9 +1106,7 @@ def _route_memory_to_peer(proxy, op: str, args: tuple, kwargs: dict):
             blob = entry.serialize(transformations=transformation_base64)
 
             async def _store():
-                gids = await _asyncio.to_thread(
-                    proxy.central.memory._remote_memorize, [blob], **mem_kwargs
-                )
+                gids = await _wire(proxy.central.memory._remote_memorize, [blob], **mem_kwargs)
                 return gids[0]
 
             return _store
@@ -955,11 +1121,15 @@ def _route_memory_to_peer(proxy, op: str, args: tuple, kwargs: dict):
         ids = [x.global_id if hasattr(x, "global_id") else str(x) for x in ids_list]
         from .entry.constitution.build_maps import build_by_scope
 
+        # ``persist`` means "cache back into the *peer's* alpha pool"
+        # (see ``laila.remember``); forward it so the peer honours it.
+        fetch_kwargs = dict(mem_kwargs)
+        if "persist" in kwargs:
+            fetch_kwargs["persist"] = bool(kwargs["persist"])
+
         def _make_fetch(eid):
             async def _fetch():
-                blobs = await _asyncio.to_thread(
-                    proxy.central.memory._remote_remember, [eid], **mem_kwargs
-                )
+                blobs = await _wire(proxy.central.memory._remote_remember, [eid], **fetch_kwargs)
                 return build_by_scope(blobs[0], asynchronous=False)
 
             return _fetch
@@ -973,11 +1143,8 @@ def _route_memory_to_peer(proxy, op: str, args: tuple, kwargs: dict):
         ids_list = entry_ids if isinstance(entry_ids, list) else [entry_ids]
         ids = [x.global_id if hasattr(x, "global_id") else str(x) for x in ids_list]
 
-        def _delete():
-            return proxy.central.memory._remote_forget(ids, **mem_kwargs)
-
         async def _delete_async():
-            return await _asyncio.to_thread(_delete)
+            return await _wire(proxy.central.memory._remote_forget, ids, **mem_kwargs)
 
         return command.submit([_delete_async], taskforce_id=command.internal_taskforce)
 
@@ -1002,10 +1169,11 @@ def _route_to_policy(policy_id, op: str, args: tuple, kwargs: dict, comm=None):
       golden rule in ``agentic/internal/policy.md`` is satisfied without a
       global morph.
     - another *local* policy in this process (registered in
-      :data:`_local_policies`), in which case the active policy is
-      *transiently* morphed into the target -- honouring the golden rule
-      "to access a policy's elements it must become the active policy" --
-      and restored afterwards.
+      :data:`_local_policies`), in which case the op is dispatched to the
+      target's own ``central.memory``. Memory is *owner-bound* (it submits
+      to the command of the policy that owns it), so the active policy is
+      left untouched: no transient morph, no global state mutation that
+      other threads could observe, no environment-mirror refresh.
 
     Parameters
     ----------
@@ -1033,7 +1201,6 @@ def _route_to_policy(policy_id, op: str, args: tuple, kwargs: dict, comm=None):
     ConnectionError
         If *policy_id* does not name any known local or remote policy.
     """
-    global _active_policy_gid
     from .policy.central.communication.proxy import RemotePolicyProxy
 
     pid = str(policy_id)
@@ -1049,13 +1216,11 @@ def _route_to_policy(policy_id, op: str, args: tuple, kwargs: dict, comm=None):
             target = target.via(comm)
         return _route_memory_to_peer(target, op, args, kwargs)
 
-    previous_gid = _active_policy_gid
-    activate_policy(target)
-    try:
-        memory = get_active_policy().central.memory
-        return getattr(memory, op)(*args, **kwargs)
-    finally:
-        _active_policy_gid = previous_gid
+    # The target's memory is owner-bound (it submits to *its own* command),
+    # so no transient ``activate_policy(target)`` is needed; the active
+    # policy -- and every other thread's view of it -- is left untouched.
+    memory = target.central.memory
+    return getattr(memory, op)(*args, **kwargs)
 
 
 def _resolve_policy_ref(ref):
@@ -1138,38 +1303,36 @@ def _relay_transfer(
             persist=persist,
         )
 
-    global _active_policy_gid
-    previous_gid = _active_policy_gid
-    activate_policy(src)
-    try:
-        memory = get_active_policy().central.memory
-        if verb == "memorize":
-            return memory._relay_memorize(
-                gids, src_pool=src_pool, dst_policy=dst_gid, dst_pool=dst_pool, comm=comm
-            )
-        return memory._relay_remember(
-            gids,
-            dst_policy=dst_gid,
-            dst_pool=dst_pool,
-            src_pool=src_pool,
-            comm=comm,
-            persist=persist,
+    # Owner-bound memory: no transient activation of ``src`` required.
+    memory = src.central.memory
+    if verb == "memorize":
+        return memory._relay_memorize(
+            gids, src_pool=src_pool, dst_policy=dst_gid, dst_pool=dst_pool, comm=comm
         )
-    finally:
-        _active_policy_gid = previous_gid
+    return memory._relay_remember(
+        gids,
+        dst_policy=dst_gid,
+        dst_pool=dst_pool,
+        src_pool=src_pool,
+        comm=comm,
+        persist=persist,
+    )
 
 
 def _lone_manifest(args):
-    """Return the :class:`Manifest` when *args* is exactly one bare manifest.
+    """Return the manifest-like object when *args* is exactly one bare one.
 
     Used by :func:`memorize` / :func:`remember` / :func:`forget` to
-    dispatch to the manifest's own bulk operation. Only a *bare* manifest
-    triggers this -- a manifest inside a list is treated as a regular
-    entry (its payload is the blueprint), which is also how
+    dispatch to the object's own bulk operation. Matches a bare
+    :class:`Manifest` and any :class:`ManifestBacked` object (e.g.
+    ``laila.addons.torch.Module`` / ``Optimizer``, which turn themselves
+    into a manifest and run its type-specific operation). Only a *bare*
+    object triggers this -- a manifest inside a list is treated as a
+    regular entry (its payload is the blueprint), which is also how
     :meth:`Manifest.memorize` stores the manifest itself without
     recursing back into the shim.
     """
-    if len(args) == 1 and isinstance(args[0], Manifest):
+    if len(args) == 1 and isinstance(args[0], (Manifest, ManifestBacked)):
         return args[0]
     return None
 
@@ -1223,6 +1386,8 @@ def memorize(
     inside a list is stored as a plain entry (blueprint only). Manifest
     dispatch applies to local writes only; when ``dst_policy`` /
     ``src_policy`` names a peer the manifest travels as a regular entry.
+    A bare :class:`ManifestBacked` object (``laila.addons.torch.Module``
+    / ``Optimizer``) dispatches the same way, to its own ``memorize``.
 
     Parameters
     ----------
@@ -1465,6 +1630,16 @@ def remember(
     returned whose ``.data`` is the list of entries in ``list(manifest)``
     order. ``persist`` is honoured. Local reads only -- with a peer
     ``dst_policy`` / ``src_policy`` the manifest is treated as an id.
+    A bare :class:`ManifestBacked` object (``laila.addons.torch.Module``
+    / ``Optimizer``) dispatches to its own ``remember``, which loads the
+    stored state back into the object and resolves to it.
+
+    Reading a :class:`ComplexManifest` by id
+    (``laila.remember("MANIFEST:COMPLEX:everything")``) performs
+    *recursive blueprint resolution* on arrival: every leaf whose gid
+    carries the ``MANIFEST`` scope is fetched from the same pool and
+    cast into its typed manifest (``everything["model"]`` is a
+    ``ModuleManifest``); ``resolve=False`` returns the bare blueprint.
 
     Parameters
     ----------
@@ -1548,6 +1723,7 @@ def remember(
     # A bare Manifest -> fetch every entry it references.
     man = _lone_manifest(args)
     if man is not None:
+        kwargs.pop("resolve", None)  # only meaningful for reads by id
         return man.remember(pool=dst_pool, persist=persist, **kwargs)
 
     # Purely local / standalone read from the active policy's pool.

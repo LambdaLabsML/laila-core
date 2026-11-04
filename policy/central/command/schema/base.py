@@ -62,6 +62,10 @@ class _LAILA_IDENTIFIABLE_CENTRAL_COMMAND(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENT
     internal_taskforce: str | None = None
     policy_id: _LAILA_IDENTIFIABLE_OBJECT | str | None = CLIExempt(default=None)
     _guarantee_local: threading.local = PrivateAttr(default_factory=threading.local)
+    # ``laila.build`` coalescing: ``(entry gid, id(entry)) -> in-flight future``
+    # so concurrent builds of one entry object run its constitution once.
+    _inflight_builds: dict = PrivateAttr(default_factory=dict)
+    _inflight_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
     def model_post_init(self, __context: Any) -> None:
         """Create the default taskforces if none were registered.
@@ -195,7 +199,18 @@ class _LAILA_IDENTIFIABLE_CENTRAL_COMMAND(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENT
         Sync callables are auto-wrapped into coroutine functions at
         submission time so the runner sees a uniform awaitable
         contract; the wrapped sync body is offloaded to the taskforce's
-        sync executor so it never blocks a loop thread.
+        sync executor so it never blocks a loop thread. Backends that
+        execute in *another process* (:class:`PythonProcessPoolTaskForce`)
+        receive the callables untouched, since the wrapper is a local
+        closure that cannot be pickled -- submit top-level picklable
+        callables (or ``functools.partial`` of one) to those.
+
+        ``wait=True`` consumes the futures: once the results are
+        collected the per-task futures (and the aggregating group, if
+        any) are released from the policy's ``future_bank`` because no
+        handle is returned through which the caller could release them.
+        Open :func:`laila.guarantee` scopes keep their own direct
+        references and are unaffected.
 
         Nested submission
         -----------------
@@ -248,7 +263,10 @@ class _LAILA_IDENTIFIABLE_CENTRAL_COMMAND(_LAILA_CLI_CAPABLE_CLASS, _LAILA_IDENT
         target = self.taskforces[taskforce_id]
         self._check_rank(target)
 
-        wrapped = [ensure_coroutine_function(t) for t in tasks]
+        if getattr(target, "_wraps_sync", True):
+            wrapped = [ensure_coroutine_function(t) for t in tasks]
+        else:
+            wrapped = list(tasks)
 
         return target.submit(
             tasks=wrapped,

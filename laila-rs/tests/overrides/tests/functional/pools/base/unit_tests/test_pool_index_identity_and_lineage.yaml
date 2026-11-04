@@ -1,0 +1,5 @@
+# py2rs override for tests/functional/pools/base/unit_tests/test_pool_index_identity_and_lineage.py
+# The lineage tests resolve `@evolution=-k` references through central
+# memory (Phase 4).
+skip_tests:
+  test_shard_maintenance_never_lists_keys: monkeypatches `pool._keys` with a counting closure (a Rust backend hook cannot be swapped at runtime)

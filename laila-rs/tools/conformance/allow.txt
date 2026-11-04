@@ -1,0 +1,20 @@
+# Documented Mirror-Law deviations for the Rust port (Layer A).
+#
+# One ``KIND symbol  # reason`` per line; ``*`` globs allowed. Every entry
+# must waive a live difference -- a stale entry fails the check.
+
+# ``asyncio.DatagramProtocol`` callbacks: the Rust link is pull-based
+# (``DatagramLink::recv_from`` on the carrier thread), there is no transport
+# to call back into; ``send_to`` / ``recv_from`` / ``close`` are the twin.
+METHOD _DatagramEndpoint.connection_made   # asyncio transport callback; pull-based link in Rust
+METHOD _DatagramEndpoint.datagram_received # asyncio transport callback; pull-based link in Rust
+METHOD _DatagramEndpoint.error_received    # asyncio transport callback; pull-based link in Rust
+
+# Rust has no attribute interception: the global-lock gate ``__getattribute__``
+# applies is enforced in the typed accessors (``gated_call`` / ``UNGATED_NAMES``).
+METHOD _LAILA_GLOBALLY_ATOMIC_IDENTIFIABLE_OBJECT.__getattribute__  # no attribute interception in Rust; gate lives in the accessors
+
+# ``Identity::from_args`` binds the ``_LAILA_IDENTIFIABLE_OBJECT`` constructor
+# kwargs for the typed identity state, plus the port-internal ``global_id=`` /
+# ``default_scopes=`` the class descriptors pass through.
+INVENTED basics.definitions.identifiable_object.Identity  # typed identity state; binds the _LAILA_IDENTIFIABLE_OBJECT ctor kwargs

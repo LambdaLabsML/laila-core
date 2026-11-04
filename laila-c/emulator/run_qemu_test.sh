@@ -76,3 +76,21 @@ if [ -n "$PY" ]; then
 else
   echo "QEMU_PY_INTEROP: SKIP (no python3 with laila+websockets found)"
 fi
+
+# ---- N-language matrix against the emulated device (tests/interop) ----
+# Every spawnable language (Python, JS, host laila-C) reads from / writes to /
+# forgets on the device and relays through it. Languages whose toolchain is
+# absent in this environment are skipped by the suite itself.
+if [ -n "$PY" ] && "$PY" -c "import pytest" 2>/dev/null; then
+  echo "[qemu-test] interop matrix vs emulated ESP32 (tests/interop -k esp32) ..."
+  if LAILA_QEMU_URI="tcp://127.0.0.1:${HOST_PORT}" LAILA_QEMU_GID="$GID" \
+     LAILA_PYTHON="$PY" LAILA_PYTHONPATH="$PKG_PARENT" C_HARNESS="$ROOT/build/tests/c_harness" \
+     PYTHONPATH="$PKG_PARENT:${PYTHONPATH:-}" \
+     "$PY" -m pytest "$ROOT/../tests/interop" -k esp32 -q -p no:cacheprovider; then
+    echo "QEMU_MATRIX_INTEROP: PASS"
+  else
+    echo "QEMU_MATRIX_INTEROP: FAIL"; exit 1
+  fi
+else
+  echo "QEMU_MATRIX_INTEROP: SKIP (no python3 with pytest found)"
+fi

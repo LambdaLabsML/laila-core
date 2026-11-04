@@ -39,7 +39,7 @@ import json
 import time
 from collections.abc import Iterable, Iterator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import quote, unquote
 
 from pydantic import ConfigDict, Field, PrivateAttr
@@ -121,6 +121,8 @@ class BotoPool(_LAILA_IDENTIFIABLE_POOL):
     _aio_client_locks: dict[int, Any] = PrivateAttr(default_factory=dict)
 
     _no_such_key_codes: set[str] = {"NoSuchKey"}
+
+    _persistent_storage: ClassVar[bool] = True
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

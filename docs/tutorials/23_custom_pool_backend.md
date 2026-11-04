@@ -98,6 +98,8 @@ for nick in ["cp_array", "cp_tensor", "cp_dict"]:
 
 You will notice more keys in the backing store than entries you memorized: the pool's **index shards** (`LAILA:POOL_INDEX:...`, one per entry) are persisted through the very same `_write` / `_delete` hooks, so a custom backend gets `remember("name")` -> latest evolution and `@creation_timestamp=` lookups for free (see [Tutorial 1a](01a_variables_and_evolution.md)). `pool.keys()` hides them; pass `include_index=True` to see them, set `index_enabled=False` on the pool to skip them, or point `index_pool=` at another pool to keep them off this backend.
 
+If your backend's storage outlives the process (a file, a database, an object store), declare it with a class attribute `_persistent_storage: ClassVar[bool] = True`, as every built-in backend does. Two things follow: the pool refuses `transformations=None` at construction (a persistent store needs serialised records, not live `Entry` objects), and the index writes one extra hidden record -- its *identity* -- so a new pool instance opened over the same store finds the shards an earlier instance wrote instead of orphaning them.
+
 ```python
 print(len(pool.keys()), len(pool._store))
 # 3 6   -- three entries plus one index shard each

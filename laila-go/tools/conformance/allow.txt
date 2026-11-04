@@ -1,0 +1,124 @@
+# Documented deviations from the mirror law (see laila-go/README.md,
+# "Deviations"). One per line: ``KIND symbol  # reason``. ``*`` globs allowed.
+# Every entry here must be justified by a Go-language constraint, a driver
+# split, or a Python construct with no Go equivalent -- never by convenience.
+
+# ---------------------------------------------------------------------------
+# MODULE: Python modules whose contents live in another Go file
+# ---------------------------------------------------------------------------
+MODULE policy.central.communication.protocols  # __init__.py: iter_comm_protocols / comm_protocol_for_token live in protocols.base.go (flat package; no import-time autoload)
+MODULE policy.central.communication.protocols._carriers.uri  # split_host_port / uri_path / uri_authority live in _carriers.codec.go (flat package)
+MODULE addons.torch  # torch has no Go runtime: Dataset / DataLoader / Module / Optimizer wrap torch.utils.data and torch.nn objects (same reason as the TorchSerializer deviation)
+MODULE addons.torch.*  # as above (dataloader, dataset, manifests, module, optimizer, transforms)
+MODULE addons.skills  # installer for the SKILL.md agent skills bundled *inside the Python wheel* (package data + the ``laila-skills`` console script); a Go module ships no package data
+MODULE addons.skills.__main__  # ``python -m laila.addons.skills`` CLI entry of the installer above
+
+# ---------------------------------------------------------------------------
+# CLASS: Python classes with no struct twin
+# ---------------------------------------------------------------------------
+CLASS entry.compdata.transformation.serialization.torch.TorchSerializer  # torch has no Go runtime; the "torch" tag decodes via the pickle/npz driver interface (Torch_driver) and is otherwise a capability error
+CLASS laila._LailaArgs  # pydantic model for ``laila.args``; Go exposes New_LailaArgs_() -> *py.DotMap (same keys)
+FUNCTION laila.runtime  # ``laila.runtime`` is the runtime *module* (lazy import) and its no-op setter; in Go the module is laila-go/runtime (facade) over runtime.go -- nothing to get or set
+CLASS policy.central.communication.protocol.LailaJSONEncoder  # json.JSONEncoder subclass; Go exposes the ``default`` hook as Laila_json_default (encoding/json has no encoder subclassing)
+CLASS policy.central.communication.protocols._carriers.datagram._DatagramEndpoint  # asyncio.DatagramProtocol; Go twin is Datagram_endpoint_ (py.DatagramProtocol interface value, not a class)
+
+# ---------------------------------------------------------------------------
+# FUNCTION: module-level helpers folded into Go constructs
+# ---------------------------------------------------------------------------
+FUNCTION atomic.definitions.locally_atomic_object._split_locks  # pydantic model_validator plumbing; Go constructors take typed lock fields directly (no dict splitting)
+FUNCTION basics.definitions.cli_capable.CLIExempt  # ``Field(...)`` wrapper; Go marks fields with the ``py:"name,cli_exempt"`` struct-tag option
+FUNCTION data.gcs.gcs._sdk  # lazy ``google-cloud-storage`` import cached in an lru_cache; Go binds the SDK through Gcs_driver (drivers/gcs) and ``Driver_available`` -- and two ``Sdk_`` funcs cannot coexist in one flat package
+FUNCTION data.huggingface.huggingface._sdk  # lazy ``huggingface_hub`` import; Go binds through Hf_driver (drivers/huggingface), same flat-package collision as above
+
+# ---------------------------------------------------------------------------
+# METHOD: descriptor / dunder / driver-bound members
+# ---------------------------------------------------------------------------
+METHOD BotoPool._aio_client  # aioboto3 session context manager; Go binds the client through Boto3_driver (drivers/boto)
+METHOD ComputationalData.__get__  # descriptor protocol; Go has no attribute descriptors -- Entry fields are accessed through typed accessors
+METHOD Constitution._from_dict  # classmethod per subclass; Go registers each kind's hook in Constitution_from_dict_hooks_ (no classmethod override)
+METHOD FernetEncryption._coerce_key  # pydantic field_validator; Go validates in New_FernetEncryption via Coerce_key_bytes_
+METHOD RemoteFuture.result_id  # property alias of Future_id; RemoteFuture embeds Future and reuses Future_id()
+METHOD _AsyncGuarantee._await_future  # coroutine helper; Go awaits through py.Future.Result (no separate coroutine object)
+METHOD _LAILA_CLI_CAPABLE_CLASS._refresh_environment_mirror  # pydantic post-init hook; Go twin is package func Refresh_environment_mirror_(self) called by every constructor
+METHOD _LAILA_CLI_CAPABLE_CLASS.model_post_init  # pydantic lifecycle hook; Go twin is CLI_CAPABLE_model_post_init called by every constructor
+METHOD _LAILA_IDENTIFIABLE_MODBUS_TCP_COMM_PROTOCOL._from_words  # staticmethod -> package func Modbus_from_words_ (flat package; name disambiguated)
+METHOD _LAILA_IDENTIFIABLE_MODBUS_TCP_COMM_PROTOCOL._to_words  # staticmethod -> package func Modbus_to_words_ (flat package; name disambiguated)
+METHOD _LAILA_LOCALLY_ATOMIC_OBJECT._ensure_local_lock  # lives on the embedded Locally_atomic_mixin (Go embedding replaces the Python mixin MRO)
+METHOD _LAILA_LOCALLY_ATOMIC_OBJECT.lock  # lives on the embedded Locally_atomic_mixin
+METHOD _LAILA_LOCALLY_ATOMIC_OBJECT.locked  # lives on the embedded Locally_atomic_mixin
+METHOD _LAILA_LOCALLY_ATOMIC_OBJECT.unlock  # lives on the embedded Locally_atomic_mixin
+METHOD _LockedConnection.__getattr__  # attribute forwarding; Go wraps the sqlite3 connection with explicit delegating methods
+METHOD _data_transformation.__setattr__  # frozen-attribute guard; Go fields are unexported and only settable through constructors
+
+# ---------------------------------------------------------------------------
+# FIELD: private attributes without a py:"..." tag
+# ---------------------------------------------------------------------------
+FIELD BotoPool._aio_session_lock  # asyncio.Lock guarding the aioboto3 session; Go uses a sync.Mutex inside the Boto3_driver binding
+FIELD Constitution._kind  # class-level tag; Go keeps it in Constitution_REGISTRY_ (kind -> class) rather than per-instance storage
+
+# ---------------------------------------------------------------------------
+# ASSIGN: module-level names with no Go equivalent
+# ---------------------------------------------------------------------------
+ASSIGN *.log  # per-module ``logging.getLogger`` handle; Go uses the package logger (laila.Logger) -- one flat package, one logger
+ASSIGN *._log  # same as *.log
+ASSIGN *._LOG  # same as *.log
+ASSIGN atomic.types.atomic_dict.K  # TypeVar -> Go generic parameter on AtomicDict[K, V]
+ASSIGN atomic.types.atomic_dict.T  # TypeVar -> Go generic parameter
+ASSIGN atomic.types.atomic_dict.V  # TypeVar -> Go generic parameter
+ASSIGN atomic.types.atomic_list.T  # TypeVar -> Go generic parameter on AtomicList[T]
+ASSIGN policy.central.command.schema.parking._T  # TypeVar -> Go generic parameter
+ASSIGN atomic.definitions.locally_atomic_object._LOCK_FACTORIES  # pydantic validator table; Go constructors build the typed lock fields directly
+ASSIGN atomic.definitions.locally_atomic_object._LOCK_NAMES  # as above
+ASSIGN atomic.definitions.locally_atomic_object._LOCK_TYPES  # as above
+ASSIGN entry.constitution.trust._cached_secret  # unexported package var cached_secret_ (never part of the public surface; guarded by its own mutex)
+ASSIGN entry.constitution.trust._lock  # unexported package mutex
+ASSIGN policy.central.memory.schema.manifest._PRIMITIVE_TYPES  # isinstance tuple -> type switch in Is_primitive_sql_value_
+
+# ---------------------------------------------------------------------------
+# INVENTED: Go names with no Python origin (language mechanics + driver split)
+# ---------------------------------------------------------------------------
+INVENTED Adapter_factory  # func type of a ComplexManifest adapter (Python: a bare callable in ``_ADAPTERS``)
+INVENTED Atomicer  # interface standing in for the _LAILA_LOCALLY_ATOMIC_OBJECT duck type
+INVENTED Awaitable  # interface for "anything with .Result()" (Future / RemoteFuture / parking slots)
+INVENTED Backward_fn  # func type of a transformation's backward (Python: a bound method)
+INVENTED Builder_pair  # (forward, backward) tuple type for the constitution builder registry
+INVENTED CLI_CAPABLE_model_post_init  # pydantic model_post_init lifted to a package func (see METHOD above)
+INVENTED CODEC_MAX_FRAME_BYTES  # explicit frame cap (Python relies on asyncio StreamReader limit)
+INVENTED Capacity_notifier  # interface for the memory pool "capacity changed" callback (Python: duck-typed attribute)
+INVENTED ClientError  # botocore.exceptions.ClientError twin for the boto driver interface
+INVENTED Codec_decode  # msgpack/json codec entry point (Python: module-level lambda table)
+INVENTED Codec_encode  # as above
+INVENTED Compiled_template  # pre-parsed trust template (Python: string formatted at call time)
+INVENTED Computational_data  # interface over every ComputationalData subclass (Python: isinstance on the base class)
+INVENTED Data_transformer  # interface over every _data_transformation subclass
+INVENTED Decode_msg  # wire-message decoding helper (Python: inline dict access)
+INVENTED Default_scopes  # typed scope-set constructor (Python: set literal)
+INVENTED EntryNotFoundError  # huggingface_hub.utils.EntryNotFoundError twin for the HF driver interface
+INVENTED Error_message  # typed error-payload struct (Python: dict)
+INVENTED Gated_method  # func type for the Guarantee-gated method wrappers
+INVENTED Get_relay  # ``laila.relay`` collides with the Relay type in one flat package; the module attribute is Get_relay()
+INVENTED H5py_file  # h5py.File twin for the HDF5 driver interface
+INVENTED Hf_api  # huggingface_hub.HfApi twin for the HF driver interface
+INVENTED Laila_json_default  # LailaJSONEncoder.default lifted to a package func (see CLASS above)
+INVENTED Locally_atomic_mixin  # embedded struct providing lock/unlock/locked (Python: mixin base class)
+INVENTED Macros_defaults_protocols  # typed macro table (Python: nested module attributes)
+INVENTED Macros_strings  # typed macro table
+INVENTED Match_backward_code  # recovery-code matcher helper
+INVENTED Msg_dict  # typed wire-message accessors (Python: dict subscripting)
+INVENTED Msg_get  # as above
+INVENTED Msg_str  # as above
+INVENTED NotFound  # google.api_core.exceptions.NotFound twin for the GCS driver interface
+INVENTED ParseError  # xml / pymodbus ParseError twin for the driver interfaces
+INVENTED Process_worker_main  # entry point of the re-exec'd process-pool worker (Python: multiprocessing spawn)
+INVENTED Resolve_global_id_ref  # global-id reference resolver (Python: inline in Entry.__init__)
+INVENTED ResourceExistsError  # azure.core.exceptions twin for the Azure driver interface
+INVENTED ResourceNotFoundError  # azure.core.exceptions twin for the Azure driver interface
+INVENTED Run_syncer  # go-routine runner for the pool index syncer (Python: threading.Thread target)
+INVENTED ServerSelectionTimeoutError  # pymongo.errors twin for the Mongo driver interface
+INVENTED Slot_loop_thread  # typed parking-slot loop thread (Python: dynamic attribute)
+INVENTED Slot_waiter  # typed parking-slot waiter
+INVENTED Status_callback_target  # interface for Make_status_setter_ targets (Python: duck-typed set_status)
+INVENTED Stop_flagged  # interface for cooperative-cancel targets (Python: duck-typed _stop attribute)
+INVENTED TOMLDecodeError  # tomllib.TOMLDecodeError twin (Go uses its own TOML parser)
+INVENTED Template_slot  # trust-template slot type (Python: str.format field)
+INVENTED Transformations_of  # typed accessor over Entry's transformation chain (Python: list attribute)
