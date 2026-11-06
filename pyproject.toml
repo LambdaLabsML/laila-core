@@ -359,6 +359,9 @@ addopts = [
   "--tb=short",
   "--import-mode=importlib",
 ]
+# A single test phase longer than this dumps every thread's stack to stderr
+# (the run continues). Turns a silent CI stall into a diagnosable one.
+faulthandler_timeout = 600
 markers = [
   "cloud: tests that require external cloud credentials (S3/GCS/Azure/etc.)",
   "slow: long-running tests (perf, large datasets)",
